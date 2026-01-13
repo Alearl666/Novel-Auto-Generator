@@ -26,7 +26,6 @@ const defaultSettings = {
     extractTags: '',
     extractMode: 'all',
     tagSeparator: '\n\n',
-    // 面板折叠状态
     panelCollapsed: {
         generate: false,
         export: false,
@@ -176,7 +175,6 @@ function getAllChapters() {
         }
     }
     
-    // 回退 DOM
     document.querySelectorAll('#chat .mes').forEach((msg, idx) => {
         if (idx < startFloor || idx > endFloor) return;
         const isUser = msg.getAttribute('is_user') === 'true';
@@ -200,80 +198,40 @@ function showHelp(topic) {
     const helps = {
         extract: `
 <h3>🏷️ 标签提取功能说明</h3>
-
 <h4>📌 什么是标签提取？</h4>
 <p>从 AI 回复的原始内容中，只提取指定 XML 标签内的文字。</p>
-
 <h4>📌 使用场景</h4>
 <p>当你使用正则美化输出时，原始回复可能包含：</p>
 <pre>&lt;思考&gt;AI的思考过程...&lt;/思考&gt;
-&lt;content&gt;这是正文内容...&lt;/content&gt;
-&lt;旁白&gt;环境描写...&lt;/旁白&gt;</pre>
-<p>使用标签提取可以只导出 &lt;content&gt; 内的正文，过滤掉思考和旁白。</p>
-
+&lt;content&gt;这是正文内容...&lt;/content&gt;</pre>
+<p>使用标签提取可以只导出 &lt;content&gt; 内的正文。</p>
 <h4>📌 如何使用</h4>
 <ol>
-    <li>✅ 勾选「原始 (chat.mes)」确保读取未处理的内容</li>
+    <li>✅ 勾选「原始 (chat.mes)」</li>
     <li>模式选择「标签」</li>
-    <li>在标签输入框填写要提取的标签名</li>
+    <li>填写要提取的标签名</li>
 </ol>
-
-<h4>📌 多标签提取</h4>
-<p>用 <b>空格、逗号、分号</b> 分隔多个标签：</p>
-<pre>content detail 正文</pre>
-<p>或</p>
-<pre>content, detail, 正文</pre>
-
-<h4>📌 提取顺序</h4>
-<p>按标签在原文中出现的顺序依次提取，同一标签多次出现都会被提取。</p>
-
-<h4>📌 分隔符</h4>
-<p>多个标签内容之间的连接方式：</p>
-<ul>
-    <li><b>空行</b>：内容之间空一行</li>
-    <li><b>换行</b>：内容之间换行</li>
-    <li><b>无</b>：直接拼接</li>
-</ul>
-
+<h4>📌 多标签</h4>
+<p>用空格、逗号分隔：<code>content detail 正文</code></p>
 <h4>📌 调试</h4>
-<p>在浏览器控制台 (F12) 输入 <code>nagDebug()</code> 可查看原始消息内容和提取测试结果。</p>
+<p>控制台输入 <code>nagDebug()</code></p>
         `,
         export: `
 <h3>📤 导出设置说明</h3>
-
 <h4>📌 楼层范围</h4>
-<p>楼层从 <b>0</b> 开始计数（与 SillyTavern 一致）。</p>
-<ul>
-    <li><b>导出全部</b>：勾选后导出所有楼层</li>
-    <li><b>指定范围</b>：取消勾选后可设置起始和结束楼层</li>
-</ul>
-
-<h4>📌 内容类型</h4>
-<ul>
-    <li><b>👤 用户</b>：包含你发送的消息</li>
-    <li><b>🤖 AI</b>：包含 AI 的回复</li>
-</ul>
-
+<p>楼层从 <b>0</b> 开始计数。</p>
 <h4>📌 原始 (chat.mes)</h4>
 <ul>
-    <li><b>✅ 勾选</b>：读取原始内容（点击编辑按钮看到的）</li>
-    <li><b>❌ 不勾选</b>：读取页面显示的内容（经过正则处理后的）</li>
+    <li><b>✅ 勾选</b>：读取原始内容</li>
+    <li><b>❌ 不勾选</b>：读取显示内容（经过正则处理）</li>
 </ul>
-<p>如果需要使用标签提取功能，<b>必须勾选</b>此选项。</p>
         `,
         generate: `
 <h3>📝 生成设置说明</h3>
-
 <h4>📌 目标章节</h4>
-<p>设置要自动生成的章节总数。生成过程中会显示进度。</p>
-
+<p>设置要自动生成的章节总数。</p>
 <h4>📌 提示词</h4>
-<p>每次自动发送给 AI 的消息内容。建议使用简洁的续写指令，例如：</p>
-<ul>
-    <li>继续</li>
-    <li>继续推进剧情</li>
-    <li>请继续创作下一章</li>
-</ul>
+<p>每次自动发送给 AI 的消息内容。</p>
         `,
     };
     
@@ -286,46 +244,21 @@ function showHelp(topic) {
                     <span>帮助</span>
                     <button class="nag-modal-close">✕</button>
                 </div>
-                <div class="nag-modal-body">
-                    ${content}
-                </div>
+                <div class="nag-modal-body">${content}</div>
             </div>
         </div>
     `);
     
     function closeModal(e) {
-        if (e) {
-            e.stopPropagation();
-            e.stopImmediatePropagation();
-            e.preventDefault();
-        }
+        if (e) { e.stopPropagation(); e.preventDefault(); }
         modal.remove();
     }
     
-    // 阻止所有可能触发 drawer 折叠的事件冒泡
-    modal.on('click mousedown mouseup pointerdown pointerup touchstart touchend', function(e) {
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-    });
-    
-    // 关闭按钮
+    modal.on('click mousedown mouseup', function(e) { e.stopPropagation(); });
     modal.find('.nag-modal-close').on('click', closeModal);
+    modal.on('click', function(e) { if (e.target === modal[0]) closeModal(e); });
+    $(document).one('keydown.nagModal', function(e) { if (e.key === 'Escape') closeModal(e); });
     
-    // 点击遮罩关闭（点击弹窗内容区域不关闭）
-    modal.on('click', function(e) {
-        if (e.target === modal[0]) {
-            closeModal(e);
-        }
-    });
-    
-    // ESC 键关闭
-    $(document).one('keydown.nagModal', function(e) {
-        if (e.key === 'Escape') {
-            closeModal(e);
-        }
-    });
-    
-    // ✅ 关键修改：追加到插件容器内部，而不是 body
     $('#nag-container').append(modal);
 }
 
@@ -359,7 +292,6 @@ function refreshPreview() {
     }
     
     const rawPreview = rawContent.substring(0, 200).replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    
     let html = `
         <div class="nag-preview-source">楼层 ${floor} | 长度 ${rawContent.length} 字</div>
         <div class="nag-preview-raw">${rawPreview}${rawContent.length > 200 ? '...' : ''}</div>
@@ -368,7 +300,7 @@ function refreshPreview() {
     if (useTags) {
         const extracted = extractTagContents(rawContent, tags, settings.tagSeparator);
         if (extracted) {
-            html += `<div class="nag-preview-success"><b>✅ 提取成功</b> (${extracted.length} 字) [${tags.join(', ')}]<div class="nag-preview-text">${escapeHtml(extracted.slice(0, 400))}${extracted.length > 400 ? '...' : ''}</div></div>`;
+            html += `<div class="nag-preview-success"><b>✅ 提取成功</b> (${extracted.length} 字)<div class="nag-preview-text">${escapeHtml(extracted.slice(0, 400))}</div></div>`;
         } else {
             html += `<div class="nag-preview-warning"><b>⚠️ 未找到标签</b> [${tags.join(', ')}]</div>`;
         }
@@ -407,7 +339,7 @@ function debugRawContent(floorIndex) {
 window.nagDebug = debugRawContent;
 
 // ============================================
-// 生成逻辑
+// 生成逻辑 (核心修复区域)
 // ============================================
 
 function getAIMessagesInfo() {
@@ -418,45 +350,111 @@ function getAIMessagesInfo() {
     return { count: msgs.length, lastContent: content, lastLength: content.length };
 }
 
+// ✅ 只保留一个 hasActiveGeneration
 function hasActiveGeneration() {
-    // 只检测最可靠的指标：是否有正在生成的消息
-    return !!document.querySelector('.mes.generating');
+    if (document.querySelector('.mes.generating')) return true;
+    
+    const stopBtn = document.querySelector('#mes_stop');
+    if (stopBtn && stopBtn.offsetParent !== null) {
+        const style = window.getComputedStyle(stopBtn);
+        if (style.display !== 'none' && style.visibility !== 'hidden') {
+            return true;
+        }
+    }
+    
+    return false;
 }
 
+// ✅ 只保留一个 sendMessage
+async function sendMessage(text) {
+    const $ta = $('#send_textarea');
+    const $btn = $('#send_but');
+    
+    if (!$ta.length || !$btn.length) {
+        throw new Error('找不到输入框或发送按钮');
+    }
+    
+    $ta.val('');
+    $ta[0].value = '';
+    $ta.trigger('input');
+    await sleep(50);
+    
+    $ta.val(text);
+    $ta[0].value = text;
+    $ta.trigger('input').trigger('change').trigger('keyup');
+    
+    await sleep(100);
+    
+    $btn.trigger('click');
+    
+    log('消息已提交，等待其他插件处理...', 'info');
+}
+
+// ✅ 只保留一个 waitForNewResponse
 async function waitForNewResponse(prevCount) {
     const start = Date.now();
-    while (getAIMessagesInfo().count <= prevCount) {
-        if (abortGeneration) throw new Error('中止');
-        if (Date.now() - start > settings.responseTimeout) throw new Error('超时');
-        await sleep(300);
+    
+    // 阶段1：等待生成开始（兼容剧情推进插件）
+    log('等待生成开始...', 'debug');
+    
+    while (true) {
+        if (abortGeneration) throw new Error('用户中止');
+        
+        const elapsed = Date.now() - start;
+        if (elapsed > settings.responseTimeout) {
+            throw new Error('等待响应超时');
+        }
+        
+        const stopBtn = document.querySelector('#mes_stop');
+        const stopVisible = stopBtn && stopBtn.offsetParent !== null;
+        const currentCount = getAIMessagesInfo().count;
+        const generating = document.querySelector('.mes.generating');
+        
+        if (stopVisible || generating || currentCount > prevCount) {
+            log('检测到AI开始生成', 'success');
+            break;
+        }
+        
+        if (elapsed % 5000 < 500) {
+            log(`等待中... (${Math.round(elapsed/1000)}秒)`, 'debug');
+        }
+        
+        await sleep(500);
     }
+    
+    // 阶段2：等待生成完成
+    log('等待AI生成完成...', 'debug');
     await sleep(500);
+    
     while (hasActiveGeneration()) {
-        if (abortGeneration) throw new Error('中止');
+        if (abortGeneration) throw new Error('用户中止');
+        if (Date.now() - start > settings.responseTimeout) {
+            throw new Error('生成超时');
+        }
         await sleep(300);
     }
+    
+    // 阶段3：稳定性检查
     let lastLen = 0, stable = 0;
     while (stable < settings.stabilityRequiredCount) {
-        if (abortGeneration) throw new Error('中止');
-        if (hasActiveGeneration()) { stable = 0; await sleep(300); continue; }
+        if (abortGeneration) throw new Error('用户中止');
+        if (hasActiveGeneration()) { 
+            stable = 0; 
+            await sleep(300); 
+            continue; 
+        }
         const info = getAIMessagesInfo();
-        if (info.lastLength === lastLen && info.lastLength > 0) stable++;
-        else { stable = 0; lastLen = info.lastLength; }
+        if (info.lastLength === lastLen && info.lastLength > 0) {
+            stable++;
+        } else { 
+            stable = 0; 
+            lastLen = info.lastLength; 
+        }
         await sleep(settings.stabilityCheckInterval);
     }
+    
     await sleep(settings.delayAfterGeneration);
     return getAIMessagesInfo();
-}
-
-async function sendMessage(text) {
-    const ta = document.querySelector('#send_textarea');
-    const btn = document.querySelector('#send_but');
-    if (!ta || !btn) throw new Error('找不到输入框');
-    ta.value = ''; ta.focus(); await sleep(50);
-    ta.value = text;
-    ta.dispatchEvent(new Event('input', { bubbles: true }));
-    await sleep(100);
-    btn.click();
 }
 
 async function generateSingleChapter(num) {
@@ -473,11 +471,19 @@ async function generateSingleChapter(num) {
 
 async function startGeneration() {
     if (settings.isRunning) { toastr.warning('已在运行'); return; }
-    if (hasActiveGeneration()) { toastr.error('请等待当前生成完成'); return; }
     
-    settings.isRunning = true; settings.isPaused = false; abortGeneration = false;
+    // 简化检测，只检查 .mes.generating
+    if (document.querySelector('.mes.generating')) { 
+        toastr.error('请等待当前生成完成'); 
+        return; 
+    }
+    
+    settings.isRunning = true; 
+    settings.isPaused = false; 
+    abortGeneration = false;
     generationStats = { startTime: Date.now(), chaptersGenerated: 0, totalCharacters: 0, errors: [] };
-    saveSettings(); updateUI();
+    saveSettings(); 
+    updateUI();
     toastr.info(`开始生成 ${settings.totalChapters - settings.currentChapter} 章`);
     
     try {
@@ -492,9 +498,11 @@ async function startGeneration() {
                     await generateSingleChapter(i + 1);
                     success = true;
                     settings.currentChapter = i + 1;
-                    saveSettings(); updateUI();
+                    saveSettings(); 
+                    updateUI();
                 } catch(e) {
                     retries++;
+                    log(`第 ${i+1} 章失败: ${e.message}`, 'error');
                     generationStats.errors.push({ chapter: i + 1, error: e.message });
                     if (retries < settings.maxRetries) {
                         await sleep(5000);
@@ -505,10 +513,15 @@ async function startGeneration() {
             if (!success) settings.currentChapter = i + 1;
             if (settings.currentChapter % settings.autoSaveInterval === 0) await exportNovel(true);
         }
-        if (!abortGeneration) { toastr.success('生成完成!'); await exportNovel(false); }
+        if (!abortGeneration) { 
+            toastr.success('生成完成!'); 
+            await exportNovel(false); 
+        }
     } finally {
-        settings.isRunning = false; settings.isPaused = false;
-        saveSettings(); updateUI();
+        settings.isRunning = false; 
+        settings.isPaused = false;
+        saveSettings(); 
+        updateUI();
     }
 }
 
@@ -531,7 +544,9 @@ function downloadFile(content, filename, type = 'text/plain') {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = filename;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    document.body.appendChild(a); 
+    a.click(); 
+    document.body.removeChild(a);
 }
 
 async function exportNovel(silent = false) {
@@ -562,7 +577,6 @@ async function exportAsJSON(silent = false) {
 function loadSettings() {
     extension_settings[extensionName] = extension_settings[extensionName] || {};
     settings = Object.assign({}, defaultSettings, extension_settings[extensionName]);
-    // 确保 panelCollapsed 存在
     settings.panelCollapsed = Object.assign({}, defaultSettings.panelCollapsed, settings.panelCollapsed || {});
     settings.isRunning = false; 
     settings.isPaused = false;
@@ -628,7 +642,6 @@ function createUI() {
             </div>
             <div class="inline-drawer-content">
                 
-                <!-- 状态面板 (不可折叠) -->
                 <div class="nag-section nag-status-panel">
                     <span id="nag-status" class="nag-status-badge stopped">⏹️ 已停止</span>
                     <div class="nag-progress-container">
@@ -642,7 +655,6 @@ function createUI() {
                     </div>
                 </div>
                 
-                <!-- 控制按钮 (不可折叠) -->
                 <div class="nag-section nag-controls">
                     <div class="nag-btn-row">
                         <button id="nag-btn-start" class="menu_button">▶️ 开始</button>
@@ -653,7 +665,6 @@ function createUI() {
                     <div class="nag-btn-row"><button id="nag-btn-reset" class="menu_button">🔄 重置</button></div>
                 </div>
                 
-                <!-- 生成设置 (可折叠) -->
                 <div id="nag-panel-generate" class="nag-section nag-settings nag-collapsible">
                     <div class="nag-panel-header" data-panel="generate">
                         <span class="nag-panel-title">📝 生成设置</span>
@@ -668,7 +679,6 @@ function createUI() {
                     </div>
                 </div>
                 
-                <!-- 导出设置 (可折叠) -->
                 <div id="nag-panel-export" class="nag-section nag-settings nag-collapsible">
                     <div class="nag-panel-header" data-panel="export">
                         <span class="nag-panel-title">📤 导出设置</span>
@@ -696,7 +706,6 @@ function createUI() {
                     </div>
                 </div>
                 
-                <!-- 标签提取 (可折叠) -->
                 <div id="nag-panel-extract" class="nag-section nag-settings nag-collapsible">
                     <div class="nag-panel-header" data-panel="extract">
                         <span class="nag-panel-title">🏷️ 标签提取</span>
@@ -735,7 +744,6 @@ function createUI() {
                     </div>
                 </div>
                 
-                <!-- 高级设置 (可折叠) -->
                 <div id="nag-panel-advanced" class="nag-section nag-settings nag-collapsible">
                     <div class="nag-panel-header" data-panel="advanced">
                         <span class="nag-panel-title">⚙️ 高级设置</span>
@@ -780,7 +788,6 @@ function applyPanelStates() {
 }
 
 function bindEvents() {
-    // 控制按钮
     $('#nag-btn-start').on('click', startGeneration);
     $('#nag-btn-pause').on('click', pauseGeneration);
     $('#nag-btn-resume').on('click', resumeGeneration);
@@ -791,22 +798,17 @@ function bindEvents() {
     $('#nag-btn-refresh-floors').on('click', () => $('#nag-total-floors').text(getTotalFloors()));
     $('#nag-btn-refresh-preview').on('click', refreshPreview);
     
-    // 面板折叠
     $('.nag-panel-header').on('click', function(e) {
-        // 如果点击的是帮助按钮，不触发折叠
         if ($(e.target).hasClass('nag-help-btn')) return;
         const panelId = $(this).data('panel');
         togglePanel(panelId);
     });
     
-    // 帮助按钮
     $('.nag-help-btn').on('click', function(e) {
         e.stopPropagation();
-        const topic = $(this).data('help');
-        showHelp(topic);
+        showHelp($(this).data('help'));
     });
     
-    // 设置
     $('#nag-set-export-all').on('change', function() { settings.exportAll = $(this).prop('checked'); updateUI(); saveSettings(); });
     $('#nag-set-start-floor').on('change', function() { settings.exportStartFloor = +$(this).val() || 0; saveSettings(); });
     $('#nag-set-end-floor').on('change', function() { settings.exportEndFloor = +$(this).val() || 99999; saveSettings(); });
@@ -817,8 +819,24 @@ function bindEvents() {
     $('#nag-set-tags').on('change', function() { settings.extractTags = $(this).val(); saveSettings(); refreshPreview(); });
     $('#nag-set-separator').on('change', function() { settings.tagSeparator = $(this).val().replace(/\\n/g, '\n'); saveSettings(); });
     
-    const map = {'#nag-set-total':'totalChapters','#nag-set-prompt':'prompt','#nag-set-initial-wait':'initialWaitTime','#nag-set-delay':'delayAfterGeneration','#nag-set-stability-interval':'stabilityCheckInterval','#nag-set-stability-count':'stabilityRequiredCount','#nag-set-autosave':'autoSaveInterval','#nag-set-retries':'maxRetries','#nag-set-minlen':'minChapterLength'};
-    Object.entries(map).forEach(([s,k])=>$(s).on('change',function(){settings[k]=$(this).is('textarea')?$(this).val():+$(this).val();saveSettings();updateUI();}));
+    const map = {
+        '#nag-set-total':'totalChapters',
+        '#nag-set-prompt':'prompt',
+        '#nag-set-initial-wait':'initialWaitTime',
+        '#nag-set-delay':'delayAfterGeneration',
+        '#nag-set-stability-interval':'stabilityCheckInterval',
+        '#nag-set-stability-count':'stabilityRequiredCount',
+        '#nag-set-autosave':'autoSaveInterval',
+        '#nag-set-retries':'maxRetries',
+        '#nag-set-minlen':'minChapterLength'
+    };
+    Object.entries(map).forEach(([s,k]) => {
+        $(s).on('change', function() {
+            settings[k] = $(this).is('textarea') ? $(this).val() : +$(this).val();
+            saveSettings();
+            updateUI();
+        });
+    });
 }
 
 function syncUI() {
