@@ -390,15 +390,18 @@ async function sendMessage(text) {
     log('消息已提交，等待其他插件处理...', 'info');
 }
 
-// ✅ 只保留一个 waitForNewResponse
+// ✅ 修复后的 waitForNewResponse - 一旦生成开始就让它完成
 async function waitForNewResponse(prevCount) {
     const start = Date.now();
     
-    // 阶段1：等待生成开始（兼容剧情推进插件）
+    // 阶段1：等待生成开始（只在这个阶段可以中止）
     log('等待生成开始...', 'debug');
     
     while (true) {
-        if (abortGeneration) throw new Error('用户中止');
+        // 只在生成尚未开始时检查中止信号
+        if (abortGeneration) {
+            throw new Error('用户中止');
+        }
         
         const elapsed = Date.now() - start;
         if (elapsed > settings.responseTimeout) {
@@ -422,22 +425,21 @@ async function waitForNewResponse(prevCount) {
         await sleep(500);
     }
     
-    // 阶段2：等待生成完成
+    // 阶段2：等待生成完成（生成已开始，让它完成，不再检查中止）
     log('等待AI生成完成...', 'debug');
     await sleep(500);
     
     while (hasActiveGeneration()) {
-        if (abortGeneration) throw new Error('用户中止');
+        // 不再检查 abortGeneration，让当前生成完成
         if (Date.now() - start > settings.responseTimeout) {
             throw new Error('生成超时');
         }
         await sleep(300);
     }
     
-    // 阶段3：稳定性检查
+    // 阶段3：稳定性检查（也不检查中止，确保获取完整结果）
     let lastLen = 0, stable = 0;
     while (stable < settings.stabilityRequiredCount) {
-        if (abortGeneration) throw new Error('用户中止');
         if (hasActiveGeneration()) { 
             stable = 0; 
             await sleep(300); 
@@ -457,6 +459,7 @@ async function waitForNewResponse(prevCount) {
     return getAIMessagesInfo();
 }
 
+
 async function generateSingleChapter(num) {
     const before = getAIMessagesInfo();
     await sleep(settings.initialWaitTime);
@@ -469,10 +472,10 @@ async function generateSingleChapter(num) {
     return result;
 }
 
+// ✅ 修复后的 startGeneration - 正确处理停止信号
 async function startGeneration() {
     if (settings.isRunning) { toastr.warning('已在运行'); return; }
     
-    // 简化检测，只检查 .mes.generating
     if (document.querySelector('.mes.generating')) { 
         toastr.error('请等待当前生成完成'); 
         return; 
@@ -488,12 +491,24 @@ async function startGeneration() {
     
     try {
         for (let i = settings.currentChapter; i < settings.totalChapters; i++) {
-            if (abortGeneration) break;
+            // ✅ 检查点1：循环开始时
+            if (abortGeneration) {
+                log('检测到停止信号，退出生成循环', 'info');
+                break;
+            }
+            
             while (settings.isPaused && !abortGeneration) await sleep(500);
-            if (abortGeneration) break;
+            
+            // ✅ 检查点2：暂停恢复后
+            if (abortGeneration) {
+                log('检测到停止信号，退出生成循环', 'info');
+                break;
+            }
             
             let success = false, retries = 0;
-            while (!success && retries < settings.maxRetries) {
+            
+            // ✅ 关键修复：重试循环条件中添加 abortGeneration 检查
+            while (!success && retries < settings.maxRetries && !abortGeneration) {
                 try {
                     await generateSingleChapter(i + 1);
                     success = true;
@@ -501,21 +516,42 @@ async function startGeneration() {
                     saveSettings(); 
                     updateUI();
                 } catch(e) {
+                    // ✅ 关键修复：如果是用户中止，直接跳出重试循环，不再重试
+                    if (abortGeneration || e.message === '用户中止') {
+                        log('用户中止，停止重试', 'info');
+                        break;
+                    }
+                    
                     retries++;
                     log(`第 ${i+1} 章失败: ${e.message}`, 'error');
                     generationStats.errors.push({ chapter: i + 1, error: e.message });
+                    
+                    // ✅ 重试等待期间也检查停止信号
                     if (retries < settings.maxRetries) {
-                        await sleep(5000);
-                        while (hasActiveGeneration()) await sleep(1000);
+                        for (let w = 0; w < 10 && !abortGeneration; w++) {
+                            await sleep(500);
+                        }
+                        if (abortGeneration) break;
+                        while (hasActiveGeneration() && !abortGeneration) await sleep(1000);
                     }
                 }
             }
+            
+            // ✅ 检查点3：重试循环结束后
+            if (abortGeneration) {
+                log('检测到停止信号，退出生成循环', 'info');
+                break;
+            }
+            
             if (!success) settings.currentChapter = i + 1;
             if (settings.currentChapter % settings.autoSaveInterval === 0) await exportNovel(true);
         }
+        
         if (!abortGeneration) { 
             toastr.success('生成完成!'); 
             await exportNovel(false); 
+        } else {
+            log('生成已被用户停止', 'warning');
         }
     } finally {
         settings.isRunning = false; 
