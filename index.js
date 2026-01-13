@@ -32,6 +32,11 @@ const defaultSettings = {
         extract: true,
         advanced: true,
     },
+    // 🆕 DOM稳定性检查配置（用于兼容总结等后处理插件）
+    enableDomStabilityCheck: true,
+    domQuietPeriod: 3000,
+    domStabilityTimeout: 120000,
+    postProcessWaitTime: 1000,
 };
 
 let settings = {};
@@ -233,6 +238,78 @@ function showHelp(topic) {
 <h4>📌 提示词</h4>
 <p>每次自动发送给 AI 的消息内容。</p>
         `,
+        domStability: `
+<h3>🔍 DOM稳定性检查说明</h3>
+<h4>📌 什么是DOM稳定性检查？</h4>
+<p>用于兼容总结插件等后处理插件。当AI回复完成后，这些插件可能还在修改消息内容。</p>
+<h4>📌 工作原理</h4>
+<p>监听最后一条AI消息的DOM变化，只有在指定时间内没有任何变化才继续下一章。</p>
+<h4>📌 参数说明</h4>
+<ul>
+    <li><b>DOM安静时间</b>：DOM需要保持多久不变化才算稳定</li>
+    <li><b>检测超时</b>：最长等待时间，超时后强制继续</li>
+    <li><b>额外等待</b>：DOM稳定后再额外等待的时间</li>
+</ul>
+<h4>📌 推荐配置</h4>
+<ul>
+    <li>总结插件较快：安静3秒，额外等待1秒</li>
+    <li>总结插件较慢：安静5秒，额外等待2秒</li>
+    <li>非常保守：安静8秒，额外等待3秒</li>
+</ul>
+        `,
+        advanced: `
+<h3>⚙️ 高级设置说明</h3>
+
+<h4>📌 时间控制参数</h4>
+<ul>
+    <li><b>初始等待</b>：发送消息前的等待时间，避免操作过快</li>
+    <li><b>完成等待</b>：AI生成完成后的额外等待时间</li>
+    <li><b>稳定间隔</b>：检测内容是否稳定的检查间隔</li>
+    <li><b>稳定次数</b>：内容需要连续多少次检查不变才算稳定</li>
+</ul>
+
+<h4>📌 生成控制参数</h4>
+<ul>
+    <li><b>自动保存间隔</b>：每生成多少章自动导出一次备份</li>
+    <li><b>最大重试</b>：单章生成失败后的最大重试次数</li>
+    <li><b>最小章节长度</b>：AI回复少于此字数视为失败，触发重试</li>
+</ul>
+
+<h4>📌 DOM稳定性检查</h4>
+<p>用于兼容总结插件等后处理插件，详见该区块的帮助按钮。</p>
+
+<h4>📌 推荐配置</h4>
+<table style="width:100%; font-size:12px; border-collapse:collapse;">
+    <tr style="background:rgba(0,0,0,0.2)">
+        <th style="padding:6px; text-align:left">场景</th>
+        <th style="padding:6px">初始等待</th>
+        <th style="padding:6px">完成等待</th>
+        <th style="padding:6px">稳定次数</th>
+    </tr>
+    <tr>
+        <td style="padding:6px">快速生成</td>
+        <td style="padding:6px; text-align:center">1000</td>
+        <td style="padding:6px; text-align:center">2000</td>
+        <td style="padding:6px; text-align:center">3</td>
+    </tr>
+    <tr style="background:rgba(0,0,0,0.1)">
+        <td style="padding:6px">标准（推荐）</td>
+        <td style="padding:6px; text-align:center">2000</td>
+        <td style="padding:6px; text-align:center">3000</td>
+        <td style="padding:6px; text-align:center">5</td>
+    </tr>
+    <tr>
+        <td style="padding:6px">保守稳定</td>
+        <td style="padding:6px; text-align:center">3000</td>
+        <td style="padding:6px; text-align:center">5000</td>
+        <td style="padding:6px; text-align:center">8</td>
+    </tr>
+</table>
+
+<h4>📌 调试技巧</h4>
+<p>在浏览器控制台输入 <code>nagDebug()</code> 可查看最后一条AI消息的原始内容和标签提取测试结果。</p>
+<p>也可指定楼层：<code>nagDebug(5)</code> 查看第5楼。</p>
+        `,
     };
     
     const content = helps[topic] || '<p>暂无帮助内容</p>';
@@ -259,8 +336,10 @@ function showHelp(topic) {
     modal.on('click', function(e) { if (e.target === modal[0]) closeModal(e); });
     $(document).one('keydown.nagModal', function(e) { if (e.key === 'Escape') closeModal(e); });
     
-    $('#nag-container').append(modal);
+    // ✅ 修复：添加到 body 而不是 #nag-container，保持弹窗始终在最中间。
+    $('body').append(modal);
 }
+
 
 // ============================================
 // 预览
@@ -339,7 +418,7 @@ function debugRawContent(floorIndex) {
 window.nagDebug = debugRawContent;
 
 // ============================================
-// 生成逻辑 (核心修复区域)
+// 生成逻辑
 // ============================================
 
 function getAIMessagesInfo() {
@@ -350,7 +429,6 @@ function getAIMessagesInfo() {
     return { count: msgs.length, lastContent: content, lastLength: content.length };
 }
 
-// ✅ 只保留一个 hasActiveGeneration
 function hasActiveGeneration() {
     if (document.querySelector('.mes.generating')) return true;
     
@@ -365,7 +443,6 @@ function hasActiveGeneration() {
     return false;
 }
 
-// ✅ 只保留一个 sendMessage
 async function sendMessage(text) {
     const $ta = $('#send_textarea');
     const $btn = $('#send_but');
@@ -390,7 +467,110 @@ async function sendMessage(text) {
     log('消息已提交，等待其他插件处理...', 'info');
 }
 
-// ✅ 修复后的 waitForNewResponse - 一旦生成开始就让它完成
+// ============================================
+// DOM 稳定性检测（兼容总结等后处理插件）
+// ============================================
+
+/**
+ * 获取最后一条AI消息的DOM元素
+ */
+function getLastAIMessageElement() {
+    const messages = document.querySelectorAll('#chat .mes[is_user="false"]');
+    return messages.length > 0 ? messages[messages.length - 1] : null;
+}
+
+/**
+ * 等待目标元素的DOM完全稳定（无任何变化）
+ * @param {Element} targetElement - 要监听的元素
+ * @param {number} quietPeriod - 需要安静多久才算稳定(ms)
+ * @param {number} timeout - 超时时间(ms)
+ * @returns {Promise<boolean>}
+ */
+async function waitForDomStable(targetElement, quietPeriod, timeout) {
+    return new Promise((resolve, reject) => {
+        if (!targetElement) {
+            resolve(true);
+            return;
+        }
+        
+        const startTime = Date.now();
+        let lastChangeTime = Date.now();
+        let resolved = false;
+        let observer = null;
+        let checkInterval = null;
+        
+        const cleanup = () => {
+            if (observer) {
+                observer.disconnect();
+                observer = null;
+            }
+            if (checkInterval) {
+                clearInterval(checkInterval);
+                checkInterval = null;
+            }
+        };
+        
+        // 创建变化观察者
+        observer = new MutationObserver((mutations) => {
+            // 检测到任何变化，重置计时器
+            lastChangeTime = Date.now();
+            log(`检测到DOM变化 (${mutations.length}处)，重置稳定计时`, 'debug');
+        });
+        
+        // 监听所有类型的变化
+        observer.observe(targetElement, {
+            childList: true,      // 子节点增删
+            subtree: true,        // 所有后代节点
+            characterData: true,  // 文本内容变化
+            attributes: true,     // 属性变化
+        });
+        
+        // 定期检查是否已稳定
+        checkInterval = setInterval(() => {
+            if (resolved) return;
+            
+            const now = Date.now();
+            const timeSinceLastChange = now - lastChangeTime;
+            const totalElapsed = now - startTime;
+            
+            // 检查是否超时
+            if (totalElapsed > timeout) {
+                cleanup();
+                resolved = true;
+                log(`DOM稳定性检测超时 (${Math.round(timeout/1000)}秒)，继续执行`, 'warning');
+                resolve(true);
+                return;
+            }
+            
+            // 检查是否用户中止
+            if (abortGeneration) {
+                cleanup();
+                resolved = true;
+                reject(new Error('用户中止'));
+                return;
+            }
+            
+            // 检查是否已稳定足够长时间
+            if (timeSinceLastChange >= quietPeriod) {
+                cleanup();
+                resolved = true;
+                log(`DOM已稳定 ${Math.round(quietPeriod/1000)}秒，后处理插件应已完成`, 'success');
+                resolve(true);
+                return;
+            }
+            
+            // 每5秒输出一次等待状态
+            if (totalElapsed % 5000 < 500) {
+                log(`等待DOM稳定... (已等待 ${Math.round(totalElapsed/1000)}s, 距上次变化 ${Math.round(timeSinceLastChange/1000)}s)`, 'debug');
+            }
+        }, 500);
+    });
+}
+
+// ============================================
+// 响应等待逻辑
+// ============================================
+
 async function waitForNewResponse(prevCount) {
     const start = Date.now();
     
@@ -398,7 +578,6 @@ async function waitForNewResponse(prevCount) {
     log('等待生成开始...', 'debug');
     
     while (true) {
-        // 只在生成尚未开始时检查中止信号
         if (abortGeneration) {
             throw new Error('用户中止');
         }
@@ -430,14 +609,14 @@ async function waitForNewResponse(prevCount) {
     await sleep(500);
     
     while (hasActiveGeneration()) {
-        // 不再检查 abortGeneration，让当前生成完成
         if (Date.now() - start > settings.responseTimeout) {
             throw new Error('生成超时');
         }
         await sleep(300);
     }
     
-    // 阶段3：稳定性检查（也不检查中止，确保获取完整结果）
+    // 阶段3：基础稳定性检查（内容长度稳定）
+    log('进行基础稳定性检查...', 'debug');
     let lastLen = 0, stable = 0;
     while (stable < settings.stabilityRequiredCount) {
         if (hasActiveGeneration()) { 
@@ -455,10 +634,34 @@ async function waitForNewResponse(prevCount) {
         await sleep(settings.stabilityCheckInterval);
     }
     
+    // 阶段4：DOM稳定性检查（等待后处理插件完成）
+    if (settings.enableDomStabilityCheck) {
+        log('等待后处理插件完成（DOM稳定性检查）...', 'info');
+        
+        const lastMsg = getLastAIMessageElement();
+        if (lastMsg) {
+            try {
+                await waitForDomStable(
+                    lastMsg,
+                    settings.domQuietPeriod,
+                    settings.domStabilityTimeout
+                );
+            } catch (e) {
+                if (e.message === '用户中止') throw e;
+                log(`DOM稳定性检查异常: ${e.message}`, 'warning');
+            }
+        }
+        
+        // 额外等待时间（确保所有后处理完成）
+        if (settings.postProcessWaitTime > 0) {
+            log(`额外等待 ${settings.postProcessWaitTime}ms...`, 'debug');
+            await sleep(settings.postProcessWaitTime);
+        }
+    }
+    
     await sleep(settings.delayAfterGeneration);
     return getAIMessagesInfo();
 }
-
 
 async function generateSingleChapter(num) {
     const before = getAIMessagesInfo();
@@ -472,7 +675,6 @@ async function generateSingleChapter(num) {
     return result;
 }
 
-// ✅ 修复后的 startGeneration - 正确处理停止信号
 async function startGeneration() {
     if (settings.isRunning) { toastr.warning('已在运行'); return; }
     
@@ -491,7 +693,7 @@ async function startGeneration() {
     
     try {
         for (let i = settings.currentChapter; i < settings.totalChapters; i++) {
-            // ✅ 检查点1：循环开始时
+            // 检查点1：循环开始时
             if (abortGeneration) {
                 log('检测到停止信号，退出生成循环', 'info');
                 break;
@@ -499,7 +701,7 @@ async function startGeneration() {
             
             while (settings.isPaused && !abortGeneration) await sleep(500);
             
-            // ✅ 检查点2：暂停恢复后
+            // 检查点2：暂停恢复后
             if (abortGeneration) {
                 log('检测到停止信号，退出生成循环', 'info');
                 break;
@@ -507,7 +709,6 @@ async function startGeneration() {
             
             let success = false, retries = 0;
             
-            // ✅ 关键修复：重试循环条件中添加 abortGeneration 检查
             while (!success && retries < settings.maxRetries && !abortGeneration) {
                 try {
                     await generateSingleChapter(i + 1);
@@ -516,7 +717,6 @@ async function startGeneration() {
                     saveSettings(); 
                     updateUI();
                 } catch(e) {
-                    // ✅ 关键修复：如果是用户中止，直接跳出重试循环，不再重试
                     if (abortGeneration || e.message === '用户中止') {
                         log('用户中止，停止重试', 'info');
                         break;
@@ -526,7 +726,6 @@ async function startGeneration() {
                     log(`第 ${i+1} 章失败: ${e.message}`, 'error');
                     generationStats.errors.push({ chapter: i + 1, error: e.message });
                     
-                    // ✅ 重试等待期间也检查停止信号
                     if (retries < settings.maxRetries) {
                         for (let w = 0; w < 10 && !abortGeneration; w++) {
                             await sleep(500);
@@ -537,7 +736,7 @@ async function startGeneration() {
                 }
             }
             
-            // ✅ 检查点3：重试循环结束后
+            // 检查点3：重试循环结束后
             if (abortGeneration) {
                 log('检测到停止信号，退出生成循环', 'info');
                 break;
@@ -647,6 +846,10 @@ function updateUI() {
     
     $('#nag-set-start-floor, #nag-set-end-floor').prop('disabled', settings.exportAll);
     $('#nag-floor-inputs').toggleClass('disabled', settings.exportAll);
+    
+    // 更新DOM稳定性检查相关控件的禁用状态
+    $('#nag-set-dom-quiet, #nag-set-dom-timeout, #nag-set-post-wait').prop('disabled', !settings.enableDomStabilityCheck);
+    $('#nag-dom-settings').toggleClass('disabled', !settings.enableDomStabilityCheck);
 }
 
 function toggleTagSettings() {
@@ -784,6 +987,7 @@ function createUI() {
                     <div class="nag-panel-header" data-panel="advanced">
                         <span class="nag-panel-title">⚙️ 高级设置</span>
                         <div class="nag-panel-actions">
+                            <span class="nag-help-btn" data-help="advanced" title="帮助">❓</span>
                             <span class="nag-collapse-icon">▼</span>
                         </div>
                     </div>
@@ -801,6 +1005,36 @@ function createUI() {
                             <div class="nag-setting-item"><label>最大重试</label><input type="number" id="nag-set-retries"></div>
                         </div>
                         <div class="nag-setting-item"><label>最小章节长度</label><input type="number" id="nag-set-minlen"></div>
+                        
+                        <hr class="nag-divider">
+                        
+                        <div class="nag-subsection-header">
+                            <span>🔍 DOM稳定性检查（兼容总结插件）</span>
+                            <span class="nag-help-btn" data-help="domStability" title="帮助">❓</span>
+                        </div>
+                        <div class="nag-checkbox-group">
+                            <label class="nag-checkbox-label">
+                                <input type="checkbox" id="nag-set-dom-stability">
+                                <span>启用DOM稳定性检查</span>
+                            </label>
+                        </div>
+                        <div id="nag-dom-settings">
+                            <div class="nag-setting-row">
+                                <div class="nag-setting-item">
+                                    <label>DOM安静时间 (ms)</label>
+                                    <input type="number" id="nag-set-dom-quiet" min="1000" step="500">
+                                </div>
+                                <div class="nag-setting-item">
+                                    <label>检测超时 (ms)</label>
+                                    <input type="number" id="nag-set-dom-timeout" min="10000" step="1000">
+                                </div>
+                            </div>
+                            <div class="nag-setting-item">
+                                <label>额外等待时间 (ms)</label>
+                                <input type="number" id="nag-set-post-wait" min="0" step="500">
+                            </div>
+                        </div>
+                        
                         <div style="margin-top:10px;font-size:11px;opacity:0.5">控制台调试: <code>nagDebug()</code></div>
                     </div>
                 </div>
@@ -855,6 +1089,25 @@ function bindEvents() {
     $('#nag-set-tags').on('change', function() { settings.extractTags = $(this).val(); saveSettings(); refreshPreview(); });
     $('#nag-set-separator').on('change', function() { settings.tagSeparator = $(this).val().replace(/\\n/g, '\n'); saveSettings(); });
     
+    // DOM稳定性检查相关事件
+    $('#nag-set-dom-stability').on('change', function() { 
+        settings.enableDomStabilityCheck = $(this).prop('checked'); 
+        updateUI();
+        saveSettings(); 
+    });
+    $('#nag-set-dom-quiet').on('change', function() { 
+        settings.domQuietPeriod = +$(this).val() || 3000; 
+        saveSettings(); 
+    });
+    $('#nag-set-dom-timeout').on('change', function() { 
+        settings.domStabilityTimeout = +$(this).val() || 120000; 
+        saveSettings(); 
+    });
+    $('#nag-set-post-wait').on('change', function() { 
+        settings.postProcessWaitTime = +$(this).val() || 0; 
+        saveSettings(); 
+    });
+    
     const map = {
         '#nag-set-total':'totalChapters',
         '#nag-set-prompt':'prompt',
@@ -894,6 +1147,13 @@ function syncUI() {
     $('#nag-set-autosave').val(settings.autoSaveInterval);
     $('#nag-set-retries').val(settings.maxRetries);
     $('#nag-set-minlen').val(settings.minChapterLength);
+    
+    // DOM稳定性检查相关
+    $('#nag-set-dom-stability').prop('checked', settings.enableDomStabilityCheck);
+    $('#nag-set-dom-quiet').val(settings.domQuietPeriod);
+    $('#nag-set-dom-timeout').val(settings.domStabilityTimeout);
+    $('#nag-set-post-wait').val(settings.postProcessWaitTime);
+    
     toggleTagSettings();
     updateUI();
 }
