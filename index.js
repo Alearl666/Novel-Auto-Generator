@@ -7,16 +7,28 @@ const defaultSettings = {
     totalChapters: 1000,
     currentChapter: 0,
     prompt: "继续推进剧情，保证剧情流畅自然，注意人物性格一致性",
-    delayAfterGeneration: 3000,
-    initialWaitTime: 2000,
+    isRunning: false,
+    isPaused: false,
+    
+    // 发送检测设置
+    enableSendToastDetection: true,
+    sendToastWaitTimeout: 60000,
+    sendPostToastWaitTime: 1000,
+    
+    // 回复等待设置
+    replyWaitTime: 5000,
     stabilityCheckInterval: 1000,
-    stabilityRequiredCount: 5,
-    responseTimeout: 300000,
+    stabilityRequiredCount: 3,
+    enableReplyToastDetection: true,
+    replyToastWaitTimeout: 300000,
+    replyPostToastWaitTime: 2000,
+    
+    // 生成设置
     autoSaveInterval: 50,
     maxRetries: 3,
     minChapterLength: 100,
-    isRunning: false,
-    isPaused: false,
+    
+    // 导出设置
     exportAll: true,
     exportStartFloor: 0,
     exportEndFloor: 99999,
@@ -26,21 +38,13 @@ const defaultSettings = {
     extractTags: '',
     extractMode: 'all',
     tagSeparator: '\n\n',
+    
     panelCollapsed: {
         generate: false,
         export: false,
         extract: true,
         advanced: true,
     },
-    // DOM稳定性检查配置
-    enableDomStabilityCheck: true,
-    domQuietPeriod: 3000,
-    domStabilityTimeout: 120000,
-    postProcessWaitTime: 1000,
-    // 弹窗检测配置
-    enableToastDetection: true,
-    toastWaitTimeout: 300000,
-    toastCheckInterval: 500,
 };
 
 let settings = {};
@@ -128,6 +132,17 @@ function getRawMessages(startFloor, endFloor, opts = {}) {
     return messages;
 }
 
+function getAIMessageCount() {
+    return document.querySelectorAll('#chat .mes[is_user="false"]').length;
+}
+
+function getLastAIMessageLength() {
+    const msgs = document.querySelectorAll('#chat .mes[is_user="false"]');
+    if (!msgs.length) return 0;
+    const last = msgs[msgs.length - 1].querySelector('.mes_text');
+    return last?.innerText?.trim()?.length || 0;
+}
+
 // ============================================
 // 标签提取
 // ============================================
@@ -205,8 +220,30 @@ function getAllChapters() {
 
 function showHelp(topic) {
     const helps = {
-        extract: `
-<h3>🏷️ 标签提取功能说明</h3>
+        generate: {
+            title: '📝 生成设置说明',
+            content: `
+<h4>📌 目标章节</h4>
+<p>设置要自动生成的章节总数。</p>
+<h4>📌 提示词</h4>
+<p>每次自动发送给 AI 的消息内容。</p>
+            `
+        },
+        export: {
+            title: '📤 导出设置说明',
+            content: `
+<h4>📌 楼层范围</h4>
+<p>楼层从 <b>0</b> 开始计数。</p>
+<h4>📌 原始 (chat.mes)</h4>
+<ul>
+    <li><b>✅ 勾选</b>：读取原始内容</li>
+    <li><b>❌ 不勾选</b>：读取显示内容（经过正则处理）</li>
+</ul>
+            `
+        },
+        extract: {
+            title: '🏷️ 标签提取说明',
+            content: `
 <h4>📌 什么是标签提取？</h4>
 <p>从 AI 回复的原始内容中，只提取指定 XML 标签内的文字。</p>
 <h4>📌 使用场景</h4>
@@ -224,144 +261,123 @@ function showHelp(topic) {
 <p>用空格、逗号分隔：<code>content detail 正文</code></p>
 <h4>📌 调试</h4>
 <p>控制台输入 <code>nagDebug()</code></p>
-        `,
-        export: `
-<h3>📤 导出设置说明</h3>
-<h4>📌 楼层范围</h4>
-<p>楼层从 <b>0</b> 开始计数。</p>
-<h4>📌 原始 (chat.mes)</h4>
+            `
+        },
+        advanced: {
+            title: '⚙️ 高级设置说明',
+            content: `
+<h4>📤 发送阶段</h4>
+<p>消息发送后，可能有其他插件（如剧情推进插件）需要处理消息。</p>
 <ul>
-    <li><b>✅ 勾选</b>：读取原始内容</li>
-    <li><b>❌ 不勾选</b>：读取显示内容（经过正则处理）</li>
-</ul>
-        `,
-        generate: `
-<h3>📝 生成设置说明</h3>
-<h4>📌 目标章节</h4>
-<p>设置要自动生成的章节总数。</p>
-<h4>📌 提示词</h4>
-<p>每次自动发送给 AI 的消息内容。</p>
-        `,
-        domStability: `
-<h3>🔍 DOM稳定性检查说明</h3>
-<h4>📌 什么是DOM稳定性检查？</h4>
-<p>用于兼容总结插件等后处理插件。当AI回复完成后，这些插件可能还在修改消息内容。</p>
-<h4>📌 工作原理</h4>
-<p>监听最后一条AI消息的DOM变化，只有在指定时间内没有任何变化才继续下一章。</p>
-<h4>📌 参数说明</h4>
-<ul>
-    <li><b>DOM安静时间</b>：DOM需要保持多久不变化才算稳定</li>
-    <li><b>检测超时</b>：最长等待时间，超时后强制继续</li>
-    <li><b>额外等待</b>：DOM稳定后再额外等待的时间</li>
-</ul>
-<h4>📌 推荐配置</h4>
-<ul>
-    <li>总结插件较快：安静3秒，额外等待1秒</li>
-    <li>总结插件较慢：安静5秒，额外等待2秒</li>
-    <li>非常保守：安静8秒，额外等待3秒</li>
-</ul>
-        `,
-        toastDetection: `
-<h3>💬 弹窗检测说明</h3>
-<h4>📌 什么是弹窗检测？</h4>
-<p>检测页面上是否有活跃的通知弹窗（如总结插件的进度提示），等待弹窗消失后再继续下一章。</p>
-
-<h4>📌 为什么需要？</h4>
-<p>总结插件在处理时会显示弹窗（如"正在处理 自动 更新..."），弹窗消失通常意味着插件处理完成。</p>
-
-<h4>📌 与 DOM 稳定性检查的区别</h4>
-<ul>
-    <li><b>弹窗检测</b>：通过弹窗判断插件是否在工作，更直观</li>
-    <li><b>DOM 稳定性检查</b>：通过内容变化判断，更精确</li>
-    <li><b>推荐</b>：两者同时启用，弹窗检测先执行</li>
+    <li><b>弹窗检测</b>：检测到弹窗时等待其消失，确保其他插件处理完成</li>
+    <li><b>等待超时</b>：最长等待弹窗消失的时间</li>
+    <li><b>额外等待</b>：弹窗消失后再等待的时间</li>
 </ul>
 
-<h4>📌 参数说明</h4>
+<h4>📥 回复阶段</h4>
+<p>AI回复完成后，可能有总结插件需要处理内容。</p>
 <ul>
-    <li><b>等待超时</b>：最长等待弹窗消失的时间（默认5分钟）</li>
-    <li><b>检查间隔</b>：检查弹窗是否存在的间隔（默认500ms）</li>
+    <li><b>回复后等待</b>：AI回复稳定后等待的时间，让总结插件有时间启动</li>
+    <li><b>稳定检查间隔</b>：检查内容是否稳定的间隔</li>
+    <li><b>稳定次数</b>：内容需要连续多少次不变才算稳定</li>
+    <li><b>弹窗检测</b>：检测总结插件的弹窗，等待其完成</li>
 </ul>
 
-<h4>📌 处理流程</h4>
-<pre>AI生成完成 → 基础稳定性检查 → 弹窗检测 → DOM稳定性检查 → 下一章</pre>
-        `,
-        advanced: `
-<h3>⚙️ 高级设置说明</h3>
-
-<h4>📌 时间控制参数</h4>
+<h4>🔧 生成控制</h4>
 <ul>
-    <li><b>初始等待</b>：发送消息前的等待时间，避免操作过快</li>
-    <li><b>完成等待</b>：AI生成完成后的额外等待时间</li>
-    <li><b>稳定间隔</b>：检测内容是否稳定的检查间隔</li>
-    <li><b>稳定次数</b>：内容需要连续多少次检查不变才算稳定</li>
+    <li><b>自动保存间隔</b>：每生成多少章自动导出一次</li>
+    <li><b>最大重试</b>：单章生成失败的最大重试次数</li>
+    <li><b>最小长度</b>：AI回复少于此字数视为失败</li>
 </ul>
-
-<h4>📌 生成控制参数</h4>
-<ul>
-    <li><b>自动保存间隔</b>：每生成多少章自动导出一次备份</li>
-    <li><b>最大重试</b>：单章生成失败后的最大重试次数</li>
-    <li><b>最小章节长度</b>：AI回复少于此字数视为失败，触发重试</li>
-</ul>
-
-<h4>📌 推荐配置</h4>
-<table style="width:100%; font-size:12px; border-collapse:collapse;">
-    <tr style="background:rgba(0,0,0,0.2)">
-        <th style="padding:6px; text-align:left">场景</th>
-        <th style="padding:6px">初始等待</th>
-        <th style="padding:6px">完成等待</th>
-        <th style="padding:6px">稳定次数</th>
-    </tr>
-    <tr>
-        <td style="padding:6px">快速生成</td>
-        <td style="padding:6px; text-align:center">1000</td>
-        <td style="padding:6px; text-align:center">2000</td>
-        <td style="padding:6px; text-align:center">3</td>
-    </tr>
-    <tr style="background:rgba(0,0,0,0.1)">
-        <td style="padding:6px">标准（推荐）</td>
-        <td style="padding:6px; text-align:center">2000</td>
-        <td style="padding:6px; text-align:center">3000</td>
-        <td style="padding:6px; text-align:center">5</td>
-    </tr>
-    <tr>
-        <td style="padding:6px">保守稳定</td>
-        <td style="padding:6px; text-align:center">3000</td>
-        <td style="padding:6px; text-align:center">5000</td>
-        <td style="padding:6px; text-align:center">8</td>
-    </tr>
-</table>
-
-<h4>📌 调试技巧</h4>
-<p>在浏览器控制台输入 <code>nagDebug()</code> 可查看最后一条AI消息的原始内容和标签提取测试结果。</p>
-<p>也可指定楼层：<code>nagDebug(5)</code> 查看第5楼。</p>
-        `,
+            `
+        },
     };
     
-    const content = helps[topic] || '<p>暂无帮助内容</p>';
+    const helpData = helps[topic] || { title: '帮助', content: '<p>暂无帮助内容</p>' };
     
-    const modal = $(`
-        <div class="nag-modal-overlay">
-            <div class="nag-modal">
-                <div class="nag-modal-header">
-                    <span>帮助</span>
-                    <button class="nag-modal-close">✕</button>
-                </div>
-                <div class="nag-modal-body">${content}</div>
-            </div>
-        </div>
-    `);
-    
-    function closeModal(e) {
-        if (e) { e.stopPropagation(); e.preventDefault(); }
-        modal.remove();
+    // 移除已存在的弹窗
+    const existingModal = document.getElementById('nag-help-modal');
+    if (existingModal) {
+        existingModal.remove();
     }
     
-    modal.on('click mousedown mouseup', function(e) { e.stopPropagation(); });
-    modal.find('.nag-modal-close').on('click', closeModal);
-    modal.on('click', function(e) { if (e.target === modal[0]) closeModal(e); });
-    $(document).one('keydown.nagModal', function(e) { if (e.key === 'Escape') closeModal(e); });
+    // 创建弹窗容器
+    const modalContainer = document.createElement('div');
+    modalContainer.className = 'nag-modal-container';
+    modalContainer.id = 'nag-help-modal';
+    modalContainer.innerHTML = `
+        <div class="nag-modal">
+            <div class="nag-modal-header">
+                <span class="nag-modal-title">${helpData.title}</span>
+                <button class="nag-modal-close" type="button">✕</button>
+            </div>
+            <div class="nag-modal-body">${helpData.content}</div>
+        </div>
+    `;
     
-    $('body').append(modal);
+    // 关闭弹窗函数
+    const closeModal = (e) => {
+        if (e) {
+            e.stopPropagation();
+            e.preventDefault();
+        }
+        modalContainer.remove();
+        document.removeEventListener('keydown', escHandler, true);
+    };
+    
+    // ESC 关闭 - 使用捕获阶段，优先处理
+    const escHandler = (e) => {
+        if (e.key === 'Escape') {
+            e.stopPropagation();
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            closeModal();
+        }
+    };
+    document.addEventListener('keydown', escHandler, true);
+    
+    // 关闭按钮点击
+    modalContainer.querySelector('.nag-modal-close').addEventListener('click', (e) => {
+        closeModal(e);
+    }, false);
+    
+    // 阻止弹窗内部点击冒泡
+    modalContainer.querySelector('.nag-modal').addEventListener('click', (e) => {
+        e.stopPropagation();
+    }, false);
+    
+    modalContainer.querySelector('.nag-modal').addEventListener('mousedown', (e) => {
+        e.stopPropagation();
+    }, false);
+    
+    modalContainer.querySelector('.nag-modal').addEventListener('touchstart', (e) => {
+        e.stopPropagation();
+    }, { passive: true });
+    
+    // 点击容器背景关闭
+    modalContainer.addEventListener('click', (e) => {
+        if (e.target === modalContainer) {
+            closeModal(e);
+        }
+    }, false);
+    
+    modalContainer.addEventListener('mousedown', (e) => {
+        if (e.target === modalContainer) {
+            e.stopPropagation();
+        }
+    }, false);
+    
+    modalContainer.addEventListener('touchstart', (e) => {
+        e.stopPropagation();
+    }, { passive: true });
+    
+    // 添加到 body 最后，确保在最顶层
+    document.body.appendChild(modalContainer);
+    
+    // 强制重新计算位置（修复某些浏览器的渲染问题）
+    requestAnimationFrame(() => {
+        modalContainer.style.opacity = '1';
+    });
 }
 
 // ============================================
@@ -441,31 +457,75 @@ function debugRawContent(floorIndex) {
 window.nagDebug = debugRawContent;
 
 // ============================================
-// 生成逻辑
+// 弹窗检测
 // ============================================
 
-function getAIMessagesInfo() {
-    const msgs = document.querySelectorAll('#chat .mes[is_user="false"]');
-    if (!msgs.length) return { count: 0, lastContent: '', lastLength: 0 };
-    const last = msgs[msgs.length - 1].querySelector('.mes_text');
-    const content = last?.innerText?.trim() || '';
-    return { count: msgs.length, lastContent: content, lastLength: content.length };
-}
-
-function hasActiveGeneration() {
-    if (document.querySelector('.mes.generating')) return true;
-    
-    const stopBtn = document.querySelector('#mes_stop');
-    if (stopBtn && stopBtn.offsetParent !== null) {
-        const style = window.getComputedStyle(stopBtn);
-        if (style.display !== 'none' && style.visibility !== 'hidden') {
-            return true;
-        }
+function hasActiveToast() {
+    const toastContainer = document.querySelector('#toast-container');
+    if (toastContainer) {
+        const toasts = toastContainer.querySelectorAll('.toast');
+        if (toasts.length > 0) return true;
     }
-    
     return false;
 }
 
+function getToastText() {
+    const toastContainer = document.querySelector('#toast-container');
+    if (toastContainer) {
+        const toast = toastContainer.querySelector('.toast');
+        if (toast) return toast.textContent?.trim().substring(0, 50) || '';
+    }
+    return '';
+}
+
+/**
+ * 等待弹窗消失
+ * @param {number} timeout - 超时时间
+ * @param {number} postWaitTime - 弹窗消失后额外等待时间
+ * @param {string} phase - 阶段名称（用于日志）
+ */
+async function waitForToastsClear(timeout, postWaitTime, phase = '') {
+    if (!hasActiveToast()) {
+        log(`${phase}无弹窗，跳过等待`, 'debug');
+        return;
+    }
+    
+    log(`${phase}检测到弹窗，等待消失...`, 'info');
+    const startTime = Date.now();
+    let lastLogTime = 0;
+    
+    while (hasActiveToast()) {
+        if (abortGeneration) throw new Error('用户中止');
+        
+        const elapsed = Date.now() - startTime;
+        if (elapsed > timeout) {
+            log(`${phase}弹窗等待超时，继续执行`, 'warning');
+            return;
+        }
+        
+        if (elapsed - lastLogTime >= 5000) {
+            log(`${phase}等待弹窗... (${Math.round(elapsed/1000)}s) ${getToastText()}`, 'debug');
+            lastLogTime = elapsed;
+        }
+        
+        await sleep(500);
+    }
+    
+    log(`${phase}弹窗已消失`, 'success');
+    
+    if (postWaitTime > 0) {
+        log(`${phase}额外等待 ${postWaitTime}ms`, 'debug');
+        await sleep(postWaitTime);
+    }
+}
+
+// ============================================
+// 核心生成逻辑
+// ============================================
+
+/**
+ * 发送消息
+ */
 async function sendMessage(text) {
     const $ta = $('#send_textarea');
     const $btn = $('#send_but');
@@ -474,323 +534,128 @@ async function sendMessage(text) {
         throw new Error('找不到输入框或发送按钮');
     }
     
-    $ta.val('');
-    $ta[0].value = '';
-    $ta.trigger('input');
-    await sleep(50);
-    
+    // 清空并填入文本
     $ta.val(text);
     $ta[0].value = text;
-    $ta.trigger('input').trigger('change').trigger('keyup');
+    $ta.trigger('input').trigger('change');
     
     await sleep(100);
     
+    // 点击发送
     $btn.trigger('click');
+    log('消息已发送', 'success');
     
-    log('消息已提交，等待其他插件处理...', 'info');
-}
-
-// ============================================
-// 弹窗检测（兼容总结等后处理插件）
-// ============================================
-
-/**
- * 检测是否有活跃的 toastr 弹窗
- * @returns {boolean}
- */
-function hasActiveToast() {
-    // 检测 toastr 容器中的通知
-    const toastContainer = document.querySelector('#toast-container');
-    if (toastContainer) {
-        const toasts = toastContainer.querySelectorAll('.toast');
-        if (toasts.length > 0) {
-            return true;
-        }
+    // 发送阶段弹窗检测
+    if (settings.enableSendToastDetection) {
+        await sleep(500); // 短暂等待让弹窗有时间出现
+        await waitForToastsClear(
+            settings.sendToastWaitTimeout,
+            settings.sendPostToastWaitTime,
+            '[发送阶段] '
+        );
     }
-    
-    // 检测可能的其他弹窗形式
-    const customToasts = document.querySelectorAll('.toast-message, .toast-info, .toast-warning, .toast-success, .toast-error');
-    if (customToasts.length > 0) {
-        return true;
-    }
-    
-    return false;
 }
 
 /**
- * 获取当前弹窗的文本内容（用于日志）
- * @returns {string}
+ * 等待AI回复完成
  */
-function getToastText() {
-    const toastContainer = document.querySelector('#toast-container');
-    if (toastContainer) {
-        const toast = toastContainer.querySelector('.toast');
-        if (toast) {
-            return toast.textContent?.trim().substring(0, 50) || '(未知内容)';
-        }
-    }
-    return '';
-}
-
-/**
- * 等待所有弹窗消失
- * @param {number} timeout - 超时时间(ms)
- * @param {number} checkInterval - 检查间隔(ms)
- * @returns {Promise<boolean>}
- */
-async function waitForToastsClear(timeout, checkInterval) {
-    const startTime = Date.now();
-    let lastLogTime = 0;
-    
-    while (hasActiveToast()) {
-        const elapsed = Date.now() - startTime;
-        
-        // 检查超时
-        if (elapsed > timeout) {
-            log(`弹窗等待超时 (${Math.round(timeout/1000)}秒)，继续执行`, 'warning');
-            return false;
-        }
-        
-        // 检查用户中止
-        if (abortGeneration) {
-            throw new Error('用户中止');
-        }
-        
-        // 每5秒输出一次日志
-        if (elapsed - lastLogTime >= 5000) {
-            const toastText = getToastText();
-            log(`等待弹窗消失... (${Math.round(elapsed/1000)}s) - ${toastText}`, 'debug');
-            lastLogTime = elapsed;
-        }
-        
-        await sleep(checkInterval);
-    }
-    
-    return true;
-}
-
-// ============================================
-// DOM 稳定性检测（兼容总结等后处理插件）
-// ============================================
-
-/**
- * 获取最后一条AI消息的DOM元素
- */
-function getLastAIMessageElement() {
-    const messages = document.querySelectorAll('#chat .mes[is_user="false"]');
-    return messages.length > 0 ? messages[messages.length - 1] : null;
-}
-
-/**
- * 等待目标元素的DOM完全稳定（无任何变化）
- * @param {Element} targetElement - 要监听的元素
- * @param {number} quietPeriod - 需要安静多久才算稳定(ms)
- * @param {number} timeout - 超时时间(ms)
- * @returns {Promise<boolean>}
- */
-async function waitForDomStable(targetElement, quietPeriod, timeout) {
-    return new Promise((resolve, reject) => {
-        if (!targetElement) {
-            resolve(true);
-            return;
-        }
-        
-        const startTime = Date.now();
-        let lastChangeTime = Date.now();
-        let resolved = false;
-        let observer = null;
-        let checkInterval = null;
-        
-        const cleanup = () => {
-            if (observer) {
-                observer.disconnect();
-                observer = null;
-            }
-            if (checkInterval) {
-                clearInterval(checkInterval);
-                checkInterval = null;
-            }
-        };
-        
-        // 创建变化观察者
-        observer = new MutationObserver((mutations) => {
-            lastChangeTime = Date.now();
-            log(`检测到DOM变化 (${mutations.length}处)，重置稳定计时`, 'debug');
-        });
-        
-        // 监听所有类型的变化
-        observer.observe(targetElement, {
-            childList: true,
-            subtree: true,
-            characterData: true,
-            attributes: true,
-        });
-        
-        // 定期检查是否已稳定
-        checkInterval = setInterval(() => {
-            if (resolved) return;
-            
-            const now = Date.now();
-            const timeSinceLastChange = now - lastChangeTime;
-            const totalElapsed = now - startTime;
-            
-            if (totalElapsed > timeout) {
-                cleanup();
-                resolved = true;
-                log(`DOM稳定性检测超时 (${Math.round(timeout/1000)}秒)，继续执行`, 'warning');
-                resolve(true);
-                return;
-            }
-            
-            if (abortGeneration) {
-                cleanup();
-                resolved = true;
-                reject(new Error('用户中止'));
-                return;
-            }
-            
-            if (timeSinceLastChange >= quietPeriod) {
-                cleanup();
-                resolved = true;
-                log(`DOM已稳定 ${Math.round(quietPeriod/1000)}秒，后处理插件应已完成`, 'success');
-                resolve(true);
-                return;
-            }
-            
-            if (totalElapsed % 5000 < 500) {
-                log(`等待DOM稳定... (已等待 ${Math.round(totalElapsed/1000)}s, 距上次变化 ${Math.round(timeSinceLastChange/1000)}s)`, 'debug');
-            }
-        }, 500);
-    });
-}
-
-// ============================================
-// 响应等待逻辑
-// ============================================
-
-async function waitForNewResponse(prevCount) {
-    const start = Date.now();
-    
-    // 阶段1：等待生成开始
-    log('等待生成开始...', 'debug');
-    
-    while (true) {
-        if (abortGeneration) {
-            throw new Error('用户中止');
-        }
-        
-        const elapsed = Date.now() - start;
-        if (elapsed > settings.responseTimeout) {
-            throw new Error('等待响应超时');
-        }
-        
-        const stopBtn = document.querySelector('#mes_stop');
-        const stopVisible = stopBtn && stopBtn.offsetParent !== null;
-        const currentCount = getAIMessagesInfo().count;
-        const generating = document.querySelector('.mes.generating');
-        
-        if (stopVisible || generating || currentCount > prevCount) {
-            log('检测到AI开始生成', 'success');
-            break;
-        }
-        
-        if (elapsed % 5000 < 500) {
-            log(`等待中... (${Math.round(elapsed/1000)}秒)`, 'debug');
-        }
-        
+async function waitForAIResponse(prevCount) {
+    // 阶段1：等待AI消息数量增加
+    log('等待AI开始回复...', 'debug');
+    while (getAIMessageCount() <= prevCount) {
+        if (abortGeneration) throw new Error('用户中止');
         await sleep(500);
     }
+    log('检测到新的AI回复', 'success');
     
-    // 阶段2：等待生成完成
-    log('等待AI生成完成...', 'debug');
-    await sleep(500);
+    // 阶段2：等待内容稳定（长度不再变化）
+    log('等待AI回复完成...', 'debug');
+    let lastLength = 0;
+    let stableCount = 0;
     
-    while (hasActiveGeneration()) {
-        if (Date.now() - start > settings.responseTimeout) {
-            throw new Error('生成超时');
-        }
-        await sleep(300);
-    }
-    
-    // 阶段3：基础稳定性检查
-    log('进行基础稳定性检查...', 'debug');
-    let lastLen = 0, stable = 0;
-    while (stable < settings.stabilityRequiredCount) {
-        if (hasActiveGeneration()) { 
-            stable = 0; 
-            await sleep(300); 
-            continue; 
-        }
-        const info = getAIMessagesInfo();
-        if (info.lastLength === lastLen && info.lastLength > 0) {
-            stable++;
-        } else { 
-            stable = 0; 
-            lastLen = info.lastLength; 
-        }
+    while (stableCount < settings.stabilityRequiredCount) {
+        if (abortGeneration) throw new Error('用户中止');
+        
         await sleep(settings.stabilityCheckInterval);
-    }
-    
-    // 阶段4：等待弹窗消失
-    if (settings.enableToastDetection && hasActiveToast()) {
-        log('检测到活跃弹窗，等待后处理插件完成...', 'info');
-        try {
-            await waitForToastsClear(
-                settings.toastWaitTimeout,
-                settings.toastCheckInterval
-            );
-            log('弹窗已消失，后处理插件应已完成', 'success');
-        } catch (e) {
-            if (e.message === '用户中止') throw e;
-            log(`弹窗等待异常: ${e.message}`, 'warning');
-        }
-    }
-    
-    // 阶段5：DOM稳定性检查
-    if (settings.enableDomStabilityCheck) {
-        log('等待DOM稳定...', 'info');
         
-        const lastMsg = getLastAIMessageElement();
-        if (lastMsg) {
-            try {
-                await waitForDomStable(
-                    lastMsg,
-                    settings.domQuietPeriod,
-                    settings.domStabilityTimeout
-                );
-            } catch (e) {
-                if (e.message === '用户中止') throw e;
-                log(`DOM稳定性检查异常: ${e.message}`, 'warning');
-            }
+        const currentLength = getLastAIMessageLength();
+        if (currentLength === lastLength && currentLength > 0) {
+            stableCount++;
+        } else {
+            stableCount = 0;
+            lastLength = currentLength;
         }
+    }
+    log(`AI回复已稳定 (${lastLength} 字)`, 'success');
+    
+    // 阶段3：固定等待时间
+    if (settings.replyWaitTime > 0) {
+        log(`等待 ${settings.replyWaitTime}ms...`, 'debug');
+        await sleep(settings.replyWaitTime);
+    }
+    
+    // 阶段4：回复阶段弹窗检测
+    if (settings.enableReplyToastDetection) {
+        await waitForToastsClear(
+            settings.replyToastWaitTimeout,
+            settings.replyPostToastWaitTime,
+            '[回复阶段] '
+        );
+    }
+    
+    // 阶段5：再次稳定性检查（确保总结注入完成）
+    log('最终稳定性检查...', 'debug');
+    lastLength = 0;
+    stableCount = 0;
+    
+    while (stableCount < settings.stabilityRequiredCount) {
+        if (abortGeneration) throw new Error('用户中止');
         
-        if (settings.postProcessWaitTime > 0) {
-            log(`额外等待 ${settings.postProcessWaitTime}ms...`, 'debug');
-            await sleep(settings.postProcessWaitTime);
+        await sleep(settings.stabilityCheckInterval);
+        
+        const currentLength = getLastAIMessageLength();
+        if (currentLength === lastLength && currentLength > 0) {
+            stableCount++;
+        } else {
+            stableCount = 0;
+            lastLength = currentLength;
         }
     }
     
-    await sleep(settings.delayAfterGeneration);
-    return getAIMessagesInfo();
+    log('回复处理完成', 'success');
+    return lastLength;
 }
 
+/**
+ * 生成单章
+ */
 async function generateSingleChapter(num) {
-    const before = getAIMessagesInfo();
-    await sleep(settings.initialWaitTime);
+    const prevCount = getAIMessageCount();
+    
+    // 发送消息
     await sendMessage(settings.prompt);
-    const result = await waitForNewResponse(before.count);
-    if (result.lastLength < settings.minChapterLength) throw new Error('响应过短');
+    
+    // 等待回复完成
+    const length = await waitForAIResponse(prevCount);
+    
+    // 检查长度
+    if (length < settings.minChapterLength) {
+        throw new Error(`响应过短 (${length} 字)`);
+    }
+    
     generationStats.chaptersGenerated++;
-    generationStats.totalCharacters += result.lastLength;
-    log(`第 ${num} 章完成 (${result.lastLength} 字)`, 'success');
-    return result;
+    generationStats.totalCharacters += length;
+    log(`第 ${num} 章完成 (${length} 字)`, 'success');
+    
+    return length;
 }
 
+/**
+ * 开始生成
+ */
 async function startGeneration() {
-    if (settings.isRunning) { toastr.warning('已在运行'); return; }
-    
-    if (document.querySelector('.mes.generating')) { 
-        toastr.error('请等待当前生成完成'); 
+    if (settings.isRunning) { 
+        toastr.warning('已在运行'); 
         return; 
     }
     
@@ -805,18 +670,18 @@ async function startGeneration() {
     try {
         for (let i = settings.currentChapter; i < settings.totalChapters; i++) {
             if (abortGeneration) {
-                log('检测到停止信号，退出生成循环', 'info');
+                log('检测到停止信号', 'info');
                 break;
             }
             
-            while (settings.isPaused && !abortGeneration) await sleep(500);
-            
-            if (abortGeneration) {
-                log('检测到停止信号，退出生成循环', 'info');
-                break;
+            while (settings.isPaused && !abortGeneration) {
+                await sleep(500);
             }
             
-            let success = false, retries = 0;
+            if (abortGeneration) break;
+            
+            let success = false;
+            let retries = 0;
             
             while (!success && retries < settings.maxRetries && !abortGeneration) {
                 try {
@@ -826,39 +691,30 @@ async function startGeneration() {
                     saveSettings(); 
                     updateUI();
                 } catch(e) {
-                    if (abortGeneration || e.message === '用户中止') {
-                        log('用户中止，停止重试', 'info');
-                        break;
-                    }
+                    if (abortGeneration || e.message === '用户中止') break;
                     
                     retries++;
                     log(`第 ${i+1} 章失败: ${e.message}`, 'error');
                     generationStats.errors.push({ chapter: i + 1, error: e.message });
                     
                     if (retries < settings.maxRetries) {
-                        for (let w = 0; w < 10 && !abortGeneration; w++) {
-                            await sleep(500);
-                        }
-                        if (abortGeneration) break;
-                        while (hasActiveGeneration() && !abortGeneration) await sleep(1000);
+                        log(`等待5秒后重试...`, 'info');
+                        await sleep(5000);
                     }
                 }
             }
             
-            if (abortGeneration) {
-                log('检测到停止信号，退出生成循环', 'info');
-                break;
-            }
-            
+            if (abortGeneration) break;
             if (!success) settings.currentChapter = i + 1;
-            if (settings.currentChapter % settings.autoSaveInterval === 0) await exportNovel(true);
+            
+            if (settings.currentChapter % settings.autoSaveInterval === 0) {
+                await exportNovel(true);
+            }
         }
         
         if (!abortGeneration) { 
             toastr.success('生成完成!'); 
             await exportNovel(false); 
-        } else {
-            log('生成已被用户停止', 'warning');
         }
     } finally {
         settings.isRunning = false; 
@@ -868,14 +724,35 @@ async function startGeneration() {
     }
 }
 
-function pauseGeneration() { settings.isPaused = true; updateUI(); toastr.info('已暂停'); }
-function resumeGeneration() { settings.isPaused = false; updateUI(); toastr.info('已恢复'); }
-function stopGeneration() { abortGeneration = true; settings.isRunning = false; updateUI(); toastr.warning('已停止'); }
+function pauseGeneration() { 
+    settings.isPaused = true; 
+    updateUI(); 
+    toastr.info('已暂停'); 
+}
+
+function resumeGeneration() { 
+    settings.isPaused = false; 
+    updateUI(); 
+    toastr.info('已恢复'); 
+}
+
+function stopGeneration() { 
+    abortGeneration = true; 
+    settings.isRunning = false; 
+    updateUI(); 
+    toastr.warning('已停止'); 
+}
+
 function resetProgress() {
-    if (settings.isRunning) { toastr.warning('请先停止'); return; }
+    if (settings.isRunning) { 
+        toastr.warning('请先停止'); 
+        return; 
+    }
     settings.currentChapter = 0;
     generationStats = { startTime: null, chaptersGenerated: 0, totalCharacters: 0, errors: [] };
-    saveSettings(); updateUI(); toastr.info('已重置');
+    saveSettings(); 
+    updateUI(); 
+    toastr.info('已重置');
 }
 
 // ============================================
@@ -894,7 +771,10 @@ function downloadFile(content, filename, type = 'text/plain') {
 
 async function exportNovel(silent = false) {
     const chapters = getAllChapters();
-    if (!chapters.length) { if (!silent) toastr.warning('没有内容'); return; }
+    if (!chapters.length) { 
+        if (!silent) toastr.warning('没有内容'); 
+        return; 
+    }
     
     const totalChars = chapters.reduce((s, c) => s + c.content.length, 0);
     let text = `导出时间: ${new Date().toLocaleString()}\n总章节: ${chapters.length}\n总字数: ${totalChars}\n${'═'.repeat(40)}\n\n`;
@@ -908,7 +788,10 @@ async function exportNovel(silent = false) {
 
 async function exportAsJSON(silent = false) {
     const chapters = getAllChapters();
-    if (!chapters.length) { if (!silent) toastr.warning('没有内容'); return; }
+    if (!chapters.length) { 
+        if (!silent) toastr.warning('没有内容'); 
+        return; 
+    }
     downloadFile(JSON.stringify({ time: new Date().toISOString(), chapters }, null, 2), `novel_${Date.now()}.json`, 'application/json');
     if (!silent) toastr.success('已导出 JSON');
 }
@@ -935,7 +818,9 @@ function updateUI() {
     $('#nag-progress-fill').css('width', `${pct}%`);
     $('#nag-progress-text').text(`${settings.currentChapter} / ${settings.totalChapters} (${pct}%)`);
     
-    const [txt, cls] = settings.isRunning ? (settings.isPaused ? ['⏸️ 已暂停', 'paused'] : ['▶️ 运行中', 'running']) : ['⏹️ 已停止', 'stopped'];
+    const [txt, cls] = settings.isRunning 
+        ? (settings.isPaused ? ['⏸️ 已暂停', 'paused'] : ['▶️ 运行中', 'running']) 
+        : ['⏹️ 已停止', 'stopped'];
     $('#nag-status').text(txt).removeClass('stopped paused running').addClass(cls);
     
     $('#nag-btn-start').prop('disabled', settings.isRunning);
@@ -955,13 +840,13 @@ function updateUI() {
     $('#nag-set-start-floor, #nag-set-end-floor').prop('disabled', settings.exportAll);
     $('#nag-floor-inputs').toggleClass('disabled', settings.exportAll);
     
-    // DOM稳定性检查控件
-    $('#nag-set-dom-quiet, #nag-set-dom-timeout, #nag-set-post-wait').prop('disabled', !settings.enableDomStabilityCheck);
-    $('#nag-dom-settings').toggleClass('disabled', !settings.enableDomStabilityCheck);
+    // 发送阶段弹窗设置
+    $('#nag-send-toast-settings').toggleClass('disabled', !settings.enableSendToastDetection);
+    $('#nag-set-send-toast-timeout, #nag-set-send-post-toast-wait').prop('disabled', !settings.enableSendToastDetection);
     
-    // 弹窗检测控件
-    $('#nag-set-toast-timeout, #nag-set-toast-interval').prop('disabled', !settings.enableToastDetection);
-    $('#nag-toast-settings').toggleClass('disabled', !settings.enableToastDetection);
+    // 回复阶段弹窗设置
+    $('#nag-reply-toast-settings').toggleClass('disabled', !settings.enableReplyToastDetection);
+    $('#nag-set-reply-toast-timeout, #nag-set-reply-post-toast-wait').prop('disabled', !settings.enableReplyToastDetection);
 }
 
 function toggleTagSettings() {
@@ -1104,75 +989,105 @@ function createUI() {
                         </div>
                     </div>
                     <div class="nag-panel-content">
-                        <div class="nag-setting-row">
-                            <div class="nag-setting-item"><label>初始等待 (ms)</label><input type="number" id="nag-set-initial-wait"></div>
-                            <div class="nag-setting-item"><label>完成等待 (ms)</label><input type="number" id="nag-set-delay"></div>
-                        </div>
-                        <div class="nag-setting-row">
-                            <div class="nag-setting-item"><label>稳定间隔 (ms)</label><input type="number" id="nag-set-stability-interval"></div>
-                            <div class="nag-setting-item"><label>稳定次数</label><input type="number" id="nag-set-stability-count"></div>
-                        </div>
-                        <div class="nag-setting-row">
-                            <div class="nag-setting-item"><label>自动保存间隔</label><input type="number" id="nag-set-autosave"></div>
-                            <div class="nag-setting-item"><label>最大重试</label><input type="number" id="nag-set-retries"></div>
-                        </div>
-                        <div class="nag-setting-item"><label>最小章节长度</label><input type="number" id="nag-set-minlen"></div>
                         
-                        <hr class="nag-divider">
-                        
-                        <div class="nag-subsection-header">
-                            <span>💬 弹窗检测（兼容总结插件）</span>
-                            <span class="nag-help-btn" data-help="toastDetection" title="帮助">❓</span>
-                        </div>
-                        <div class="nag-checkbox-group">
-                            <label class="nag-checkbox-label">
-                                <input type="checkbox" id="nag-set-toast-detection">
-                                <span>启用弹窗检测</span>
-                            </label>
-                        </div>
-                        <div id="nag-toast-settings">
-                            <div class="nag-setting-row">
-                                <div class="nag-setting-item">
-                                    <label>等待超时 (ms)</label>
-                                    <input type="number" id="nag-set-toast-timeout" min="10000" step="10000">
+                        <!-- 发送阶段模块 -->
+                        <div class="nag-module nag-module-send">
+                            <div class="nag-module-header">
+                                <span class="nag-module-icon">📤</span>
+                                <span class="nag-module-title">发送阶段</span>
+                            </div>
+                            <div class="nag-module-body">
+                                <div class="nag-module-desc">消息发送后，等待剧情推进等插件处理完成</div>
+                                <div class="nag-checkbox-group">
+                                    <label class="nag-checkbox-label">
+                                        <input type="checkbox" id="nag-set-send-toast-detection">
+                                        <span>💬 启用弹窗检测</span>
+                                    </label>
                                 </div>
-                                <div class="nag-setting-item">
-                                    <label>检查间隔 (ms)</label>
-                                    <input type="number" id="nag-set-toast-interval" min="100" step="100">
+                                <div id="nag-send-toast-settings">
+                                    <div class="nag-setting-row">
+                                        <div class="nag-setting-item">
+                                            <label>等待超时 (ms)</label>
+                                            <input type="number" id="nag-set-send-toast-timeout" min="5000" step="5000">
+                                        </div>
+                                        <div class="nag-setting-item">
+                                            <label>额外等待 (ms)</label>
+                                            <input type="number" id="nag-set-send-post-toast-wait" min="0" step="500">
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
                         
-                        <hr class="nag-divider">
-                        
-                        <div class="nag-subsection-header">
-                            <span>🔍 DOM稳定性检查</span>
-                            <span class="nag-help-btn" data-help="domStability" title="帮助">❓</span>
-                        </div>
-                        <div class="nag-checkbox-group">
-                            <label class="nag-checkbox-label">
-                                <input type="checkbox" id="nag-set-dom-stability">
-                                <span>启用DOM稳定性检查</span>
-                            </label>
-                        </div>
-                        <div id="nag-dom-settings">
-                            <div class="nag-setting-row">
-                                <div class="nag-setting-item">
-                                    <label>DOM安静时间 (ms)</label>
-                                    <input type="number" id="nag-set-dom-quiet" min="1000" step="500">
+                        <!-- 回复阶段模块 -->
+                        <div class="nag-module nag-module-reply">
+                            <div class="nag-module-header">
+                                <span class="nag-module-icon">📥</span>
+                                <span class="nag-module-title">回复阶段</span>
+                            </div>
+                            <div class="nag-module-body">
+                                <div class="nag-module-desc">AI回复完成后，等待总结等插件处理完成</div>
+                                <div class="nag-setting-row">
+                                    <div class="nag-setting-item">
+                                        <label>回复后等待 (ms)</label>
+                                        <input type="number" id="nag-set-reply-wait" min="0" step="1000">
+                                    </div>
+                                    <div class="nag-setting-item">
+                                        <label>稳定检查间隔 (ms)</label>
+                                        <input type="number" id="nag-set-stability-interval" min="500" step="500">
+                                    </div>
                                 </div>
                                 <div class="nag-setting-item">
-                                    <label>检测超时 (ms)</label>
-                                    <input type="number" id="nag-set-dom-timeout" min="10000" step="1000">
+                                    <label>稳定次数</label>
+                                    <input type="number" id="nag-set-stability-count" min="1" style="width: 100px;">
                                 </div>
-                            </div>
-                            <div class="nag-setting-item">
-                                <label>额外等待时间 (ms)</label>
-                                <input type="number" id="nag-set-post-wait" min="0" step="500">
+                                <div class="nag-checkbox-group">
+                                    <label class="nag-checkbox-label">
+                                        <input type="checkbox" id="nag-set-reply-toast-detection">
+                                        <span>💬 启用弹窗检测</span>
+                                    </label>
+                                </div>
+                                <div id="nag-reply-toast-settings">
+                                    <div class="nag-setting-row">
+                                        <div class="nag-setting-item">
+                                            <label>等待超时 (ms)</label>
+                                            <input type="number" id="nag-set-reply-toast-timeout" min="10000" step="10000">
+                                        </div>
+                                        <div class="nag-setting-item">
+                                            <label>额外等待 (ms)</label>
+                                            <input type="number" id="nag-set-reply-post-toast-wait" min="0" step="500">
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         
-                        <div style="margin-top:15px;font-size:11px;opacity:0.5">控制台调试: <code>nagDebug()</code></div>
+                        <!-- 生成控制模块 -->
+                        <div class="nag-module nag-module-control">
+                            <div class="nag-module-header">
+                                <span class="nag-module-icon">🔧</span>
+                                <span class="nag-module-title">生成控制</span>
+                            </div>
+                            <div class="nag-module-body">
+                                <div class="nag-module-desc">控制自动生成的行为参数</div>
+                                <div class="nag-setting-row">
+                                    <div class="nag-setting-item">
+                                        <label>自动保存间隔</label>
+                                        <input type="number" id="nag-set-autosave" min="1">
+                                    </div>
+                                    <div class="nag-setting-item">
+                                        <label>最大重试</label>
+                                        <input type="number" id="nag-set-retries" min="1">
+                                    </div>
+                                </div>
+                                <div class="nag-setting-item">
+                                    <label>最小章节长度</label>
+                                    <input type="number" id="nag-set-minlen" min="0" style="width: 100px;">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="nag-debug-hint">控制台调试: <code>nagDebug()</code></div>
                     </div>
                 </div>
                 
@@ -1205,111 +1120,187 @@ function bindEvents() {
     $('#nag-btn-refresh-floors').on('click', () => $('#nag-total-floors').text(getTotalFloors()));
     $('#nag-btn-refresh-preview').on('click', refreshPreview);
     
+    // 面板折叠 - 排除帮助按钮
     $('.nag-panel-header').on('click', function(e) {
-        if ($(e.target).hasClass('nag-help-btn')) return;
+        // 如果点击的是帮助按钮区域，不处理折叠
+        if ($(e.target).closest('.nag-help-btn').length > 0) {
+            return;
+        }
         const panelId = $(this).data('panel');
         togglePanel(panelId);
     });
     
-    $('.nag-help-btn').on('click', function(e) {
-        e.stopPropagation();
-        showHelp($(this).data('help'));
+    // 帮助按钮 - 使用原生事件绑定
+    document.querySelectorAll('.nag-help-btn').forEach(btn => {
+        const topic = btn.getAttribute('data-help');
+        
+        // 阻止事件冒泡（不使用 preventDefault，否则会阻止 click）
+        btn.addEventListener('mousedown', (e) => {
+            e.stopPropagation();
+        }, false);
+        
+        btn.addEventListener('touchstart', (e) => {
+            e.stopPropagation();
+        }, { passive: true }); // passive: true 表示不会调用 preventDefault
+        
+        btn.addEventListener('touchend', (e) => {
+            e.stopPropagation();
+        }, { passive: true });
+        
+        // 点击打开帮助
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            showHelp(topic);
+        }, false);
     });
     
-    $('#nag-set-export-all').on('change', function() { settings.exportAll = $(this).prop('checked'); updateUI(); saveSettings(); });
-    $('#nag-set-start-floor').on('change', function() { settings.exportStartFloor = +$(this).val() || 0; saveSettings(); });
-    $('#nag-set-end-floor').on('change', function() { settings.exportEndFloor = +$(this).val() || 99999; saveSettings(); });
-    $('#nag-set-include-user').on('change', function() { settings.exportIncludeUser = $(this).prop('checked'); saveSettings(); });
-    $('#nag-set-include-ai').on('change', function() { settings.exportIncludeAI = $(this).prop('checked'); saveSettings(); });
-    $('#nag-set-use-raw').on('change', function() { settings.useRawContent = $(this).prop('checked'); saveSettings(); refreshPreview(); });
-    $('#nag-set-extract-mode').on('change', function() { settings.extractMode = $(this).val(); toggleTagSettings(); saveSettings(); refreshPreview(); });
-    $('#nag-set-tags').on('change', function() { settings.extractTags = $(this).val(); saveSettings(); refreshPreview(); });
-    $('#nag-set-separator').on('change', function() { settings.tagSeparator = $(this).val().replace(/\\n/g, '\n'); saveSettings(); });
+    // 导出设置
+    $('#nag-set-export-all').on('change', function() { 
+        settings.exportAll = $(this).prop('checked'); 
+        updateUI(); 
+        saveSettings(); 
+    });
+    $('#nag-set-start-floor').on('change', function() { 
+        settings.exportStartFloor = +$(this).val() || 0; 
+        saveSettings(); 
+    });
+    $('#nag-set-end-floor').on('change', function() { 
+        settings.exportEndFloor = +$(this).val() || 99999; 
+        saveSettings(); 
+    });
+    $('#nag-set-include-user').on('change', function() { 
+        settings.exportIncludeUser = $(this).prop('checked'); 
+        saveSettings(); 
+    });
+    $('#nag-set-include-ai').on('change', function() { 
+        settings.exportIncludeAI = $(this).prop('checked'); 
+        saveSettings(); 
+    });
+    $('#nag-set-use-raw').on('change', function() { 
+        settings.useRawContent = $(this).prop('checked'); 
+        saveSettings(); 
+        refreshPreview(); 
+    });
     
-    // DOM稳定性检查相关事件
-    $('#nag-set-dom-stability').on('change', function() { 
-        settings.enableDomStabilityCheck = $(this).prop('checked'); 
+    // 标签提取
+    $('#nag-set-extract-mode').on('change', function() { 
+        settings.extractMode = $(this).val(); 
+        toggleTagSettings(); 
+        saveSettings(); 
+        refreshPreview(); 
+    });
+    $('#nag-set-tags').on('change', function() { 
+        settings.extractTags = $(this).val(); 
+        saveSettings(); 
+        refreshPreview(); 
+    });
+    $('#nag-set-separator').on('change', function() { 
+        settings.tagSeparator = $(this).val().replace(/\\n/g, '\n'); 
+        saveSettings(); 
+    });
+    
+    // 发送阶段弹窗检测
+    $('#nag-set-send-toast-detection').on('change', function() { 
+        settings.enableSendToastDetection = $(this).prop('checked'); 
         updateUI();
         saveSettings(); 
     });
-    $('#nag-set-dom-quiet').on('change', function() { 
-        settings.domQuietPeriod = +$(this).val() || 3000; 
+    $('#nag-set-send-toast-timeout').on('change', function() { 
+        settings.sendToastWaitTimeout = +$(this).val() || 60000; 
         saveSettings(); 
     });
-    $('#nag-set-dom-timeout').on('change', function() { 
-        settings.domStabilityTimeout = +$(this).val() || 120000; 
-        saveSettings(); 
-    });
-    $('#nag-set-post-wait').on('change', function() { 
-        settings.postProcessWaitTime = +$(this).val() || 0; 
+    $('#nag-set-send-post-toast-wait').on('change', function() { 
+        settings.sendPostToastWaitTime = +$(this).val() || 1000; 
         saveSettings(); 
     });
     
-    // 弹窗检测相关事件
-    $('#nag-set-toast-detection').on('change', function() { 
-        settings.enableToastDetection = $(this).prop('checked'); 
+    // 回复阶段设置
+    $('#nag-set-reply-wait').on('change', function() { 
+        settings.replyWaitTime = +$(this).val() || 5000; 
+        saveSettings(); 
+    });
+    $('#nag-set-stability-interval').on('change', function() { 
+        settings.stabilityCheckInterval = +$(this).val() || 1000; 
+        saveSettings(); 
+    });
+    $('#nag-set-stability-count').on('change', function() { 
+        settings.stabilityRequiredCount = +$(this).val() || 3; 
+        saveSettings(); 
+    });
+    $('#nag-set-reply-toast-detection').on('change', function() { 
+        settings.enableReplyToastDetection = $(this).prop('checked'); 
         updateUI();
         saveSettings(); 
     });
-    $('#nag-set-toast-timeout').on('change', function() { 
-        settings.toastWaitTimeout = +$(this).val() || 300000; 
+    $('#nag-set-reply-toast-timeout').on('change', function() { 
+        settings.replyToastWaitTimeout = +$(this).val() || 300000; 
         saveSettings(); 
     });
-    $('#nag-set-toast-interval').on('change', function() { 
-        settings.toastCheckInterval = +$(this).val() || 500; 
+    $('#nag-set-reply-post-toast-wait').on('change', function() { 
+        settings.replyPostToastWaitTime = +$(this).val() || 2000; 
         saveSettings(); 
     });
     
-    const map = {
-        '#nag-set-total':'totalChapters',
-        '#nag-set-prompt':'prompt',
-        '#nag-set-initial-wait':'initialWaitTime',
-        '#nag-set-delay':'delayAfterGeneration',
-        '#nag-set-stability-interval':'stabilityCheckInterval',
-        '#nag-set-stability-count':'stabilityRequiredCount',
-        '#nag-set-autosave':'autoSaveInterval',
-        '#nag-set-retries':'maxRetries',
-        '#nag-set-minlen':'minChapterLength'
-    };
-    Object.entries(map).forEach(([s,k]) => {
-        $(s).on('change', function() {
-            settings[k] = $(this).is('textarea') ? $(this).val() : +$(this).val();
-            saveSettings();
-            updateUI();
-        });
+    // 生成控制
+    $('#nag-set-total').on('change', function() { 
+        settings.totalChapters = +$(this).val() || 1000; 
+        saveSettings(); 
+        updateUI(); 
+    });
+    $('#nag-set-prompt').on('change', function() { 
+        settings.prompt = $(this).val(); 
+        saveSettings(); 
+    });
+    $('#nag-set-autosave').on('change', function() { 
+        settings.autoSaveInterval = +$(this).val() || 50; 
+        saveSettings(); 
+    });
+    $('#nag-set-retries').on('change', function() { 
+        settings.maxRetries = +$(this).val() || 3; 
+        saveSettings(); 
+    });
+    $('#nag-set-minlen').on('change', function() { 
+        settings.minChapterLength = +$(this).val() || 100; 
+        saveSettings(); 
     });
 }
 
 function syncUI() {
+    // 生成设置
     $('#nag-set-total').val(settings.totalChapters);
     $('#nag-set-prompt').val(settings.prompt);
+    
+    // 导出设置
     $('#nag-set-export-all').prop('checked', settings.exportAll);
     $('#nag-set-start-floor').val(settings.exportStartFloor);
     $('#nag-set-end-floor').val(settings.exportEndFloor);
     $('#nag-set-include-user').prop('checked', settings.exportIncludeUser);
     $('#nag-set-include-ai').prop('checked', settings.exportIncludeAI);
     $('#nag-set-use-raw').prop('checked', settings.useRawContent);
+    
+    // 标签提取
     $('#nag-set-extract-mode').val(settings.extractMode);
     $('#nag-set-tags').val(settings.extractTags);
-    $('#nag-set-separator').val(settings.tagSeparator.replace(/\n/g,'\\n'));
-    $('#nag-set-initial-wait').val(settings.initialWaitTime);
-    $('#nag-set-delay').val(settings.delayAfterGeneration);
+    $('#nag-set-separator').val(settings.tagSeparator.replace(/\n/g, '\\n'));
+    
+    // 发送阶段弹窗检测
+    $('#nag-set-send-toast-detection').prop('checked', settings.enableSendToastDetection);
+    $('#nag-set-send-toast-timeout').val(settings.sendToastWaitTimeout);
+    $('#nag-set-send-post-toast-wait').val(settings.sendPostToastWaitTime);
+    
+    // 回复阶段设置
+    $('#nag-set-reply-wait').val(settings.replyWaitTime);
     $('#nag-set-stability-interval').val(settings.stabilityCheckInterval);
     $('#nag-set-stability-count').val(settings.stabilityRequiredCount);
+    $('#nag-set-reply-toast-detection').prop('checked', settings.enableReplyToastDetection);
+    $('#nag-set-reply-toast-timeout').val(settings.replyToastWaitTimeout);
+    $('#nag-set-reply-post-toast-wait').val(settings.replyPostToastWaitTime);
+    
+    // 生成控制
     $('#nag-set-autosave').val(settings.autoSaveInterval);
     $('#nag-set-retries').val(settings.maxRetries);
     $('#nag-set-minlen').val(settings.minChapterLength);
-    
-    // DOM稳定性检查相关
-    $('#nag-set-dom-stability').prop('checked', settings.enableDomStabilityCheck);
-    $('#nag-set-dom-quiet').val(settings.domQuietPeriod);
-    $('#nag-set-dom-timeout').val(settings.domStabilityTimeout);
-    $('#nag-set-post-wait').val(settings.postProcessWaitTime);
-    
-    // 弹窗检测相关
-    $('#nag-set-toast-detection').prop('checked', settings.enableToastDetection);
-    $('#nag-set-toast-timeout').val(settings.toastWaitTimeout);
-    $('#nag-set-toast-interval').val(settings.toastCheckInterval);
     
     toggleTagSettings();
     updateUI();
