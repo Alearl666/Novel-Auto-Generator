@@ -1,5 +1,6 @@
 import { saveSettingsDebounced } from "../../../../script.js";
 import { extension_settings } from "../../../extensions.js";
+import './txtToWorldbook.js';
 
 const extensionName = "novel-auto-generator";
 
@@ -900,7 +901,8 @@ function createUI() {
                     </div>
                     <div class="nag-btn-row"><button id="nag-btn-reset" class="menu_button">🔄 重置</button></div>
                 </div>
-                
+
+                <!-- 📝 生成设置模块 -->
                 <div id="nag-panel-generate" class="nag-section nag-settings nag-collapsible">
                     <div class="nag-panel-header" data-panel="generate">
                         <span class="nag-panel-title">📝 生成设置</span>
@@ -914,7 +916,8 @@ function createUI() {
                         <div class="nag-setting-item"><label>提示词</label><textarea id="nag-set-prompt" rows="2"></textarea></div>
                     </div>
                 </div>
-                
+
+                <!-- 📤 导出设置模块 -->
                 <div id="nag-panel-export" class="nag-section nag-settings nag-collapsible">
                     <div class="nag-panel-header" data-panel="export">
                         <span class="nag-panel-title">📤 导出设置</span>
@@ -941,7 +944,8 @@ function createUI() {
                         </div>
                     </div>
                 </div>
-                
+
+                <!-- 🏷️ 标签提取模块 -->
                 <div id="nag-panel-extract" class="nag-section nag-settings nag-collapsible">
                     <div class="nag-panel-header" data-panel="extract">
                         <span class="nag-panel-title">🏷️ 标签提取</span>
@@ -979,7 +983,8 @@ function createUI() {
                         </div>
                     </div>
                 </div>
-                
+
+                <!-- ⚙️ 高级设置模块 -->
                 <div id="nag-panel-advanced" class="nag-section nag-settings nag-collapsible">
                     <div class="nag-panel-header" data-panel="advanced">
                         <span class="nag-panel-title">⚙️ 高级设置</span>
@@ -1090,7 +1095,16 @@ function createUI() {
                         <div class="nag-debug-hint">控制台调试: <code>nagDebug()</code></div>
                     </div>
                 </div>
-                
+
+                <!-- 📚 TXT转世界书模块 -->
+                <div class="nag-section">
+                    <div class="nag-btn-row">
+                        <button id="nag-btn-txt-to-worldbook" class="menu_button" style="background: linear-gradient(135deg, #e67e22, #d35400);">
+                            📚 TXT转世界书
+                        </button>
+                    </div>
+                </div>
+
             </div>
         </div>
     </div>`;
@@ -1119,7 +1133,15 @@ function bindEvents() {
     $('#nag-btn-export-json').on('click', () => exportAsJSON(false));
     $('#nag-btn-refresh-floors').on('click', () => $('#nag-total-floors').text(getTotalFloors()));
     $('#nag-btn-refresh-preview').on('click', refreshPreview);
-    
+    // TXT转世界书入口
+    $('#nag-btn-txt-to-worldbook').on('click', () => {
+        if (typeof window.TxtToWorldbook !== 'undefined') {
+            window.TxtToWorldbook.open();
+        } else {
+            toastr.error('TXT转世界书模块未加载');
+        }
+    });
+
     // 面板折叠 - 排除帮助按钮
     $('.nag-panel-header').on('click', function(e) {
         // 如果点击的是帮助按钮区域，不处理折叠
