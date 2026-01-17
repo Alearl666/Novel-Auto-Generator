@@ -468,7 +468,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         contents: [{ parts: [{ text: prompt }] }],
-                        generationConfig: { maxOutputTokens: 65536, temperature: 0.3 },
+                        generationConfig: { maxOutputTokens: 63000, temperature: 0.3 },
                         safetySettings: [
                             { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'OFF' },
                             { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'OFF' },
@@ -502,7 +502,7 @@
                             model: geminiProxyModel,
                             messages: [{ role: 'user', content: prompt }],
                             temperature: 0.3,
-                            max_tokens: 65536
+                            max_tokens: 63000
                         }),
                     };
                 } else {
@@ -515,7 +515,7 @@
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             contents: [{ parts: [{ text: prompt }] }],
-                            generationConfig: { maxOutputTokens: 65536, temperature: 0.3 }
+                            generationConfig: { maxOutputTokens: 63000, temperature: 0.3 }
                         }),
                     };
                 }
@@ -551,7 +551,7 @@
                         model: model,
                         messages: [{ role: 'user', content: prompt }],
                         temperature: 0.3,
-                        max_tokens: 65536
+                        max_tokens: 63000
                     }),
                 };
                 break;
