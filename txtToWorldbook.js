@@ -1,6 +1,6 @@
 /**
- * TXT转世界书独立模块 v2.3.1
- * 并行处理修复版 - 修复队列UI更新、暂停功能、实时输出
+ * TXT转世界书独立模块 v2.4.0
+ * 新增: 记忆编辑/复制、重Roll功能、真正使用酒馆预设
  */
 
 (function() {
@@ -22,6 +22,9 @@
     let currentStreamContent = '';
     let startFromIndex = 0;
     let userSelectedStartIndex = null;
+
+    // ========== 重Roll功能：存储每个记忆的多次生成结果 ==========
+    let memoryRollHistory = {}; // { memoryIndex: [ {result, timestamp}, ... ] }
 
     // ========== 并行处理配置 ==========
     let parallelConfig = {
@@ -106,7 +109,8 @@
         apiTimeout: 120000,
         parallelEnabled: true,
         parallelConcurrency: 3,
-        parallelMode: 'independent'
+        parallelMode: 'independent',
+        useTavernPreset: false // 【新增】是否使用酒馆预设
     };
 
     let settings = { ...defaultSettings };
@@ -168,13 +172,14 @@
         storeName: 'history',
         metaStoreName: 'meta',
         stateStoreName: 'state',
+        rollStoreName: 'rolls', // 【新增】存储重Roll历史
         db: null,
 
         async openDB() {
             if (this.db) return this.db;
 
             return new Promise((resolve, reject) => {
-                const request = indexedDB.open(this.dbName, 3);
+                const request = indexedDB.open(this.dbName, 4); // 版本升级到4
 
                 request.onupgradeneeded = (event) => {
                     const db = event.target.result;
@@ -188,6 +193,11 @@
                     }
                     if (!db.objectStoreNames.contains(this.stateStoreName)) {
                         db.createObjectStore(this.stateStoreName, { keyPath: 'key' });
+                    }
+                    // 【新增】Roll历史存储
+                    if (!db.objectStoreNames.contains(this.rollStoreName)) {
+                        const rollStore = db.createObjectStore(this.rollStoreName, { keyPath: 'id', autoIncrement: true });
+                        rollStore.createIndex('memoryIndex', 'memoryIndex', { unique: false });
                     }
                 };
 
@@ -361,6 +371,57 @@
             });
         },
 
+        // 【新增】保存Roll结果
+        async saveRollResult(memoryIndex, result) {
+            const db = await this.openDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([this.rollStoreName], 'readwrite');
+                const store = transaction.objectStore(this.rollStoreName);
+
+                const record = {
+                    memoryIndex: memoryIndex,
+                    result: JSON.parse(JSON.stringify(result)),
+                    timestamp: Date.now()
+                };
+
+                const request = store.add(record);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        },
+
+        // 【新增】获取某个记忆的所有Roll结果
+        async getRollResults(memoryIndex) {
+            const db = await this.openDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([this.rollStoreName], 'readonly');
+                const store = transaction.objectStore(this.rollStoreName);
+                const index = store.index('memoryIndex');
+                const request = index.getAll(memoryIndex);
+
+                request.onsuccess = () => resolve(request.result || []);
+                request.onerror = () => reject(request.error);
+            });
+        },
+
+        // 【新增】清除某个记忆的Roll结果
+        async clearRollResults(memoryIndex) {
+            const db = await this.openDB();
+            const results = await this.getRollResults(memoryIndex);
+
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([this.rollStoreName], 'readwrite');
+                const store = transaction.objectStore(this.rollStoreName);
+
+                for (const r of results) {
+                    store.delete(r.id);
+                }
+
+                transaction.oncomplete = () => resolve();
+                transaction.onerror = () => reject(transaction.error);
+            });
+        },
+
         async rollbackToHistory(historyId) {
             const history = await this.getHistoryById(historyId);
             if (!history) {
@@ -506,15 +567,122 @@
         }
     }
 
-    // ========== 带超时的API调用 ==========
-    async function callSillyTavernAPI(prompt, taskId = null) {
+    // ========== 【重构】API调用 - 支持真正使用酒馆预设 ==========
+
+    /**
+     * 使用酒馆预设发送请求
+     * 这会真正使用酒馆的"对话补全预设"，包括系统提示词、格式等
+     */
+    async function callWithTavernPreset(userMessage, taskId = null) {
         const timeout = settings.apiTimeout || 120000;
 
-        // 【修复】添加实时输出
         if (taskId !== null) {
-            updateStreamContent(`\n📤 [任务${taskId}] 发送请求...\n`);
+            updateStreamContent(`\n📤 [任务${taskId}] 使用酒馆预设发送...\n`);
         } else {
-            updateStreamContent(`\n📤 发送请求...\n`);
+            updateStreamContent(`\n📤 使用酒馆预设发送...\n`);
+        }
+
+        try {
+            // 检查SillyTavern环境
+            if (typeof SillyTavern === 'undefined' || !SillyTavern.getContext) {
+                throw new Error('无法访问SillyTavern上下文，请确保在酒馆环境中运行');
+            }
+
+            const context = SillyTavern.getContext();
+
+            // 方法1: 使用 sendMessageAsUser + Generate 来触发完整的对话流程
+            // 这会应用酒馆的所有预设，包括系统提示词、角色卡等
+
+            // 方法2: 直接构建符合酒馆预设的messages格式
+            // 获取当前的聊天补全设置
+            const chatCompletionSettings = context.chatCompletionSettings || {};
+            const mainApi = context.mainApi || 'openai';
+
+            // 构建消息数组，按照酒馆预设的格式
+            let messages = [];
+
+            // 添加系统提示词（如果酒馆预设中有的话）
+            if (chatCompletionSettings.systemPrompt) {
+                messages.push({
+                    role: 'system',
+                    content: chatCompletionSettings.systemPrompt
+                });
+            }
+
+            // 添加用户消息（我们的提示词放在最后）
+            messages.push({
+                role: 'user',
+                content: userMessage
+            });
+
+            // 使用酒馆的API发送
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error(`API请求超时 (${timeout/1000}秒)`)), timeout);
+            });
+
+            let apiPromise;
+
+            // 根据不同的API类型选择调用方式
+            if (mainApi === 'openai' || mainApi === 'claude' || mainApi === 'openrouter') {
+                // 使用Chat Completions API
+                apiPromise = new Promise(async (resolve, reject) => {
+                    try {
+                        const response = await fetch('/api/backends/chat-completions/generate', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            credentials: 'include',
+                            body: JSON.stringify({
+                                messages: messages,
+                                // 这些参数会被酒馆的预设覆盖
+                            }),
+                        });
+
+                        if (!response.ok) {
+                            const errorText = await response.text();
+                            reject(new Error(`API请求失败: ${response.status} - ${errorText}`));
+                            return;
+                        }
+
+                        const data = await response.json();
+                        const content = data.choices?.[0]?.message?.content || data.content || '';
+                        resolve(content);
+                    } catch (error) {
+                        reject(error);
+                    }
+                });
+            } else {
+                // 其他API类型，回退到generateRaw
+                apiPromise = context.generateRaw(userMessage, '', false);
+            }
+
+            const result = await Promise.race([apiPromise, timeoutPromise]);
+
+            if (taskId !== null) {
+                updateStreamContent(`📥 [任务${taskId}] 收到响应 (${result.length}字符)\n`);
+            } else {
+                updateStreamContent(`📥 收到响应 (${result.length}字符)\n`);
+            }
+
+            return result;
+
+        } catch (error) {
+            updateStreamContent(`\n❌ 酒馆预设调用错误: ${error.message}\n`);
+            throw error;
+        }
+    }
+
+    /**
+     * 直接发送原始提示词（不使用酒馆预设）
+     */
+    async function callRawAPI(prompt, taskId = null) {
+        const timeout = settings.apiTimeout || 120000;
+
+        if (taskId !== null) {
+            updateStreamContent(`\n📤 [任务${taskId}] 发送原始请求...\n`);
+        } else {
+            updateStreamContent(`\n📤 发送原始请求...\n`);
         }
 
         try {
@@ -529,7 +697,6 @@
 
                 const result = await Promise.race([apiPromise, timeoutPromise]);
 
-                // 【修复】添加实时输出
                 if (taskId !== null) {
                     updateStreamContent(`📥 [任务${taskId}] 收到响应 (${result.length}字符)\n`);
                 } else {
@@ -539,6 +706,7 @@
                 return result;
             }
 
+            // 备用：直接调用API
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), timeout);
 
@@ -581,100 +749,16 @@
         }
     }
 
-    async function callDirectAPI(prompt, apiConfig, taskId = null) {
-        const { provider, apiKey, endpoint, model } = apiConfig;
-        const timeout = settings.apiTimeout || 120000;
-
-        if (taskId !== null) {
-            updateStreamContent(`\n📤 [任务${taskId}] 使用直接API调用...\n`);
-        }
-
-        let requestUrl, requestOptions;
-
-        switch (provider) {
-            case 'gemini':
-                requestUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model || 'gemini-2.5-flash'}:generateContent?key=${apiKey}`;
-                requestOptions = {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{ parts: [{ text: prompt }] }],
-                        generationConfig: { maxOutputTokens: 63000, temperature: 0.3 }
-                    }),
-                };
-                break;
-
-            case 'openai':
-            default:
-                requestUrl = endpoint || 'https://api.openai.com/v1/chat/completions';
-                requestOptions = {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${apiKey}`
-                    },
-                    body: JSON.stringify({
-                        model: model || 'gpt-4',
-                        messages: [{ role: 'user', content: prompt }],
-                        temperature: 0.3,
-                        max_tokens: 8192
-                    }),
-                };
-                break;
-        }
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeout);
-        requestOptions.signal = controller.signal;
-
-        try {
-            const response = await fetch(requestUrl, requestOptions);
-            clearTimeout(timeoutId);
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                throw new Error(`API请求失败: ${response.status} - ${errorText}`);
-            }
-
-            const data = await response.json();
-            let content = '';
-
-            if (provider === 'gemini') {
-                content = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-            } else {
-                content = data.choices?.[0]?.message?.content || '';
-            }
-
-            if (taskId !== null) {
-                updateStreamContent(`📥 [任务${taskId}] 收到响应 (${content.length}字符)\n`);
-            }
-
-            return content;
-        } catch (error) {
-            clearTimeout(timeoutId);
-            if (error.name === 'AbortError') {
-                throw new Error(`API请求超时 (${timeout/1000}秒)`);
-            }
-            throw error;
-        }
-    }
-
+    /**
+     * 统一API调用入口
+     */
     async function callAPI(prompt, taskId = null) {
-        try {
-            return await callSillyTavernAPI(prompt, taskId);
-        } catch (stError) {
-            console.warn('SillyTavern API调用失败，尝试备用方案:', stError);
-
-            if (settings.backupApiKey) {
-                return await callDirectAPI(prompt, {
-                    provider: settings.backupApiProvider || 'openai',
-                    apiKey: settings.backupApiKey,
-                    endpoint: settings.backupApiEndpoint,
-                    model: settings.backupApiModel
-                }, taskId);
-            }
-
-            throw stError;
+        if (settings.useTavernPreset) {
+            // 使用酒馆预设时，提示词配置作为用户消息的一部分
+            return await callWithTavernPreset(prompt, taskId);
+        } else {
+            // 不使用酒馆预设，直接发送原始提示词
+            return await callRawAPI(prompt, taskId);
         }
     }
 
@@ -1182,22 +1266,17 @@
         return fullPrompt;
     }
 
-    // ========== 并行处理核心（修复版） ==========
+    // ========== 并行处理核心 ==========
 
-    /**
-     * 独立处理单个记忆块（不依赖累积上下文）
-     */
     async function processMemoryChunkIndependent(index, retryCount = 0) {
         const memory = memoryQueue[index];
         const maxRetries = 3;
         const taskId = index + 1;
 
-        // 【修复】检查是否已停止
         if (isProcessingStopped) {
             throw new Error('ABORTED');
         }
 
-        // 【修复】标记为处理中
         memory.processing = true;
         updateMemoryQueueUI();
 
@@ -1224,7 +1303,6 @@ ${memory.content}
         try {
             const response = await callAPI(prompt, taskId);
 
-            // 【修复】再次检查是否已停止
             if (isProcessingStopped) {
                 memory.processing = false;
                 throw new Error('ABORTED');
@@ -1267,9 +1345,6 @@ ${memory.content}
         }
     }
 
-    /**
-     * 并行处理多个记忆块（修复版）
-     */
     async function processMemoryChunksParallel(startIndex, endIndex) {
         const tasks = [];
         const results = new Map();
@@ -1293,11 +1368,9 @@ ${memory.content}
         let completed = 0;
         const totalTasks = tasks.length;
 
-        // 【修复】创建新的信号量实例
         globalSemaphore = new Semaphore(parallelConfig.concurrency);
 
         const processOne = async (task) => {
-            // 【修复】检查是否已停止
             if (isProcessingStopped) {
                 console.log(`⏸️ 任务 ${task.index + 1} 被跳过（已暂停）`);
                 return null;
@@ -1313,7 +1386,6 @@ ${memory.content}
                 throw e;
             }
 
-            // 【修复】再次检查
             if (isProcessingStopped) {
                 globalSemaphore.release();
                 return null;
@@ -1329,7 +1401,6 @@ ${memory.content}
 
                 const result = await processMemoryChunkIndependent(task.index);
 
-                // 【修复】立即更新该记忆的状态
                 task.memory.processed = true;
                 task.memory.failed = false;
                 task.memory.processing = false;
@@ -1338,7 +1409,6 @@ ${memory.content}
 
                 completed++;
 
-                // 【修复】立即合并结果并更新UI
                 if (result) {
                     await mergeWorldbookDataWithHistory(
                         generatedWorldbook,
@@ -1346,9 +1416,11 @@ ${memory.content}
                         task.index,
                         task.memory.title
                     );
+
+                    // 【新增】保存Roll结果
+                    await MemoryHistoryDB.saveRollResult(task.index, result);
                 }
 
-                // 【修复】立即更新UI
                 updateMemoryQueueUI();
                 updateProgress(
                     ((startIndex + completed) / memoryQueue.length) * 100,
@@ -1377,7 +1449,6 @@ ${memory.content}
                     task.memory.processed = true;
                 }
 
-                // 【修复】更新UI
                 updateMemoryQueueUI();
                 return null;
             } finally {
@@ -1386,10 +1457,8 @@ ${memory.content}
             }
         };
 
-        // 同时启动所有任务
         await Promise.allSettled(tasks.map(task => processOne(task)));
 
-        // 清理
         activeParallelTasks.clear();
         globalSemaphore = null;
 
@@ -1400,7 +1469,7 @@ ${memory.content}
         return { tokenLimitIndices };
     }
 
-    // ========== 串行记忆处理（原有逻辑） ==========
+    // ========== 串行记忆处理 ==========
     async function processMemoryChunk(index, retryCount = 0) {
         if (isProcessingStopped) {
             console.log(`处理被暂停，跳过记忆块 ${index + 1}`);
@@ -1413,7 +1482,6 @@ ${memory.content}
 
         updateProgress(progress, `正在处理: ${memory.title} (${index + 1}/${memoryQueue.length})${retryCount > 0 ? ` (重试 ${retryCount}/${maxRetries})` : ''}${useVolumeMode ? ` [第${currentVolumeIndex + 1}卷]` : ''}`);
 
-        // 标记为处理中
         memory.processing = true;
         updateMemoryQueueUI();
 
@@ -1537,6 +1605,9 @@ ${memory.content}
 
             const changedEntries = await mergeWorldbookDataWithHistory(generatedWorldbook, memoryUpdate, index, memory.title);
 
+            // 【新增】保存Roll结果
+            await MemoryHistoryDB.saveRollResult(index, memoryUpdate);
+
             if (incrementalOutputMode && changedEntries.length > 0) {
                 console.log(`📝 第${index + 1}个记忆块变更 ${changedEntries.length} 个条目`);
             }
@@ -1621,20 +1692,17 @@ ${memory.content}
         }
     }
 
-    // ========== 暂停处理（修复版） ==========
+    // ========== 暂停处理 ==========
     function stopProcessing() {
         console.log('⏸️ 用户请求暂停处理');
         isProcessingStopped = true;
 
-        // 【修复】中止信号量，让等待中的任务立即退出
         if (globalSemaphore) {
             globalSemaphore.abort();
         }
 
-        // 清理活跃任务标记
         activeParallelTasks.clear();
 
-        // 更新所有正在处理中的记忆状态
         memoryQueue.forEach(m => {
             if (m.processing) {
                 m.processing = false;
@@ -1650,16 +1718,15 @@ ${memory.content}
         showProgressSection(true);
         isProcessingStopped = false;
 
-        // 【修复】重置信号量
         if (globalSemaphore) {
             globalSemaphore.reset();
         }
         activeParallelTasks.clear();
 
-        // 【修复】清空实时输出
         updateStreamContent('', true);
         updateStreamContent(`🚀 开始处理...\n`);
         updateStreamContent(`📊 处理模式: ${parallelConfig.enabled ? `并行 (${parallelConfig.mode}, 并发${parallelConfig.concurrency})` : '串行'}\n`);
+        updateStreamContent(`🔧 使用酒馆预设: ${settings.useTavernPreset ? '是' : '否'}\n`);
         updateStreamContent(`${'='.repeat(50)}\n`);
 
         const effectiveStartIndex = userSelectedStartIndex !== null ? userSelectedStartIndex : startFromIndex;
@@ -1687,14 +1754,11 @@ ${memory.content}
 
         try {
             if (parallelConfig.enabled) {
-                // ===== 并行模式 =====
                 console.log('🚀 使用并行模式处理');
 
                 if (parallelConfig.mode === 'independent') {
-                    // 独立模式：一次性并行处理所有
                     const { tokenLimitIndices } = await processMemoryChunksParallel(effectiveStartIndex, memoryQueue.length);
 
-                    // 【修复】检查是否被暂停
                     if (isProcessingStopped) {
                         const processedCount = memoryQueue.filter(m => m.processed).length;
                         updateProgress((processedCount / memoryQueue.length) * 100, `⏸️ 已暂停 (${processedCount}/${memoryQueue.length})`);
@@ -1703,7 +1767,6 @@ ${memory.content}
                         return;
                     }
 
-                    // 处理需要分裂的记忆
                     if (tokenLimitIndices.length > 0) {
                         console.log(`⚠️ 有 ${tokenLimitIndices.length} 个记忆需要分裂处理`);
                         updateStreamContent(`\n⚠️ ${tokenLimitIndices.length} 个记忆需要分裂处理...\n`);
@@ -1715,7 +1778,6 @@ ${memory.content}
                             }
                         }
 
-                        // 串行处理分裂后的记忆
                         for (let i = 0; i < memoryQueue.length; i++) {
                             if (isProcessingStopped) break;
                             if (!memoryQueue[i].processed || memoryQueue[i].failed) {
@@ -1725,7 +1787,6 @@ ${memory.content}
                     }
 
                 } else {
-                    // 分批模式：批次内并行，批次间串行
                     const batchSize = parallelConfig.concurrency;
                     let i = effectiveStartIndex;
 
@@ -1738,12 +1799,10 @@ ${memory.content}
 
                         if (isProcessingStopped) break;
 
-                        // 处理该批次中需要分裂的
                         for (const idx of tokenLimitIndices.sort((a, b) => b - a)) {
                             splitMemoryIntoTwo(idx);
                         }
 
-                        // 串行处理分裂后的
                         for (let j = i; j < batchEnd && j < memoryQueue.length && !isProcessingStopped; j++) {
                             if (!memoryQueue[j].processed || memoryQueue[j].failed) {
                                 await processMemoryChunk(j);
@@ -1756,7 +1815,6 @@ ${memory.content}
                 }
 
             } else {
-                // ===== 串行模式（原有逻辑） =====
                 console.log('📝 使用串行模式处理');
 
                 let i = effectiveStartIndex;
@@ -1799,7 +1857,6 @@ ${memory.content}
                 }
             }
 
-            // 【修复】再次检查是否被暂停
             if (isProcessingStopped) {
                 const processedCount = memoryQueue.filter(m => m.processed).length;
                 updateProgress((processedCount / memoryQueue.length) * 100, `⏸️ 已暂停 (${processedCount}/${memoryQueue.length})`);
@@ -1808,7 +1865,6 @@ ${memory.content}
                 return;
             }
 
-            // 处理完成
             if (useVolumeMode && Object.keys(generatedWorldbook).length > 0) {
                 worldbookVolumes.push({
                     volumeIndex: currentVolumeIndex,
@@ -1915,6 +1971,10 @@ ${memory.content}
 
         const memoryTitle = `记忆-修复-${memory.title}`;
         await mergeWorldbookDataWithHistory(generatedWorldbook, memoryUpdate, index, memoryTitle);
+
+        // 【新增】保存Roll结果
+        await MemoryHistoryDB.saveRollResult(index, memoryUpdate);
+
         memory.result = memoryUpdate;
         console.log(`记忆块 ${index + 1} 修复完成`);
     }
@@ -2026,6 +2086,194 @@ ${memory.content}
         }
 
         updateMemoryQueueUI();
+    }
+
+    // ========== 【新增】重Roll功能 ==========
+    async function rerollMemory(index) {
+        const memory = memoryQueue[index];
+        if (!memory) return;
+
+        updateStreamContent(`\n🎲 开始重Roll: ${memory.title}\n`);
+
+        try {
+            // 标记为处理中
+            memory.processing = true;
+            updateMemoryQueueUI();
+
+            // 使用独立处理逻辑
+            const result = await processMemoryChunkIndependent(index);
+
+            memory.processing = false;
+
+            if (result) {
+                // 保存新的Roll结果
+                await MemoryHistoryDB.saveRollResult(index, result);
+
+                // 更新当前结果
+                memory.result = result;
+                memory.processed = true;
+                memory.failed = false;
+
+                // 合并到世界书
+                await mergeWorldbookDataWithHistory(generatedWorldbook, result, index, `${memory.title}-重Roll`);
+
+                updateStreamContent(`✅ 重Roll完成: ${memory.title}\n`);
+                updateMemoryQueueUI();
+                updateWorldbookPreview();
+
+                return result;
+            }
+        } catch (error) {
+            memory.processing = false;
+            updateStreamContent(`❌ 重Roll失败: ${error.message}\n`);
+            updateMemoryQueueUI();
+            throw error;
+        }
+    }
+
+    // 【新增】显示Roll历史选择器
+    async function showRollHistorySelector(index) {
+        const memory = memoryQueue[index];
+        if (!memory) return;
+
+        const rollResults = await MemoryHistoryDB.getRollResults(index);
+
+        if (rollResults.length === 0) {
+            alert(`"${memory.title}" 暂无历史Roll结果\n\n点击"🎲 重Roll"生成新结果`);
+            return;
+        }
+
+        const existingModal = document.getElementById('ttw-roll-history-modal');
+        if (existingModal) existingModal.remove();
+
+        const modal = document.createElement('div');
+        modal.id = 'ttw-roll-history-modal';
+        modal.className = 'ttw-modal-container';
+
+        let listHtml = '';
+        rollResults.forEach((roll, idx) => {
+            const time = new Date(roll.timestamp).toLocaleString('zh-CN', {
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+            const entryCount = roll.result ? Object.keys(roll.result).reduce((sum, cat) =>
+                sum + (typeof roll.result[cat] === 'object' ? Object.keys(roll.result[cat]).length : 0), 0) : 0;
+
+            const isCurrentSelected = memory.result && JSON.stringify(memory.result) === JSON.stringify(roll.result);
+
+            listHtml += `
+                <div class="ttw-roll-item ${isCurrentSelected ? 'selected' : ''}" data-roll-id="${roll.id}" data-roll-index="${idx}" style="padding: 10px 12px; background: ${isCurrentSelected ? 'rgba(39, 174, 96, 0.2)' : 'rgba(0,0,0,0.2)'}; border-radius: 6px; margin-bottom: 8px; cursor: pointer; border-left: 3px solid ${isCurrentSelected ? '#27ae60' : '#9b59b6'};">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-weight: bold; color: ${isCurrentSelected ? '#27ae60' : '#e67e22'};">Roll #${idx + 1} ${isCurrentSelected ? '(当前)' : ''}</span>
+                        <span style="font-size: 11px; color: #888;">${time}</span>
+                    </div>
+                    <div style="font-size: 11px; color: #aaa; margin-top: 4px;">提取了 ${entryCount} 个条目</div>
+                </div>
+            `;
+        });
+
+        modal.innerHTML = `
+            <div class="ttw-modal" style="max-width: 900px;">
+                <div class="ttw-modal-header">
+                    <span class="ttw-modal-title">🎲 ${memory.title} - Roll历史 (${rollResults.length}次)</span>
+                    <button class="ttw-modal-close" type="button">✕</button>
+                </div>
+                <div class="ttw-modal-body">
+                    <div style="display: flex; gap: 15px; height: 400px;">
+                        <div style="width: 200px; overflow-y: auto; background: rgba(0,0,0,0.2); border-radius: 8px; padding: 10px;">
+                            <div style="margin-bottom: 10px;">
+                                <button id="ttw-do-reroll" class="ttw-btn ttw-btn-primary" style="width: 100%;">🎲 重新Roll</button>
+                            </div>
+                            ${listHtml}
+                        </div>
+                        <div id="ttw-roll-detail" style="flex: 1; overflow-y: auto; background: rgba(0,0,0,0.2); border-radius: 8px; padding: 15px;">
+                            <div style="text-align: center; color: #888; padding: 40px;">👈 点击左侧Roll结果查看详情</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="ttw-modal-footer">
+                    <button class="ttw-btn ttw-btn-warning" id="ttw-clear-rolls">🗑️ 清空历史</button>
+                    <button class="ttw-btn" id="ttw-close-roll-history">关闭</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        // 绑定事件
+        modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
+        modal.querySelector('#ttw-close-roll-history').addEventListener('click', () => modal.remove());
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.remove();
+        });
+
+        // 重Roll按钮
+        modal.querySelector('#ttw-do-reroll').addEventListener('click', async () => {
+            modal.remove();
+            try {
+                await rerollMemory(index);
+                // 重新打开选择器
+                showRollHistorySelector(index);
+            } catch (error) {
+                alert('重Roll失败: ' + error.message);
+            }
+        });
+
+        // 清空历史
+        modal.querySelector('#ttw-clear-rolls').addEventListener('click', async () => {
+            if (confirm(`确定要清空 "${memory.title}" 的所有Roll历史吗？`)) {
+                await MemoryHistoryDB.clearRollResults(index);
+                modal.remove();
+                alert('已清空Roll历史');
+            }
+        });
+
+        // 点击Roll项查看详情
+        modal.querySelectorAll('.ttw-roll-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const rollIndex = parseInt(item.dataset.rollIndex);
+                const roll = rollResults[rollIndex];
+                const detailDiv = modal.querySelector('#ttw-roll-detail');
+
+                // 高亮选中项
+                modal.querySelectorAll('.ttw-roll-item').forEach(i => {
+                    i.style.background = 'rgba(0,0,0,0.2)';
+                    i.style.borderLeftColor = '#9b59b6';
+                });
+                item.style.background = 'rgba(0,0,0,0.4)';
+                item.style.borderLeftColor = '#e67e22';
+
+                const time = new Date(roll.timestamp).toLocaleString('zh-CN');
+
+                detailDiv.innerHTML = `
+                    <div style="margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid #444;">
+                        <h4 style="color: #e67e22; margin: 0 0 10px 0;">Roll #${rollIndex + 1}</h4>
+                        <div style="font-size: 12px; color: #888; margin-bottom: 10px;">生成时间: ${time}</div>
+                        <button class="ttw-btn ttw-btn-primary ttw-btn-small" id="ttw-use-this-roll">✅ 使用这个结果</button>
+                    </div>
+                    <pre style="white-space: pre-wrap; word-break: break-all; font-size: 11px; line-height: 1.5; max-height: 280px; overflow-y: auto;">${JSON.stringify(roll.result, null, 2)}</pre>
+                `;
+
+                // 使用这个结果
+                detailDiv.querySelector('#ttw-use-this-roll').addEventListener('click', async () => {
+                    memory.result = roll.result;
+                    memory.processed = true;
+                    memory.failed = false;
+
+                    // 重新合并到世界书
+                    await mergeWorldbookDataWithHistory(generatedWorldbook, roll.result, index, `${memory.title}-选用Roll#${rollIndex + 1}`);
+
+                    updateMemoryQueueUI();
+                    updateWorldbookPreview();
+
+                    modal.remove();
+                    alert(`已使用 Roll #${rollIndex + 1} 的结果`);
+                });
+            });
+        });
     }
 
     // ========== 导出功能 ==========
@@ -2253,7 +2501,7 @@ ${memory.content}
     // ========== 导出/导入未完成任务 ==========
     async function exportTaskState() {
         const state = {
-            version: '2.3.1',
+            version: '2.4.0',
             timestamp: Date.now(),
             memoryQueue: memoryQueue,
             generatedWorldbook: generatedWorldbook,
@@ -2332,6 +2580,7 @@ ${memory.content}
 
                 updateStartButtonState(false);
                 updateParallelSettingsUI();
+                updateTavernPresetUI();
 
                 const processedCount = memoryQueue.filter(m => m.processed).length;
                 alert(`任务状态已导入！\n\n已处理: ${processedCount}/${memoryQueue.length}\n将从记忆${startFromIndex + 1}继续`);
@@ -2357,6 +2606,11 @@ ${memory.content}
         if (modeEl) modeEl.value = parallelConfig.mode;
     }
 
+    function updateTavernPresetUI() {
+        const el = document.getElementById('ttw-use-tavern-preset');
+        if (el) el.checked = settings.useTavernPreset;
+    }
+
     // ========== 帮助弹窗 ==========
     function showHelpModal() {
         const existingHelp = document.getElementById('ttw-help-modal');
@@ -2366,9 +2620,9 @@ ${memory.content}
         helpModal.id = 'ttw-help-modal';
         helpModal.className = 'ttw-modal-container';
         helpModal.innerHTML = `
-            <div class="ttw-modal" style="max-width: 600px;">
+            <div class="ttw-modal" style="max-width: 650px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">❓ TXT转世界书 使用帮助</span>
+                    <span class="ttw-modal-title">❓ TXT转世界书 v2.4.0 使用帮助</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body" style="max-height: 70vh; overflow-y: auto;">
@@ -2380,31 +2634,38 @@ ${memory.content}
                     </div>
 
                     <div class="ttw-help-section" style="margin-top: 16px;">
+                        <h4 style="color: #27ae60; margin: 0 0 10px 0;">✨ v2.4.0 新功能</h4>
+                        <ul style="margin: 0; padding-left: 20px; line-height: 1.8; color: #ccc;">
+                            <li><strong>📝 记忆编辑</strong>：点击记忆可编辑内容，支持一键复制</li>
+                            <li><strong>🎲 重Roll功能</strong>：每个记忆可多次生成，选择最佳结果</li>
+                            <li><strong>🍺 酒馆预设</strong>：可选择使用酒馆的对话补全预设</li>
+                        </ul>
+                    </div>
+
+                    <div class="ttw-help-section" style="margin-top: 16px;">
                         <h4 style="color: #3498db; margin: 0 0 10px 0;">🚀 并行处理</h4>
                         <p style="margin: 0 0 8px 0; line-height: 1.6; color: #ccc;">
-                            <strong>v2.3.1修复版</strong>：支持多个记忆同时处理，大幅提升转换速度！<br>
                             <strong>独立模式</strong>：每个记忆独立提取，最后合并，速度最快<br>
                             <strong>分批模式</strong>：批次内并行，批次间累积上下文
                         </p>
                     </div>
 
                     <div class="ttw-help-section" style="margin-top: 16px;">
-                        <h4 style="color: #9b59b6; margin: 0 0 10px 0;">⚙️ 并发数建议</h4>
-                        <ul style="margin: 0; padding-left: 20px; line-height: 1.8; color: #ccc;">
-                            <li>本地API (clewdr)：3-5 并发</li>
-                            <li>云端API：2-3 并发（避免限流）</li>
-                            <li>Gemini API：2-3 并发</li>
-                        </ul>
+                        <h4 style="color: #9b59b6; margin: 0 0 10px 0;">🍺 使用酒馆预设</h4>
+                        <p style="margin: 0 0 8px 0; line-height: 1.6; color: #ccc;">
+                            勾选后，会使用酒馆当前配置的"对话补全预设"，<br>
+                            本工具的提示词配置会作为用户消息发送。<br>
+                            <span style="color: #f39c12;">⚠️ 需要确保酒馆预设适合世界书生成任务</span>
+                        </p>
                     </div>
 
                     <div class="ttw-help-section" style="margin-top: 16px;">
                         <h4 style="color: #1abc9c; margin: 0 0 10px 0;">💡 使用技巧</h4>
                         <ul style="margin: 0; padding-left: 20px; line-height: 1.8; color: #ccc;">
-                            <li>首次提取推荐使用<strong>独立模式</strong></li>
-                            <li>需要上下文连贯时使用<strong>分批模式</strong></li>
+                            <li>点击记忆块可<strong>查看/编辑/复制</strong>内容</li>
+                            <li>使用<strong>🎲 Roll历史</strong>对比不同生成结果</li>
+                            <li>可将记忆内容<strong>复制到相邻记忆</strong>进行手动合并</li>
                             <li>处理失败的记忆会自动重试</li>
-                            <li>可随时暂停，刷新后继续</li>
-                            <li>点击"查看实时输出"可看到详细处理日志</li>
                         </ul>
                     </div>
                 </div>
@@ -2492,7 +2753,7 @@ ${memory.content}
         });
     }
 
-    // ========== 查看记忆内容弹窗 ==========
+    // ========== 【重构】查看/编辑记忆内容弹窗 ==========
     function showMemoryContentModal(index) {
         const memory = memoryQueue[index];
         if (!memory) return;
@@ -2512,48 +2773,137 @@ ${memory.content}
             resultHtml = `
                 <div style="margin-top: 16px;">
                     <h4 style="color: #9b59b6; margin: 0 0 10px 0;">📊 处理结果</h4>
-                    <pre style="max-height: 200px; overflow-y: auto; background: rgba(0,0,0,0.3); padding: 12px; border-radius: 6px; font-size: 11px; white-space: pre-wrap; word-break: break-all;">${JSON.stringify(memory.result, null, 2)}</pre>
+                    <pre id="ttw-memory-result" style="max-height: 150px; overflow-y: auto; background: rgba(0,0,0,0.3); padding: 12px; border-radius: 6px; font-size: 11px; white-space: pre-wrap; word-break: break-all;">${JSON.stringify(memory.result, null, 2)}</pre>
                 </div>
             `;
         }
 
         contentModal.innerHTML = `
-            <div class="ttw-modal" style="max-width: 800px;">
+            <div class="ttw-modal" style="max-width: 900px;">
                 <div class="ttw-modal-header">
                     <span class="ttw-modal-title">📄 ${memory.title}</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
-                <div class="ttw-modal-body" style="max-height: 70vh; overflow-y: auto;">
+                <div class="ttw-modal-body" style="max-height: 75vh; overflow-y: auto;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 6px;">
                         <div>
                             <span style="color: ${statusColor}; font-weight: bold;">${statusText}</span>
-                            <span style="margin-left: 16px; color: #888;">字数: ${memory.content.length.toLocaleString()}</span>
+                            <span style="margin-left: 16px; color: #888;">字数: <span id="ttw-char-count">${memory.content.length.toLocaleString()}</span></span>
                         </div>
-                        <button id="ttw-delete-memory-btn" class="ttw-btn ttw-btn-warning ttw-btn-small">🗑️ 删除此记忆</button>
+                        <div style="display: flex; gap: 8px;">
+                            <button id="ttw-copy-memory-content" class="ttw-btn ttw-btn-small">📋 复制内容</button>
+                            <button id="ttw-roll-history-btn" class="ttw-btn ttw-btn-small" style="background: rgba(155, 89, 182, 0.3);">🎲 Roll历史</button>
+                            <button id="ttw-delete-memory-btn" class="ttw-btn ttw-btn-warning ttw-btn-small">🗑️ 删除</button>
+                        </div>
                     </div>
                     ${memory.failedError ? `<div style="margin-bottom: 16px; padding: 10px; background: rgba(231, 76, 60, 0.2); border-radius: 6px; color: #e74c3c; font-size: 12px;">❌ 错误: ${memory.failedError}</div>` : ''}
+
                     <div>
-                        <h4 style="color: #3498db; margin: 0 0 10px 0;">📝 原文内容</h4>
-                        <pre style="max-height: 300px; overflow-y: auto; background: rgba(0,0,0,0.3); padding: 12px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; line-height: 1.6;">${memory.content.replace(/</g, '<').replace(/>/g, '>')}</pre>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                            <h4 style="color: #3498db; margin: 0;">📝 原文内容 <span style="font-size: 12px; font-weight: normal; color: #888;">(可编辑)</span></h4>
+                            <div style="display: flex; gap: 8px;">
+                                <button id="ttw-append-to-prev" class="ttw-btn ttw-btn-small" ${index === 0 ? 'disabled style="opacity: 0.5;"' : ''}>⬆️ 追加到上一个</button>
+                                <button id="ttw-append-to-next" class="ttw-btn ttw-btn-small" ${index === memoryQueue.length - 1 ? 'disabled style="opacity: 0.5;"' : ''}>⬇️ 追加到下一个</button>
+                            </div>
+                        </div>
+                        <textarea id="ttw-memory-content-editor" style="width: 100%; min-height: 250px; padding: 12px; background: rgba(0,0,0,0.3); border: 1px solid #555; border-radius: 6px; color: #fff; font-size: 13px; line-height: 1.6; resize: vertical; font-family: inherit;">${memory.content.replace(/</g, '<').replace(/>/g, '>')}</textarea>
                     </div>
+
                     ${resultHtml}
                 </div>
                 <div class="ttw-modal-footer">
-                    <button class="ttw-btn" id="ttw-close-memory-content">关闭</button>
+                    <button class="ttw-btn" id="ttw-cancel-memory-edit">取消</button>
+                    <button class="ttw-btn ttw-btn-primary" id="ttw-save-memory-edit">💾 保存修改</button>
                 </div>
             </div>
         `;
 
         document.body.appendChild(contentModal);
 
+        const editor = contentModal.querySelector('#ttw-memory-content-editor');
+        const charCount = contentModal.querySelector('#ttw-char-count');
+
+        // 实时更新字数
+        editor.addEventListener('input', () => {
+            charCount.textContent = editor.value.length.toLocaleString();
+        });
+
+        // 关闭
         contentModal.querySelector('.ttw-modal-close').addEventListener('click', () => contentModal.remove());
-        contentModal.querySelector('#ttw-close-memory-content').addEventListener('click', () => contentModal.remove());
+        contentModal.querySelector('#ttw-cancel-memory-edit').addEventListener('click', () => contentModal.remove());
+        contentModal.addEventListener('click', (e) => {
+            if (e.target === contentModal) contentModal.remove();
+        });
+
+        // 保存修改
+        contentModal.querySelector('#ttw-save-memory-edit').addEventListener('click', () => {
+            const newContent = editor.value;
+            if (newContent !== memory.content) {
+                memory.content = newContent;
+                // 标记为未处理，需要重新生成
+                memory.processed = false;
+                memory.failed = false;
+                memory.result = null;
+                updateMemoryQueueUI();
+                updateStartButtonState(false);
+                console.log(`📝 已保存记忆修改: ${memory.title}`);
+            }
+            contentModal.remove();
+        });
+
+        // 复制内容
+        contentModal.querySelector('#ttw-copy-memory-content').addEventListener('click', () => {
+            navigator.clipboard.writeText(editor.value).then(() => {
+                const btn = contentModal.querySelector('#ttw-copy-memory-content');
+                btn.textContent = '✅ 已复制';
+                setTimeout(() => { btn.textContent = '📋 复制内容'; }, 1500);
+            });
+        });
+
+        // Roll历史
+        contentModal.querySelector('#ttw-roll-history-btn').addEventListener('click', () => {
+            contentModal.remove();
+            showRollHistorySelector(index);
+        });
+
+        // 删除
         contentModal.querySelector('#ttw-delete-memory-btn').addEventListener('click', () => {
             contentModal.remove();
             deleteMemoryAt(index);
         });
-        contentModal.addEventListener('click', (e) => {
-            if (e.target === contentModal) contentModal.remove();
+
+        // 追加到上一个
+        contentModal.querySelector('#ttw-append-to-prev').addEventListener('click', () => {
+            if (index === 0) return;
+            const prevMemory = memoryQueue[index - 1];
+            const contentToAppend = editor.value;
+
+            if (confirm(`确定要将当前内容追加到 "${prevMemory.title}" 的末尾吗？\n\n追加后当前记忆不会被删除，您可以手动删除。`)) {
+                prevMemory.content += '\n\n' + contentToAppend;
+                prevMemory.processed = false;
+                prevMemory.failed = false;
+                prevMemory.result = null;
+                updateMemoryQueueUI();
+                updateStartButtonState(false);
+                alert(`已追加到 "${prevMemory.title}"`);
+            }
+        });
+
+        // 追加到下一个
+        contentModal.querySelector('#ttw-append-to-next').addEventListener('click', () => {
+            if (index === memoryQueue.length - 1) return;
+            const nextMemory = memoryQueue[index + 1];
+            const contentToAppend = editor.value;
+
+            if (confirm(`确定要将当前内容追加到 "${nextMemory.title}" 的开头吗？\n\n追加后当前记忆不会被删除，您可以手动删除。`)) {
+                nextMemory.content = contentToAppend + '\n\n' + nextMemory.content;
+                nextMemory.processed = false;
+                nextMemory.failed = false;
+                nextMemory.result = null;
+                updateMemoryQueueUI();
+                updateStartButtonState(false);
+                alert(`已追加到 "${nextMemory.title}"`);
+            }
         });
     }
 
@@ -2628,9 +2978,20 @@ ${memory.content}
 
                 if (memory && memory.result) {
                     detailDiv.innerHTML = `
-                        <h4 style="color: #27ae60; margin: 0 0 12px 0;">${memory.title} 的处理结果</h4>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <h4 style="color: #27ae60; margin: 0;">${memory.title} 的处理结果</h4>
+                            <button class="ttw-btn ttw-btn-small" id="ttw-copy-result">📋 复制结果</button>
+                        </div>
                         <pre style="white-space: pre-wrap; word-break: break-all; font-size: 11px; line-height: 1.5;">${JSON.stringify(memory.result, null, 2)}</pre>
                     `;
+
+                    detailDiv.querySelector('#ttw-copy-result').addEventListener('click', () => {
+                        navigator.clipboard.writeText(JSON.stringify(memory.result, null, 2)).then(() => {
+                            const btn = detailDiv.querySelector('#ttw-copy-result');
+                            btn.textContent = '✅ 已复制';
+                            setTimeout(() => { btn.textContent = '📋 复制结果'; }, 1500);
+                        });
+                    });
                 }
             });
         });
@@ -2650,7 +3011,7 @@ ${memory.content}
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v2.3.1 🚀并行修复版</span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v2.4.0 ✨编辑/重Roll/酒馆预设</span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -2664,14 +3025,20 @@ ${memory.content}
                             <span class="ttw-collapse-icon">▼</span>
                         </div>
                         <div class="ttw-section-content" id="ttw-settings-content">
-                            <div class="ttw-api-notice">
-                                <div style="color: #27ae60; font-weight: bold; margin-bottom: 8px;">✅ 使用酒馆预设</div>
-                                <div style="color: #aaa; font-size: 12px;">本工具直接使用酒馆当前配置的API和预设，无需额外配置。</div>
+                            <!-- 【新增】酒馆预设选项 -->
+                            <div class="ttw-tavern-preset-section" style="margin-bottom: 16px; padding: 12px; background: rgba(39, 174, 96, 0.1); border: 1px solid rgba(39, 174, 96, 0.3); border-radius: 8px;">
+                                <label class="ttw-checkbox-label" style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                                    <input type="checkbox" id="ttw-use-tavern-preset" style="width: 20px; height: 20px; accent-color: #27ae60;">
+                                    <div>
+                                        <span style="font-weight: bold; color: #27ae60;">🍺 使用酒馆对话补全预设</span>
+                                        <div style="font-size: 11px; color: #888; margin-top: 4px;">勾选后使用酒馆当前预设，下方提示词配置作为用户消息发送</div>
+                                    </div>
+                                </label>
                             </div>
 
                             <!-- 并行处理设置 -->
-                            <div class="ttw-parallel-settings" style="margin-top: 16px; padding: 12px; background: rgba(52, 152, 219, 0.15); border: 1px solid rgba(52, 152, 219, 0.3); border-radius: 8px;">
-                                <div style="font-weight: bold; color: #3498db; margin-bottom: 10px;">🚀 并行处理设置 <span style="font-size: 11px; color: #888; font-weight: normal;">(v2.3.1修复版)</span></div>
+                            <div class="ttw-parallel-settings" style="margin-bottom: 16px; padding: 12px; background: rgba(52, 152, 219, 0.15); border: 1px solid rgba(52, 152, 219, 0.3); border-radius: 8px;">
+                                <div style="font-weight: bold; color: #3498db; margin-bottom: 10px;">🚀 并行处理设置</div>
                                 <div class="ttw-setting-row" style="display: flex; gap: 12px; align-items: center;">
                                     <div class="ttw-setting-item" style="flex: 1;">
                                         <label class="ttw-checkbox-label" style="display: flex; align-items: center; gap: 8px;">
@@ -2688,18 +3055,14 @@ ${memory.content}
                                     <div class="ttw-setting-item" style="flex: 1;">
                                         <label style="font-size: 12px; display: block; margin-bottom: 6px;">处理模式</label>
                                         <select id="ttw-parallel-mode" style="width: 100%; padding: 8px; border: 1px solid #555; border-radius: 4px; background: rgba(0,0,0,0.3); color: #fff; font-size: 12px;">
-                                            <option value="independent">🚀 独立模式（推荐，最快，每块独立提取后合并）</option>
-                                            <option value="batch">📦 分批模式（批次内并行，批次间串行累积）</option>
+                                            <option value="independent">🚀 独立模式（推荐，最快）</option>
+                                            <option value="batch">📦 分批模式</option>
                                         </select>
                                     </div>
                                 </div>
-                                <div style="margin-top: 10px; font-size: 11px; color: #888; line-height: 1.6;">
-                                    💡 <strong>独立模式</strong>：最快，每个记忆独立提取，最后合并，适合首次提取<br>
-                                    💡 <strong>并发数建议</strong>：本地clewdr可设3-5，云端API建议2-3
-                                </div>
                             </div>
 
-                            <div class="ttw-setting-row" style="margin-top: 16px;">
+                            <div class="ttw-setting-row">
                                 <div class="ttw-setting-item" style="flex: 1;">
                                     <label>每块字数</label>
                                     <input type="number" id="ttw-chunk-size" value="15000" min="1000" max="500000">
@@ -2716,7 +3079,7 @@ ${memory.content}
                                 </label>
                                 <label class="ttw-checkbox-label" style="background: rgba(155, 89, 182, 0.15); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(155, 89, 182, 0.3);">
                                     <input type="checkbox" id="ttw-volume-mode">
-                                    <span>📦 分卷模式（超限时开新卷而非分裂）</span>
+                                    <span>📦 分卷模式</span>
                                 </label>
                             </div>
                             <div id="ttw-volume-indicator" style="display: none; margin-top: 12px; padding: 8px 12px; background: rgba(155, 89, 182, 0.2); border-radius: 6px; font-size: 12px; color: #bb86fc;">
@@ -2819,12 +3182,12 @@ ${memory.content}
                         <div class="ttw-section-header">
                             <span>📋 记忆队列</span>
                             <div style="display: flex; gap: 8px; margin-left: auto;">
-                                <button id="ttw-view-processed" class="ttw-btn-small">📊 已处理结果</button>
+                                <button id="ttw-view-processed" class="ttw-btn-small">📊 已处理</button>
                                 <button id="ttw-select-start" class="ttw-btn-small">📍 选择起始</button>
                             </div>
                         </div>
                         <div class="ttw-section-content">
-                            <div class="ttw-memory-queue-hint" style="font-size: 11px; color: #888; margin-bottom: 8px;">💡 点击记忆可查看内容和删除 | 🔄=处理中 ✅=完成 ❗=失败 ⏳=等待</div>
+                            <div class="ttw-memory-queue-hint" style="font-size: 11px; color: #888; margin-bottom: 8px;">💡 点击记忆可<strong>查看/编辑/复制</strong>内容，支持<strong>🎲重Roll</strong></div>
                             <div class="ttw-memory-queue" id="ttw-memory-queue"></div>
                         </div>
                     </div>
@@ -2842,7 +3205,7 @@ ${memory.content}
                             <div class="ttw-progress-controls" id="ttw-progress-controls">
                                 <button id="ttw-stop-btn" class="ttw-btn ttw-btn-secondary">⏸️ 暂停</button>
                                 <button id="ttw-repair-btn" class="ttw-btn ttw-btn-warning" style="display: none;">🔧 修复失败</button>
-                                <button id="ttw-toggle-stream" class="ttw-btn ttw-btn-small">👁️ 查看实时输出</button>
+                                <button id="ttw-toggle-stream" class="ttw-btn ttw-btn-small">👁️ 实时输出</button>
                             </div>
                             <div class="ttw-stream-container" id="ttw-stream-container" style="display: none;">
                                 <div class="ttw-stream-header">
@@ -2929,7 +3292,7 @@ ${memory.content}
 
             .ttw-modal-title {
                 font-weight: bold;
-                font-size: 16px;
+                font-size: 15px;
                 color: #e67e22;
             }
 
@@ -3024,14 +3387,6 @@ ${memory.content}
 
             .ttw-section.collapsed .ttw-section-content {
                 display: none;
-            }
-
-            .ttw-api-notice {
-                background: rgba(39, 174, 96, 0.1);
-                border: 1px solid rgba(39, 174, 96, 0.3);
-                border-radius: 8px;
-                padding: 12px;
-                margin-bottom: 16px;
             }
 
             .ttw-setting-row {
@@ -3523,6 +3878,12 @@ ${memory.content}
             if (el) el.addEventListener('change', saveCurrentSettings);
         });
 
+        // 【新增】酒馆预设选项
+        document.getElementById('ttw-use-tavern-preset').addEventListener('change', (e) => {
+            settings.useTavernPreset = e.target.checked;
+            saveCurrentSettings();
+        });
+
         // 并行设置
         document.getElementById('ttw-parallel-enabled').addEventListener('change', (e) => {
             parallelConfig.enabled = e.target.checked;
@@ -3613,7 +3974,6 @@ ${memory.content}
         document.getElementById('ttw-clear-file').addEventListener('click', clearFile);
         document.getElementById('ttw-start-btn').addEventListener('click', startConversion);
 
-        // 【修复】暂停按钮使用新的 stopProcessing 函数
         document.getElementById('ttw-stop-btn').addEventListener('click', stopProcessing);
 
         document.getElementById('ttw-repair-btn').addEventListener('click', startRepairFailedMemories);
@@ -3660,6 +4020,7 @@ ${memory.content}
         settings.customWorldbookPrompt = document.getElementById('ttw-worldbook-prompt').value;
         settings.customPlotPrompt = document.getElementById('ttw-plot-prompt').value;
         settings.customStylePrompt = document.getElementById('ttw-style-prompt').value;
+        settings.useTavernPreset = document.getElementById('ttw-use-tavern-preset').checked;
 
         // 保存并行配置
         settings.parallelEnabled = parallelConfig.enabled;
@@ -3699,6 +4060,7 @@ ${memory.content}
         document.getElementById('ttw-worldbook-prompt').value = settings.customWorldbookPrompt || '';
         document.getElementById('ttw-plot-prompt').value = settings.customPlotPrompt || '';
         document.getElementById('ttw-style-prompt').value = settings.customStylePrompt || '';
+        document.getElementById('ttw-use-tavern-preset').checked = settings.useTavernPreset || false;
 
         // 恢复并行设置UI
         document.getElementById('ttw-parallel-enabled').checked = parallelConfig.enabled;
@@ -3715,12 +4077,11 @@ ${memory.content}
         const prompt = getSystemPrompt();
 
         const statusItems = [
+            `🍺 酒馆预设: ${settings.useTavernPreset ? '✅ 使用' : '❌ 不使用'}`,
             `📚 世界书词条: ${settings.customWorldbookPrompt?.trim() ? '自定义' : '默认'}`,
-            `📖 剧情大纲: ${settings.enablePlotOutline ? (settings.customPlotPrompt?.trim() ? '✅ 启用 (自定义)' : '✅ 启用 (默认)') : '❌ 禁用'}`,
-            `🎨 文风配置: ${settings.enableLiteraryStyle ? (settings.customStylePrompt?.trim() ? '✅ 启用 (自定义)' : '✅ 启用 (默认)') : '❌ 禁用'}`,
-            `🚀 并行模式: ${parallelConfig.enabled ? `✅ ${parallelConfig.mode === 'independent' ? '独立' : '分批'} (${parallelConfig.concurrency}并发)` : '❌ 禁用'}`,
-            `📦 分卷模式: ${useVolumeMode ? '✅ 启用' : '❌ 禁用'}`,
-            `⏱️ API超时: ${Math.round((settings.apiTimeout || 120000) / 1000)}秒`
+            `📖 剧情大纲: ${settings.enablePlotOutline ? '✅' : '❌'}`,
+            `🎨 文风配置: ${settings.enableLiteraryStyle ? '✅' : '❌'}`,
+            `🚀 并行: ${parallelConfig.enabled ? `${parallelConfig.concurrency}并发` : '关闭'}`
         ];
 
         const previewModal = document.createElement('div');
@@ -3733,9 +4094,14 @@ ${memory.content}
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body" style="max-height: 70vh; overflow-y: auto;">
-                    <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; padding: 10px; background: rgba(0,0,0,0.15); border-radius: 6px; font-size: 12px;">
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; padding: 10px; background: rgba(0,0,0,0.15); border-radius: 6px; font-size: 11px;">
                         ${statusItems.map(item => `<span style="padding: 4px 8px; background: rgba(0,0,0,0.2); border-radius: 4px;">${item}</span>`).join('')}
                     </div>
+                    ${settings.useTavernPreset ? `
+                    <div style="margin-bottom: 12px; padding: 10px; background: rgba(39, 174, 96, 0.15); border-radius: 6px; font-size: 12px; color: #27ae60;">
+                        ✅ 使用酒馆预设时，上述提示词会作为<strong>用户消息</strong>发送，酒馆的系统提示词会被自动添加
+                    </div>
+                    ` : ''}
                     <pre style="white-space: pre-wrap; word-wrap: break-word; font-size: 12px; line-height: 1.5; background: rgba(0,0,0,0.2); padding: 12px; border-radius: 6px; max-height: 50vh; overflow-y: auto;">${prompt.replace(/</g, '<').replace(/>/g, '>')}</pre>
                 </div>
                 <div class="ttw-modal-footer">
@@ -4068,7 +4434,6 @@ ${memory.content}
         }
     }
 
-    // 【修复】更新记忆队列UI，显示处理中状态
     function updateMemoryQueueUI() {
         const container = document.getElementById('ttw-memory-queue');
         if (!container) return;
@@ -4079,7 +4444,6 @@ ${memory.content}
             const item = document.createElement('div');
             item.className = 'ttw-memory-item';
 
-            // 【修复】根据状态添加不同的class
             if (memory.processing) {
                 item.classList.add('processing');
             } else if (memory.processed && !memory.failed) {
@@ -4440,8 +4804,10 @@ ${memory.content}
         getAllVolumesWorldbook: getAllVolumesWorldbook,
         exportTaskState: exportTaskState,
         importTaskState: importTaskState,
-        getParallelConfig: () => parallelConfig
+        getParallelConfig: () => parallelConfig,
+        rerollMemory: rerollMemory,
+        showRollHistory: showRollHistorySelector
     };
 
-    console.log('📚 TxtToWorldbook v2.3.1 已加载 (🚀并行修复版 - 队列UI实时更新/暂停功能/实时输出)');
+    console.log('📚 TxtToWorldbook v2.4.0 已加载 (✨记忆编辑/复制 + 🎲重Roll + 🍺酒馆预设)');
 })();
