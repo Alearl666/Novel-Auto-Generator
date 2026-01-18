@@ -405,58 +405,49 @@
 
     // ========== 使用SillyTavern内置API调用 ==========
     async function callSillyTavernAPI(prompt) {
-        // 更新实时输出显示
-        updateStreamContent('', true); // 清空
+        updateStreamContent('', true);
         updateStreamContent('📤 正在发送请求...\n');
 
         try {
-            // 构建消息格式
-            const messages = [
-                { role: 'user', content: prompt }
-            ];
+            // 1.15.0版本：使用SillyTavern暴露的全局API
+            if (typeof SillyTavern !== 'undefined' && SillyTavern.getContext) {
+                const context = SillyTavern.getContext();
 
-            // 调用SillyTavern的后端API
+                updateStreamContent('✅ 已获取酒馆上下文\n');
+
+                // 使用generateRaw函数直接生成
+                const result = await context.generateRaw(prompt, '', false);
+
+                updateStreamContent(`\n📥 收到响应 (${result.length}字符)\n`);
+                updateStreamContent(result.substring(0, 500) + (result.length > 500 ? '...' : ''));
+
+                return result;
+            }
+
+            // 备用方案：如果全局API不可用，尝试带cookie的fetch
+            updateStreamContent('⚠️ 未找到酒馆API，尝试备用方案...\n');
+
             const response = await fetch('/api/backends/chat-completions/generate', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
+                credentials: 'include',
                 body: JSON.stringify({
-                    messages: messages,
-                    // 不指定特定参数，让酒馆使用当前配置的预设
+                    messages: [{ role: 'user', content: prompt }],
                 })
             });
 
             if (!response.ok) {
                 const errorText = await response.text();
-                updateStreamContent(`\n❌ API错误: ${response.status}\n${errorText}`);
-                throw new Error(`API请求失败: ${response.status} - ${errorText}`);
+                throw new Error(`API请求失败: ${response.status}`);
             }
 
-            // 处理流式响应或普通响应
-            const contentType = response.headers.get('content-type');
+            const data = await response.json();
+            const content = data.choices?.[0]?.message?.content || data.content || '';
 
-            if (contentType && contentType.includes('text/event-stream')) {
-                // 流式响应
-                return await handleStreamResponse(response);
-            } else {
-                // 普通JSON响应
-                const data = await response.json();
-                let content = '';
-
-                if (data.choices && data.choices[0]) {
-                    content = data.choices[0].message?.content || data.choices[0].text || '';
-                } else if (data.content) {
-                    content = data.content;
-                } else if (typeof data === 'string') {
-                    content = data;
-                }
-
-                updateStreamContent(`\n📥 收到响应 (${content.length}字符)\n`);
-                updateStreamContent(content.substring(0, 500) + (content.length > 500 ? '...' : ''));
-
-                return content;
-            }
+            updateStreamContent(`\n📥 收到响应 (${content.length}字符)\n`);
+            return content;
 
         } catch (error) {
             updateStreamContent(`\n❌ 错误: ${error.message}`);
