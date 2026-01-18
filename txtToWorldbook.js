@@ -1,6 +1,6 @@
 /**
- * TXT转世界书独立模块 v2.2.1
- * Bug修复版本 - 修复选择起始位置无效的问题
+ * TXT转世界书独立模块 v2.3.0
+ * 并行处理版本 - 支持多个记忆同时请求
  */
 
 (function() {
@@ -21,7 +21,14 @@
     let useVolumeMode = false;
     let currentStreamContent = '';
     let startFromIndex = 0;
-    let userSelectedStartIndex = null; // 【新增】用户手动选择的起始索引
+    let userSelectedStartIndex = null;
+
+    // ========== 并行处理配置 ==========
+    let parallelConfig = {
+        enabled: true,
+        concurrency: 3,
+        mode: 'independent'
+    };
 
     // ========== 默认设置 ==========
     const defaultWorldbookPrompt = `你是专业的小说世界书生成专家。请仔细阅读提供的小说内容，提取其中的关键信息，生成高质量的世界书条目。
@@ -92,10 +99,42 @@
         customPlotPrompt: '',
         customStylePrompt: '',
         useVolumeMode: false,
-        apiTimeout: 120000
+        apiTimeout: 120000,
+        parallelEnabled: true,
+        parallelConcurrency: 3,
+        parallelMode: 'independent'
     };
 
     let settings = { ...defaultSettings };
+
+    // ========== 信号量类（控制并发） ==========
+    class Semaphore {
+        constructor(max) {
+            this.max = max;
+            this.current = 0;
+            this.queue = [];
+        }
+
+        async acquire() {
+            if (this.current < this.max) {
+                this.current++;
+                return Promise.resolve();
+            }
+
+            return new Promise(resolve => {
+                this.queue.push(resolve);
+            });
+        }
+
+        release() {
+            this.current--;
+            if (this.queue.length > 0) {
+                this.current++;
+                const next = this.queue.shift();
+                next();
+            }
+        }
+    }
 
     // ========== IndexedDB 持久化 ==========
     const MemoryHistoryDB = {
@@ -428,16 +467,11 @@
 
     // ========== 带超时的API调用 ==========
     async function callSillyTavernAPI(prompt) {
-        updateStreamContent('', true);
-        updateStreamContent('📤 正在发送请求...\n');
-
         const timeout = settings.apiTimeout || 120000;
 
         try {
             if (typeof SillyTavern !== 'undefined' && SillyTavern.getContext) {
                 const context = SillyTavern.getContext();
-
-                updateStreamContent('✅ 已获取酒馆上下文\n');
 
                 const timeoutPromise = new Promise((_, reject) => {
                     setTimeout(() => reject(new Error(`API请求超时 (${timeout/1000}秒)`)), timeout);
@@ -447,13 +481,8 @@
 
                 const result = await Promise.race([apiPromise, timeoutPromise]);
 
-                updateStreamContent(`\n📥 收到响应 (${result.length}字符)\n`);
-                updateStreamContent(result.substring(0, 500) + (result.length > 500 ? '...' : ''));
-
                 return result;
             }
-
-            updateStreamContent('⚠️ 未找到酒馆API，尝试备用方案...\n');
 
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -480,22 +509,17 @@
             const data = await response.json();
             const content = data.choices?.[0]?.message?.content || data.content || '';
 
-            updateStreamContent(`\n📥 收到响应 (${content.length}字符)\n`);
             return content;
 
         } catch (error) {
             if (error.name === 'AbortError') {
                 throw new Error(`API请求超时 (${timeout/1000}秒)`);
             }
-            updateStreamContent(`\n❌ 错误: ${error.message}`);
             throw error;
         }
     }
 
     async function callDirectAPI(prompt, apiConfig) {
-        updateStreamContent('', true);
-        updateStreamContent('📤 使用直接API调用...\n');
-
         const { provider, apiKey, endpoint, model } = apiConfig;
         const timeout = settings.apiTimeout || 120000;
 
@@ -543,7 +567,6 @@
 
             if (!response.ok) {
                 const errorText = await response.text();
-                updateStreamContent(`\n❌ API错误: ${response.status}\n${errorText}`);
                 throw new Error(`API请求失败: ${response.status} - ${errorText}`);
             }
 
@@ -555,9 +578,6 @@
             } else {
                 content = data.choices?.[0]?.message?.content || '';
             }
-
-            updateStreamContent(`\n📥 收到响应 (${content.length}字符)\n`);
-            updateStreamContent(content.substring(0, 500) + (content.length > 500 ? '...' : ''));
 
             return content;
         } catch (error) {
@@ -882,6 +902,38 @@
         return result;
     }
 
+    // ========== 解析AI响应 ==========
+    function parseAIResponse(response) {
+        try {
+            return JSON.parse(response);
+        } catch (e) {
+            let clean = response.trim()
+                .replace(/```json\s*/gi, '')
+                .replace(/```\s*/g, '');
+
+            const first = clean.indexOf('{');
+            const last = clean.lastIndexOf('}');
+            if (first !== -1 && last > first) {
+                clean = clean.substring(first, last + 1);
+            }
+
+            try {
+                return JSON.parse(clean);
+            } catch (e2) {
+                const open = (clean.match(/{/g) || []).length;
+                const close = (clean.match(/}/g) || []).length;
+                if (open > close) {
+                    try {
+                        return JSON.parse(clean + '}'.repeat(open - close));
+                    } catch (e3) {
+                        return extractWorldbookDataByRegex(clean);
+                    }
+                }
+                return extractWorldbookDataByRegex(clean);
+            }
+        }
+    }
+
     // ========== 世界书分卷功能 ==========
     function startNewVolume() {
         if (Object.keys(generatedWorldbook).length > 0) {
@@ -1030,7 +1082,6 @@
                 startFromIndex = Math.max(0, memoryQueue.length - 1);
             }
 
-            // 同步更新用户选择
             if (userSelectedStartIndex !== null) {
                 if (userSelectedStartIndex > index) {
                     userSelectedStartIndex = Math.max(0, userSelectedStartIndex - 1);
@@ -1046,7 +1097,188 @@
         }
     }
 
-    // ========== 记忆处理核心 ==========
+    // ========== 获取系统提示词 ==========
+    function getSystemPrompt() {
+        const worldbookPrompt = settings.customWorldbookPrompt?.trim() || defaultWorldbookPrompt;
+
+        const additionalParts = [];
+
+        if (settings.enablePlotOutline) {
+            const plotPrompt = settings.customPlotPrompt?.trim() || defaultPlotPrompt;
+            additionalParts.push(plotPrompt);
+        }
+
+        if (settings.enableLiteraryStyle) {
+            const stylePrompt = settings.customStylePrompt?.trim() || defaultStylePrompt;
+            additionalParts.push(stylePrompt);
+        }
+
+        if (additionalParts.length === 0) {
+            return worldbookPrompt;
+        }
+
+        let fullPrompt = worldbookPrompt;
+        const insertContent = ',\n' + additionalParts.join(',\n');
+        fullPrompt = fullPrompt.replace(
+            /(\}\s*)\n\`\`\`/,
+            `${insertContent}\n$1\n\`\`\``
+        );
+
+        return fullPrompt;
+    }
+
+    // ========== 并行处理核心 ==========
+
+    /**
+     * 独立处理单个记忆块（不依赖累积上下文）
+     */
+    async function processMemoryChunkIndependent(index, retryCount = 0) {
+        const memory = memoryQueue[index];
+        const maxRetries = 3;
+
+        let prompt = getLanguagePrefix() + getSystemPrompt();
+
+        if (index > 0 && memoryQueue[index - 1].content) {
+            prompt += `\n\n这是前文的结尾部分（供参考连贯性）：
+---
+${memoryQueue[index - 1].content.slice(-800)}
+---
+`;
+        }
+
+        prompt += `\n\n这是当前需要分析的内容：
+---
+${memory.content}
+---
+
+请从上述内容中提取角色、地点、组织等信息，直接输出JSON格式，不要包含代码块标记。`;
+
+        console.log(`📤 [并行] 发送记忆 ${index + 1}: ${memory.title} (${memory.content.length}字)`);
+
+        try {
+            const response = await callAPI(prompt);
+
+            if (isTokenLimitError(response)) {
+                throw new Error('Token limit exceeded');
+            }
+
+            let memoryUpdate = parseAIResponse(response);
+
+            console.log(`📥 [并行] 记忆 ${index + 1} 完成`);
+            return memoryUpdate;
+
+        } catch (error) {
+            console.error(`❌ [并行] 记忆 ${index + 1} 出错 (尝试 ${retryCount + 1}/${maxRetries}):`, error.message);
+
+            if (isTokenLimitError(error.message)) {
+                console.log(`⚠️ [并行] 记忆 ${index + 1} token超限，标记为需要分裂`);
+                throw new Error(`TOKEN_LIMIT:${index}`);
+            }
+
+            if (retryCount < maxRetries) {
+                const delay = Math.min(1000 * Math.pow(2, retryCount), 10000);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                return processMemoryChunkIndependent(index, retryCount + 1);
+            }
+
+            throw error;
+        }
+    }
+
+    /**
+     * 并行处理多个记忆块
+     */
+    async function processMemoryChunksParallel(startIndex, endIndex) {
+        const tasks = [];
+        const results = new Map();
+        const tokenLimitIndices = [];
+
+        for (let i = startIndex; i < endIndex && i < memoryQueue.length; i++) {
+            if (memoryQueue[i].processed && !memoryQueue[i].failed) continue;
+
+            tasks.push({
+                index: i,
+                memory: memoryQueue[i]
+            });
+        }
+
+        if (tasks.length === 0) return { tokenLimitIndices };
+
+        console.log(`🚀 并行处理 ${tasks.length} 个记忆块 (并发数: ${parallelConfig.concurrency})`);
+
+        let completed = 0;
+        const totalTasks = tasks.length;
+
+        const semaphore = new Semaphore(parallelConfig.concurrency);
+
+        const processOne = async (task) => {
+            await semaphore.acquire();
+
+            try {
+                if (isProcessingStopped) {
+                    console.log(`⏸️ 处理被暂停，跳过记忆 ${task.index + 1}`);
+                    return null;
+                }
+
+                updateProgress(
+                    ((startIndex + completed) / memoryQueue.length) * 100,
+                    `🚀 并行处理中 (${completed}/${totalTasks}) - 正在处理: ${task.memory.title}`
+                );
+
+                const result = await processMemoryChunkIndependent(task.index);
+                results.set(task.index, result);
+
+                completed++;
+                updateProgress(
+                    ((startIndex + completed) / memoryQueue.length) * 100,
+                    `🚀 并行处理中 (${completed}/${totalTasks}) - 完成: ${task.memory.title}`
+                );
+
+                return result;
+            } catch (error) {
+                completed++;
+
+                if (error.message.startsWith('TOKEN_LIMIT:')) {
+                    const idx = parseInt(error.message.split(':')[1]);
+                    tokenLimitIndices.push(idx);
+                    console.log(`⚠️ 记忆 ${idx + 1} 需要分裂处理`);
+                } else {
+                    console.error(`❌ 记忆 ${task.index + 1} 处理失败:`, error.message);
+                    task.memory.failed = true;
+                    task.memory.failedError = error.message;
+                }
+
+                return null;
+            } finally {
+                semaphore.release();
+            }
+        };
+
+        await Promise.allSettled(tasks.map(task => processOne(task)));
+
+        console.log(`📦 合并 ${results.size} 个成功结果...`);
+
+        const sortedIndices = [...results.keys()].sort((a, b) => a - b);
+        for (const idx of sortedIndices) {
+            const result = results.get(idx);
+            if (result) {
+                await mergeWorldbookDataWithHistory(
+                    generatedWorldbook,
+                    result,
+                    idx,
+                    memoryQueue[idx].title
+                );
+                memoryQueue[idx].processed = true;
+                memoryQueue[idx].result = result;
+            }
+        }
+
+        updateMemoryQueueUI();
+
+        return { tokenLimitIndices };
+    }
+
+    // ========== 串行记忆处理（原有逻辑） ==========
     async function processMemoryChunk(index, retryCount = 0) {
         if (isProcessingStopped) {
             console.log(`处理被暂停，跳过记忆块 ${index + 1}`);
@@ -1130,10 +1362,6 @@ ${memory.content}
 
         prompt += `请直接输出JSON格式的结果，不要添加任何代码块标记或解释文字。`;
 
-        console.log(`=== 第${index + 1}步 Prompt (前500字) ===`);
-        console.log(prompt.substring(0, 500) + '...');
-        console.log('=====================');
-
         try {
             console.log(`开始调用API处理第${index + 1}个记忆块...`);
             updateProgress(progress, `正在调用API: ${memory.title} (${index + 1}/${memoryQueue.length})`);
@@ -1176,64 +1404,7 @@ ${memory.content}
                 }
             }
 
-            let memoryUpdate;
-            try {
-                memoryUpdate = JSON.parse(response);
-                console.log('✅ JSON直接解析成功');
-            } catch (jsonError) {
-                console.log('直接JSON解析失败，开始清理...');
-                let cleanResponse = response.trim();
-
-                cleanResponse = cleanResponse.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
-
-                if (!cleanResponse.startsWith('{')) {
-                    const firstBrace = cleanResponse.indexOf('{');
-                    const lastBrace = cleanResponse.lastIndexOf('}');
-                    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-                        cleanResponse = cleanResponse.substring(firstBrace, lastBrace + 1);
-                    }
-                }
-
-                try {
-                    memoryUpdate = JSON.parse(cleanResponse);
-                    console.log('✅ JSON清理后解析成功');
-                } catch (secondError) {
-                    console.error('❌ JSON解析仍然失败');
-
-                    const openBraces = (cleanResponse.match(/{/g) || []).length;
-                    const closeBraces = (cleanResponse.match(/}/g) || []).length;
-                    const missingBraces = openBraces - closeBraces;
-
-                    if (missingBraces > 0) {
-                        console.log(`⚠️ 检测到内容不完整：缺少${missingBraces}个闭合括号`);
-
-                        try {
-                            memoryUpdate = JSON.parse(cleanResponse + '}'.repeat(missingBraces));
-                            console.log(`✅ 自动添加${missingBraces}个闭合括号后解析成功`);
-                        } catch (autoFixError) {
-                            console.log('❌ 自动添加闭合括号后仍然失败，尝试正则提取...');
-
-                            const regexExtractedData = extractWorldbookDataByRegex(cleanResponse);
-
-                            if (regexExtractedData && Object.keys(regexExtractedData).length > 0) {
-                                console.log('✅ 正则提取成功！');
-                                memoryUpdate = regexExtractedData;
-                            } else {
-                                throw new Error(`JSON解析失败: ${secondError.message}`);
-                            }
-                        }
-                    } else {
-                        const regexExtractedData = extractWorldbookDataByRegex(cleanResponse);
-
-                        if (regexExtractedData && Object.keys(regexExtractedData).length > 0) {
-                            console.log('✅ 正则提取成功！');
-                            memoryUpdate = regexExtractedData;
-                        } else {
-                            throw new Error(`JSON解析失败: ${secondError.message}`);
-                        }
-                    }
-                }
-            }
+            let memoryUpdate = parseAIResponse(response);
 
             const changedEntries = await mergeWorldbookDataWithHistory(generatedWorldbook, memoryUpdate, index, memory.title);
 
@@ -1320,13 +1491,14 @@ ${memory.content}
         }
     }
 
+    // ========== 主处理流程 ==========
     async function startAIProcessing() {
         showProgressSection(true);
         isProcessingStopped = false;
 
-        // 【核心修复】使用用户选择的索引
         const effectiveStartIndex = userSelectedStartIndex !== null ? userSelectedStartIndex : startFromIndex;
-        console.log(`📍 开始处理，起始索引: ${effectiveStartIndex} (用户选择: ${userSelectedStartIndex}, 自动计算: ${startFromIndex})`);
+        console.log(`📍 开始处理，起始索引: ${effectiveStartIndex}`);
+        console.log(`📊 处理模式: ${parallelConfig.enabled ? `并行 (${parallelConfig.mode}, 并发${parallelConfig.concurrency})` : '串行'}`);
 
         if (effectiveStartIndex === 0) {
             worldbookVolumes = [];
@@ -1339,7 +1511,6 @@ ${memory.content}
             };
         }
 
-        // 清除用户选择，避免下次自动使用
         userSelectedStartIndex = null;
 
         if (useVolumeMode) {
@@ -1349,47 +1520,106 @@ ${memory.content}
         updateStartButtonState(true);
 
         try {
-            let i = effectiveStartIndex;
-            while (i < memoryQueue.length) {
-                if (isProcessingStopped) {
-                    console.log('处理被用户停止');
-                    updateProgress((i / memoryQueue.length) * 100, `⏸️ 已暂停处理 (${i}/${memoryQueue.length})`);
-                    await MemoryHistoryDB.saveState(i);
+            if (parallelConfig.enabled) {
+                // ===== 并行模式 =====
+                console.log('🚀 使用并行模式处理');
 
-                    updateStartButtonState(false);
-                    return;
-                }
+                if (parallelConfig.mode === 'independent') {
+                    // 独立模式：一次性并行处理所有
+                    const { tokenLimitIndices } = await processMemoryChunksParallel(effectiveStartIndex, memoryQueue.length);
 
-                if (isRepairingMemories) {
-                    console.log(`检测到修复模式，暂停当前处理于索引 ${i}`);
-                    currentProcessingIndex = i;
-                    updateProgress((i / memoryQueue.length) * 100, `⏸️ 修复记忆中，已暂停处理 (${i}/${memoryQueue.length})`);
+                    // 处理需要分裂的记忆
+                    if (tokenLimitIndices.length > 0) {
+                        console.log(`⚠️ 有 ${tokenLimitIndices.length} 个记忆需要分裂处理`);
 
-                    while (isRepairingMemories) {
-                        await new Promise(resolve => setTimeout(resolve, 500));
+                        for (const idx of tokenLimitIndices.sort((a, b) => b - a)) {
+                            const splitResult = splitMemoryIntoTwo(idx);
+                            if (splitResult) {
+                                updateMemoryQueueUI();
+                            }
+                        }
+
+                        // 串行处理分裂后的记忆
+                        for (let i = 0; i < memoryQueue.length; i++) {
+                            if (!memoryQueue[i].processed || memoryQueue[i].failed) {
+                                await processMemoryChunk(i);
+                            }
+                        }
                     }
 
-                    console.log(`修复完成，从索引 ${i} 继续处理`);
+                } else {
+                    // 分批模式：批次内并行，批次间串行
+                    const batchSize = parallelConfig.concurrency;
+                    let i = effectiveStartIndex;
+
+                    while (i < memoryQueue.length && !isProcessingStopped) {
+                        const batchEnd = Math.min(i + batchSize, memoryQueue.length);
+                        console.log(`📦 处理批次: 记忆 ${i + 1} - ${batchEnd}`);
+
+                        const { tokenLimitIndices } = await processMemoryChunksParallel(i, batchEnd);
+
+                        // 处理该批次中需要分裂的
+                        for (const idx of tokenLimitIndices.sort((a, b) => b - a)) {
+                            splitMemoryIntoTwo(idx);
+                        }
+
+                        // 串行处理分裂后的
+                        for (let j = i; j < batchEnd && j < memoryQueue.length; j++) {
+                            if (!memoryQueue[j].processed || memoryQueue[j].failed) {
+                                await processMemoryChunk(j);
+                            }
+                        }
+
+                        i = batchEnd;
+                        await MemoryHistoryDB.saveState(i);
+                    }
                 }
 
-                // 跳过已处理的记忆
-                if (memoryQueue[i].processed && !memoryQueue[i].failed) {
-                    console.log(`跳过已处理的记忆: ${memoryQueue[i].title}`);
+            } else {
+                // ===== 串行模式（原有逻辑） =====
+                console.log('📝 使用串行模式处理');
+
+                let i = effectiveStartIndex;
+                while (i < memoryQueue.length) {
+                    if (isProcessingStopped) {
+                        console.log('处理被用户停止');
+                        updateProgress((i / memoryQueue.length) * 100, `⏸️ 已暂停处理 (${i}/${memoryQueue.length})`);
+                        await MemoryHistoryDB.saveState(i);
+                        updateStartButtonState(false);
+                        return;
+                    }
+
+                    if (isRepairingMemories) {
+                        console.log(`检测到修复模式，暂停当前处理于索引 ${i}`);
+                        currentProcessingIndex = i;
+                        updateProgress((i / memoryQueue.length) * 100, `⏸️ 修复记忆中，已暂停处理 (${i}/${memoryQueue.length})`);
+
+                        while (isRepairingMemories) {
+                            await new Promise(resolve => setTimeout(resolve, 500));
+                        }
+
+                        console.log(`修复完成，从索引 ${i} 继续处理`);
+                    }
+
+                    if (memoryQueue[i].processed && !memoryQueue[i].failed) {
+                        console.log(`跳过已处理的记忆: ${memoryQueue[i].title}`);
+                        i++;
+                        continue;
+                    }
+
+                    const currentQueueLength = memoryQueue.length;
+                    await processMemoryChunk(i);
+
+                    if (memoryQueue.length > currentQueueLength) {
+                        i += (memoryQueue.length - currentQueueLength);
+                    }
+
                     i++;
-                    continue;
+                    await MemoryHistoryDB.saveState(i);
                 }
-
-                const currentQueueLength = memoryQueue.length;
-                await processMemoryChunk(i);
-
-                if (memoryQueue.length > currentQueueLength) {
-                    i += (memoryQueue.length - currentQueueLength);
-                }
-
-                i++;
-                await MemoryHistoryDB.saveState(i);
             }
 
+            // 处理完成
             if (useVolumeMode && Object.keys(generatedWorldbook).length > 0) {
                 worldbookVolumes.push({
                     volumeIndex: currentVolumeIndex,
@@ -1404,7 +1634,8 @@ ${memory.content}
                 updateProgress(100, `⚠️ 处理完成，但有 ${failedCount} 个记忆块失败，请点击修复`);
             } else {
                 const volumeInfo = useVolumeMode ? ` (共${worldbookVolumes.length}卷)` : '';
-                updateProgress(100, `✅ 所有记忆块处理完成！${volumeInfo}`);
+                const modeInfo = parallelConfig.enabled ? ' [并行模式]' : '';
+                updateProgress(100, `✅ 所有记忆块处理完成！${volumeInfo}${modeInfo}`);
             }
 
             showResultSection(true);
@@ -1423,12 +1654,10 @@ ${memory.content}
         } catch (error) {
             console.error('AI处理过程中发生错误:', error);
             updateProgress(0, `❌ 处理过程出错: ${error.message}`);
-
             updateStartButtonState(false);
         }
     }
 
-    // 【核心修复】重写updateStartButtonState，不再自动覆盖用户选择
     function updateStartButtonState(isProcessing) {
         const startBtn = document.getElementById('ttw-start-btn');
         if (!startBtn) return;
@@ -1439,14 +1668,12 @@ ${memory.content}
         } else {
             startBtn.disabled = false;
 
-            // 如果用户手动选择了起始位置，优先使用
             if (userSelectedStartIndex !== null) {
                 startBtn.textContent = `▶️ 从记忆${userSelectedStartIndex + 1}开始`;
                 startFromIndex = userSelectedStartIndex;
                 return;
             }
 
-            // 否则自动计算第一个未处理的
             const firstUnprocessed = memoryQueue.findIndex(m => !m.processed || m.failed);
 
             if (firstUnprocessed !== -1 && firstUnprocessed < memoryQueue.length) {
@@ -1492,44 +1719,7 @@ ${memory.content}
         console.log(`=== 修复记忆 第${index + 1}步 ===`);
 
         const response = await callAPI(prompt);
-        let memoryUpdate;
-
-        try {
-            memoryUpdate = JSON.parse(response);
-        } catch (jsonError) {
-            let cleanResponse = response.trim().replace(/```json\s*/gi, '').replace(/```\s*/g, '');
-            const firstBrace = cleanResponse.indexOf('{');
-            const lastBrace = cleanResponse.lastIndexOf('}');
-            if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-                cleanResponse = cleanResponse.substring(firstBrace, lastBrace + 1);
-            }
-
-            try {
-                memoryUpdate = JSON.parse(cleanResponse);
-            } catch (secondError) {
-                const openBraces = (cleanResponse.match(/{/g) || []).length;
-                const closeBraces = (cleanResponse.match(/}/g) || []).length;
-                if (openBraces > closeBraces) {
-                    try {
-                        memoryUpdate = JSON.parse(cleanResponse + '}'.repeat(openBraces - closeBraces));
-                    } catch (e) {
-                        const regexData = extractWorldbookDataByRegex(cleanResponse);
-                        if (regexData && Object.keys(regexData).length > 0) {
-                            memoryUpdate = regexData;
-                        } else {
-                            throw new Error(`JSON解析失败: ${secondError.message}`);
-                        }
-                    }
-                } else {
-                    const regexData = extractWorldbookDataByRegex(cleanResponse);
-                    if (regexData && Object.keys(regexData).length > 0) {
-                        memoryUpdate = regexData;
-                    } else {
-                        throw new Error(`JSON解析失败: ${secondError.message}`);
-                    }
-                }
-            }
-        }
+        let memoryUpdate = parseAIResponse(response);
 
         const memoryTitle = `记忆-修复-${memory.title}`;
         await mergeWorldbookDataWithHistory(generatedWorldbook, memoryUpdate, index, memoryTitle);
@@ -1871,14 +2061,15 @@ ${memory.content}
     // ========== 导出/导入未完成任务 ==========
     async function exportTaskState() {
         const state = {
-            version: '2.2.1',
+            version: '2.3.0',
             timestamp: Date.now(),
             memoryQueue: memoryQueue,
             generatedWorldbook: generatedWorldbook,
             worldbookVolumes: worldbookVolumes,
             currentVolumeIndex: currentVolumeIndex,
             fileHash: currentFileHash,
-            settings: settings
+            settings: settings,
+            parallelConfig: parallelConfig
         };
 
         const timeString = new Date().toLocaleString('zh-CN', {
@@ -1932,6 +2123,10 @@ ${memory.content}
                     settings = { ...defaultSettings, ...state.settings };
                 }
 
+                if (state.parallelConfig) {
+                    parallelConfig = { ...parallelConfig, ...state.parallelConfig };
+                }
+
                 const firstUnprocessed = memoryQueue.findIndex(m => !m.processed || m.failed);
                 startFromIndex = firstUnprocessed !== -1 ? firstUnprocessed : 0;
                 userSelectedStartIndex = null;
@@ -1944,6 +2139,7 @@ ${memory.content}
                 }
 
                 updateStartButtonState(false);
+                updateParallelSettingsUI();
 
                 const processedCount = memoryQueue.filter(m => m.processed).length;
                 alert(`任务状态已导入！\n\n已处理: ${processedCount}/${memoryQueue.length}\n将从记忆${startFromIndex + 1}继续`);
@@ -1959,34 +2155,14 @@ ${memory.content}
         input.click();
     }
 
-    // ========== 获取系统提示词 ==========
-    function getSystemPrompt() {
-        const worldbookPrompt = settings.customWorldbookPrompt?.trim() || defaultWorldbookPrompt;
+    function updateParallelSettingsUI() {
+        const enabledEl = document.getElementById('ttw-parallel-enabled');
+        const concurrencyEl = document.getElementById('ttw-parallel-concurrency');
+        const modeEl = document.getElementById('ttw-parallel-mode');
 
-        const additionalParts = [];
-
-        if (settings.enablePlotOutline) {
-            const plotPrompt = settings.customPlotPrompt?.trim() || defaultPlotPrompt;
-            additionalParts.push(plotPrompt);
-        }
-
-        if (settings.enableLiteraryStyle) {
-            const stylePrompt = settings.customStylePrompt?.trim() || defaultStylePrompt;
-            additionalParts.push(stylePrompt);
-        }
-
-        if (additionalParts.length === 0) {
-            return worldbookPrompt;
-        }
-
-        let fullPrompt = worldbookPrompt;
-        const insertContent = ',\n' + additionalParts.join(',\n');
-        fullPrompt = fullPrompt.replace(
-            /(\}\s*)\n\`\`\`/,
-            `${insertContent}\n$1\n\`\`\``
-        );
-
-        return fullPrompt;
+        if (enabledEl) enabledEl.checked = parallelConfig.enabled;
+        if (concurrencyEl) concurrencyEl.value = parallelConfig.concurrency;
+        if (modeEl) modeEl.value = parallelConfig.mode;
     }
 
     // ========== 帮助弹窗 ==========
@@ -2012,27 +2188,30 @@ ${memory.content}
                     </div>
 
                     <div class="ttw-help-section" style="margin-top: 16px;">
-                        <h4 style="color: #3498db; margin: 0 0 10px 0;">⚙️ API设置</h4>
+                        <h4 style="color: #3498db; margin: 0 0 10px 0;">🚀 并行处理</h4>
                         <p style="margin: 0 0 8px 0; line-height: 1.6; color: #ccc;">
-                            <strong>本工具使用酒馆当前配置的API预设</strong>，无需额外配置API。请确保酒馆已正确配置并能正常对话。
+                            <strong>v2.3.0新增</strong>：支持多个记忆同时处理，大幅提升转换速度！<br>
+                            <strong>独立模式</strong>：每个记忆独立提取，最后合并，速度最快<br>
+                            <strong>分批模式</strong>：批次内并行，批次间累积上下文
                         </p>
                     </div>
 
                     <div class="ttw-help-section" style="margin-top: 16px;">
-                        <h4 style="color: #9b59b6; margin: 0 0 10px 0;">📦 分卷模式</h4>
-                        <p style="margin: 0 0 8px 0; line-height: 1.6; color: #ccc;">
-                            开启后，当上下文超限时会<strong>自动开启新卷</strong>，而不是分裂记忆块。
-                        </p>
+                        <h4 style="color: #9b59b6; margin: 0 0 10px 0;">⚙️ 并发数建议</h4>
+                        <ul style="margin: 0; padding-left: 20px; line-height: 1.8; color: #ccc;">
+                            <li>本地API (clewdr)：3-5 并发</li>
+                            <li>云端API：2-3 并发（避免限流）</li>
+                            <li>Gemini API：2-3 并发</li>
+                        </ul>
                     </div>
 
                     <div class="ttw-help-section" style="margin-top: 16px;">
                         <h4 style="color: #1abc9c; margin: 0 0 10px 0;">💡 使用技巧</h4>
                         <ul style="margin: 0; padding-left: 20px; line-height: 1.8; color: #ccc;">
-                            <li>超长小说建议开启分卷模式</li>
-                            <li>处理中途可以暂停，刷新后继续</li>
-                            <li>可以手动选择从哪个记忆块开始</li>
-                            <li>点击记忆可查看内容和删除</li>
-                            <li>可导出/导入任务状态跨版本续传</li>
+                            <li>首次提取推荐使用<strong>独立模式</strong></li>
+                            <li>需要上下文连贯时使用<strong>分批模式</strong></li>
+                            <li>处理失败的记忆会自动重试</li>
+                            <li>可随时暂停，刷新后继续</li>
                         </ul>
                     </div>
                 </div>
@@ -2051,7 +2230,7 @@ ${memory.content}
         });
     }
 
-    // ========== 【核心修复】选择起始记忆弹窗 ==========
+    // ========== 选择起始记忆弹窗 ==========
     function showStartFromSelector() {
         if (memoryQueue.length === 0) {
             alert('请先上传文件');
@@ -2104,11 +2283,9 @@ ${memory.content}
             const select = document.getElementById('ttw-start-from-select');
             const selectedIndex = parseInt(select.value);
 
-            // 【核心修复】设置用户选择的索引，不再调用updateStartButtonState自动计算
             userSelectedStartIndex = selectedIndex;
             startFromIndex = selectedIndex;
 
-            // 直接更新按钮文本
             const startBtn = document.getElementById('ttw-start-btn');
             if (startBtn) {
                 startBtn.textContent = `▶️ 从记忆${selectedIndex + 1}开始`;
@@ -2280,7 +2457,7 @@ ${memory.content}
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v2.2.1</span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v2.3.0 🚀并行版</span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -2298,10 +2475,41 @@ ${memory.content}
                                 <div style="color: #27ae60; font-weight: bold; margin-bottom: 8px;">✅ 使用酒馆预设</div>
                                 <div style="color: #aaa; font-size: 12px;">本工具直接使用酒馆当前配置的API和预设，无需额外配置。</div>
                             </div>
-                            <div class="ttw-setting-row">
+
+                            <!-- 并行处理设置 -->
+                            <div class="ttw-parallel-settings" style="margin-top: 16px; padding: 12px; background: rgba(52, 152, 219, 0.15); border: 1px solid rgba(52, 152, 219, 0.3); border-radius: 8px;">
+                                <div style="font-weight: bold; color: #3498db; margin-bottom: 10px;">🚀 并行处理设置 <span style="font-size: 11px; color: #888; font-weight: normal;">(v2.3.0新增)</span></div>
+                                <div class="ttw-setting-row" style="display: flex; gap: 12px; align-items: center;">
+                                    <div class="ttw-setting-item" style="flex: 1;">
+                                        <label class="ttw-checkbox-label" style="display: flex; align-items: center; gap: 8px;">
+                                            <input type="checkbox" id="ttw-parallel-enabled" checked style="width: 18px; height: 18px;">
+                                            <span>启用并行处理</span>
+                                        </label>
+                                    </div>
+                                    <div class="ttw-setting-item" style="flex: 1;">
+                                        <label style="font-size: 12px;">并发数量</label>
+                                        <input type="number" id="ttw-parallel-concurrency" value="3" min="1" max="10" style="width: 70px; padding: 6px 8px; margin-left: 8px;">
+                                    </div>
+                                </div>
+                                <div class="ttw-setting-row" style="margin-top: 10px;">
+                                    <div class="ttw-setting-item" style="flex: 1;">
+                                        <label style="font-size: 12px; display: block; margin-bottom: 6px;">处理模式</label>
+                                        <select id="ttw-parallel-mode" style="width: 100%; padding: 8px; border: 1px solid #555; border-radius: 4px; background: rgba(0,0,0,0.3); color: #fff; font-size: 12px;">
+                                            <option value="independent">🚀 独立模式（推荐，最快，每块独立提取后合并）</option>
+                                            <option value="batch">📦 分批模式（批次内并行，批次间串行累积）</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div style="margin-top: 10px; font-size: 11px; color: #888; line-height: 1.6;">
+                                    💡 <strong>独立模式</strong>：最快，每个记忆独立提取，最后合并，适合首次提取<br>
+                                    💡 <strong>并发数建议</strong>：本地clewdr可设3-5，云端API建议2-3
+                                </div>
+                            </div>
+
+                            <div class="ttw-setting-row" style="margin-top: 16px;">
                                 <div class="ttw-setting-item" style="flex: 1;">
                                     <label>每块字数</label>
-                                    <input type="number" id="ttw-chunk-size" value="150000" min="1000" max="500000">
+                                    <input type="number" id="ttw-chunk-size" value="15000" min="1000" max="500000">
                                 </div>
                                 <div class="ttw-setting-item" style="flex: 1;">
                                     <label>API超时(秒)</label>
@@ -2321,8 +2529,9 @@ ${memory.content}
                             <div id="ttw-volume-indicator" style="display: none; margin-top: 12px; padding: 8px 12px; background: rgba(155, 89, 182, 0.2); border-radius: 6px; font-size: 12px; color: #bb86fc;">
                                 当前: 第1卷 | 已完成: 0卷
                             </div>
+
                             <!-- 提示词配置区域 -->
-                            <div class="ttw-prompt-config">
+                            <div class="ttw-prompt-config" style="margin-top: 16px;">
                                 <div class="ttw-prompt-config-header">
                                     <span>📝 提示词配置</span>
                                     <button id="ttw-preview-prompt" class="ttw-btn ttw-btn-small">👁️ 预览</button>
@@ -2422,7 +2631,7 @@ ${memory.content}
                             </div>
                         </div>
                         <div class="ttw-section-content">
-                            <div class="ttw-memory-queue-hint" style="font-size: 11px; color: #888; margin-bottom: 8px;">💡 点击记忆可查看内容和删除</div>
+                            <div class="ttw-memory-queue-hint" style="font-size: 11px; color: #888; margin-bottom: 8px;">💡 点击记忆可查看内容和删除 | 🚀 并行模式下多个记忆同时处理</div>
                             <div class="ttw-memory-queue" id="ttw-memory-queue"></div>
                         </div>
                     </div>
@@ -2508,7 +2717,7 @@ ${memory.content}
                 border: 1px solid var(--SmartThemeBorderColor, #555);
                 border-radius: 12px;
                 width: 100%;
-                max-width: 700px;
+                max-width: 750px;
                 max-height: calc(100vh - 40px);
                 display: flex;
                 flex-direction: column;
@@ -2688,7 +2897,6 @@ ${memory.content}
             }
 
             .ttw-prompt-config {
-                margin-top: 16px;
                 border: 1px solid var(--SmartThemeBorderColor, #444);
                 border-radius: 8px;
                 overflow: hidden;
@@ -3105,6 +3313,7 @@ ${memory.content}
 
         document.addEventListener('keydown', handleEscKey, true);
 
+        // 基础设置
         ['ttw-chunk-size', 'ttw-api-timeout'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.addEventListener('change', saveCurrentSettings);
@@ -3113,6 +3322,23 @@ ${memory.content}
         ['ttw-incremental-mode', 'ttw-volume-mode', 'ttw-enable-plot', 'ttw-enable-style'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.addEventListener('change', saveCurrentSettings);
+        });
+
+        // 并行设置
+        document.getElementById('ttw-parallel-enabled').addEventListener('change', (e) => {
+            parallelConfig.enabled = e.target.checked;
+            saveCurrentSettings();
+        });
+
+        document.getElementById('ttw-parallel-concurrency').addEventListener('change', (e) => {
+            parallelConfig.concurrency = Math.max(1, Math.min(10, parseInt(e.target.value) || 3));
+            e.target.value = parallelConfig.concurrency;
+            saveCurrentSettings();
+        });
+
+        document.getElementById('ttw-parallel-mode').addEventListener('change', (e) => {
+            parallelConfig.mode = e.target.value;
+            saveCurrentSettings();
         });
 
         document.getElementById('ttw-volume-mode').addEventListener('change', (e) => {
@@ -3224,7 +3450,7 @@ ${memory.content}
     }
 
     function saveCurrentSettings() {
-        settings.chunkSize = parseInt(document.getElementById('ttw-chunk-size').value) || 150000;
+        settings.chunkSize = parseInt(document.getElementById('ttw-chunk-size').value) || 15000;
         settings.apiTimeout = (parseInt(document.getElementById('ttw-api-timeout').value) || 120) * 1000;
         incrementalOutputMode = document.getElementById('ttw-incremental-mode').checked;
         useVolumeMode = document.getElementById('ttw-volume-mode').checked;
@@ -3234,6 +3460,11 @@ ${memory.content}
         settings.customWorldbookPrompt = document.getElementById('ttw-worldbook-prompt').value;
         settings.customPlotPrompt = document.getElementById('ttw-plot-prompt').value;
         settings.customStylePrompt = document.getElementById('ttw-style-prompt').value;
+
+        // 保存并行配置
+        settings.parallelEnabled = parallelConfig.enabled;
+        settings.parallelConcurrency = parallelConfig.concurrency;
+        settings.parallelMode = parallelConfig.mode;
 
         try {
             localStorage.setItem('txtToWorldbookSettings', JSON.stringify(settings));
@@ -3249,6 +3480,11 @@ ${memory.content}
                 const parsed = JSON.parse(saved);
                 settings = { ...defaultSettings, ...parsed };
                 useVolumeMode = settings.useVolumeMode || false;
+
+                // 恢复并行配置
+                parallelConfig.enabled = settings.parallelEnabled !== undefined ? settings.parallelEnabled : true;
+                parallelConfig.concurrency = settings.parallelConcurrency || 3;
+                parallelConfig.mode = settings.parallelMode || 'independent';
             }
         } catch (e) {
             console.error('加载设置失败:', e);
@@ -3264,6 +3500,11 @@ ${memory.content}
         document.getElementById('ttw-plot-prompt').value = settings.customPlotPrompt || '';
         document.getElementById('ttw-style-prompt').value = settings.customStylePrompt || '';
 
+        // 恢复并行设置UI
+        document.getElementById('ttw-parallel-enabled').checked = parallelConfig.enabled;
+        document.getElementById('ttw-parallel-concurrency').value = parallelConfig.concurrency;
+        document.getElementById('ttw-parallel-mode').value = parallelConfig.mode;
+
         const indicator = document.getElementById('ttw-volume-indicator');
         if (indicator) {
             indicator.style.display = useVolumeMode ? 'block' : 'none';
@@ -3277,6 +3518,7 @@ ${memory.content}
             `📚 世界书词条: ${settings.customWorldbookPrompt?.trim() ? '自定义' : '默认'}`,
             `📖 剧情大纲: ${settings.enablePlotOutline ? (settings.customPlotPrompt?.trim() ? '✅ 启用 (自定义)' : '✅ 启用 (默认)') : '❌ 禁用'}`,
             `🎨 文风配置: ${settings.enableLiteraryStyle ? (settings.customStylePrompt?.trim() ? '✅ 启用 (自定义)' : '✅ 启用 (默认)') : '❌ 禁用'}`,
+            `🚀 并行模式: ${parallelConfig.enabled ? `✅ ${parallelConfig.mode === 'independent' ? '独立' : '分批'} (${parallelConfig.concurrency}并发)` : '❌ 禁用'}`,
             `📦 分卷模式: ${useVolumeMode ? '✅ 启用' : '❌ 禁用'}`,
             `⏱️ API超时: ${Math.round((settings.apiTimeout || 120000) / 1000)}秒`
         ];
@@ -3980,8 +4222,9 @@ ${memory.content}
         getVolumes: () => worldbookVolumes,
         getAllVolumesWorldbook: getAllVolumesWorldbook,
         exportTaskState: exportTaskState,
-        importTaskState: importTaskState
+        importTaskState: importTaskState,
+        getParallelConfig: () => parallelConfig
     };
 
-    console.log('📚 TxtToWorldbook v2.2.1 已加载 (修复选择起始位置无效问题)');
+    console.log('📚 TxtToWorldbook v2.3.0 已加载 (🚀并行处理版本)');
 })();
