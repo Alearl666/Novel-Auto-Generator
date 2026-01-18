@@ -1,6 +1,6 @@
 /**
- * TXT转世界书独立模块 v2.4.3
- * 修复: UI关闭后数据恢复、剧情大纲/文风自定义提示词
+ * TXT转世界书独立模块 v2.4.4
+ * 新增: 分类蓝灯/绿灯选择、Roll历史手机端布局优化
  */
 
 (function() {
@@ -23,6 +23,19 @@
     let startFromIndex = 0;
     let userSelectedStartIndex = null;
     let isRerolling = false;
+
+    // ========== 分类灯状态配置 ==========
+    // true = 绿灯(触发式), false = 蓝灯(常驻)
+    let categoryLightSettings = {
+        '角色': false,
+        '地点': true,
+        '组织': false,
+        '剧情大纲': true,
+        '知识书': false,
+        '文风配置': false,
+        '地图环境': true,
+        '剧情节点': true
+    };
 
     // ========== 并行处理配置 ==========
     let parallelConfig = {
@@ -126,7 +139,8 @@
         parallelConcurrency: 3,
         parallelMode: 'independent',
         useTavernPreset: false,
-        customMergePrompt: ''
+        customMergePrompt: '',
+        categoryLightSettings: null
     };
 
     let settings = { ...defaultSettings };
@@ -503,6 +517,31 @@
         if (streamEl) {
             streamEl.textContent = currentStreamContent;
             streamEl.scrollTop = streamEl.scrollHeight;
+        }
+    }
+
+    // ========== 分类灯状态管理 ==========
+    function getCategoryLightState(category) {
+        if (categoryLightSettings.hasOwnProperty(category)) {
+            return categoryLightSettings[category];
+        }
+        // 默认未知分类为蓝灯
+        return false;
+    }
+
+    function setCategoryLightState(category, isGreen) {
+        categoryLightSettings[category] = isGreen;
+        saveCategoryLightSettings();
+    }
+
+    function saveCategoryLightSettings() {
+        settings.categoryLightSettings = { ...categoryLightSettings };
+        try { localStorage.setItem('txtToWorldbookSettings', JSON.stringify(settings)); } catch (e) {}
+    }
+
+    function loadCategoryLightSettings() {
+        if (settings.categoryLightSettings) {
+            categoryLightSettings = { ...categoryLightSettings, ...settings.categoryLightSettings };
         }
     }
 
@@ -1378,21 +1417,21 @@
         modal.id = 'ttw-roll-history-modal';
         modal.className = 'ttw-modal-container';
 
-               let listHtml = '';
+        let listHtml = '';
         if (rollResults.length === 0) {
-            listHtml = '<div style="text-align:center;color:#888;padding:20px;">暂无历史结果<br><br>点击上方"🎲 重Roll"生成</div>';
+            listHtml = '<div style="text-align:center;color:#888;padding:15px;font-size:11px;">暂无历史<br>点击上方重Roll</div>';
         } else {
             rollResults.forEach((roll, idx) => {
                 const time = new Date(roll.timestamp).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
                 const entryCount = roll.result ? Object.keys(roll.result).reduce((sum, cat) => sum + (typeof roll.result[cat] === 'object' ? Object.keys(roll.result[cat]).length : 0), 0) : 0;
                 const isCurrentSelected = memory.result && JSON.stringify(memory.result) === JSON.stringify(roll.result);
                 listHtml += `
-                    <div class="ttw-roll-item ${isCurrentSelected ? 'selected' : ''}" data-roll-id="${roll.id}" data-roll-index="${idx}" style="padding:6px 8px;background:${isCurrentSelected ? 'rgba(39,174,96,0.2)' : 'rgba(0,0,0,0.2)'};border-radius:6px;margin-bottom:6px;cursor:pointer;border-left:3px solid ${isCurrentSelected ? '#27ae60' : '#9b59b6'};">
-                        <div style="display:flex;justify-content:space-between;align-items:center;">
-                            <span style="font-weight:bold;font-size:11px;color:${isCurrentSelected ? '#27ae60' : '#e67e22'};">R${idx + 1}${isCurrentSelected ? '✓' : ''}</span>
-                            <span style="font-size:9px;color:#888;">${time}</span>
+                    <div class="ttw-roll-item ${isCurrentSelected ? 'selected' : ''}" data-roll-id="${roll.id}" data-roll-index="${idx}">
+                        <div class="ttw-roll-item-header">
+                            <span class="ttw-roll-item-title">#${idx + 1}${isCurrentSelected ? ' ✓' : ''}</span>
+                            <span class="ttw-roll-item-time">${time}</span>
                         </div>
-                        <div style="font-size:9px;color:#aaa;margin-top:2px;">${entryCount}条</div>
+                        <div class="ttw-roll-item-info">${entryCount}条目</div>
                     </div>
                 `;
             });
@@ -1405,18 +1444,18 @@
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body">
-                    <div style="display:flex;gap:15px;height:400px;">
-                        <div style="width:100px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:8px;padding:10px;">
-                            <button id="ttw-do-reroll" class="ttw-btn ttw-btn-primary" style="width:100%;margin-bottom:12px;">🎲 重新Roll</button>
-                            ${listHtml}
+                    <div class="ttw-roll-history-container">
+                        <div class="ttw-roll-history-left">
+                            <button id="ttw-do-reroll" class="ttw-btn ttw-btn-primary ttw-roll-reroll-btn">🎲 重Roll</button>
+                            <div class="ttw-roll-list">${listHtml}</div>
                         </div>
-                        <div id="ttw-roll-detail" style="flex:1;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:8px;padding:15px;">
-                            <div style="text-align:center;color:#888;padding:40px;">👈 点击左侧Roll结果查看详情</div>
+                        <div id="ttw-roll-detail" class="ttw-roll-history-right">
+                            <div style="text-align:center;color:#888;padding:40px;font-size:12px;">👈 点击左侧查看</div>
                         </div>
                     </div>
                 </div>
                 <div class="ttw-modal-footer">
-                    <button class="ttw-btn ttw-btn-warning" id="ttw-clear-rolls">🗑️ 清空历史</button>
+                    <button class="ttw-btn ttw-btn-warning" id="ttw-clear-rolls">🗑️ 清空</button>
                     <button class="ttw-btn" id="ttw-close-roll-history">关闭</button>
                 </div>
             </div>
@@ -1431,14 +1470,14 @@
         modal.querySelector('#ttw-do-reroll').addEventListener('click', async () => {
             const btn = modal.querySelector('#ttw-do-reroll');
             btn.disabled = true;
-            btn.textContent = '🔄 生成中...';
+            btn.textContent = '🔄...';
             try {
                 await rerollMemory(index);
                 modal.remove();
                 showRollHistorySelector(index);
             } catch (error) {
                 btn.disabled = false;
-                btn.textContent = '🎲 重新Roll';
+                btn.textContent = '🎲 重Roll';
                 alert('重Roll失败: ' + error.message);
             }
         });
@@ -1457,18 +1496,17 @@
                 const roll = rollResults[rollIndex];
                 const detailDiv = modal.querySelector('#ttw-roll-detail');
 
-                modal.querySelectorAll('.ttw-roll-item').forEach(i => { i.style.background = 'rgba(0,0,0,0.2)'; i.style.borderLeftColor = '#9b59b6'; });
-                item.style.background = 'rgba(0,0,0,0.4)';
-                item.style.borderLeftColor = '#e67e22';
+                modal.querySelectorAll('.ttw-roll-item').forEach(i => i.classList.remove('active'));
+                item.classList.add('active');
 
                 const time = new Date(roll.timestamp).toLocaleString('zh-CN');
                 detailDiv.innerHTML = `
-                    <div style="margin-bottom:15px;padding-bottom:15px;border-bottom:1px solid #444;">
-                        <h4 style="color:#e67e22;margin:0 0 10px;">Roll #${rollIndex + 1}</h4>
-                        <div style="font-size:12px;color:#888;margin-bottom:10px;">生成时间: ${time}</div>
-                        <button class="ttw-btn ttw-btn-primary ttw-btn-small" id="ttw-use-this-roll">✅ 使用这个结果</button>
+                    <div class="ttw-roll-detail-header">
+                        <h4>Roll #${rollIndex + 1}</h4>
+                        <div class="ttw-roll-detail-time">${time}</div>
+                        <button class="ttw-btn ttw-btn-primary ttw-btn-small" id="ttw-use-this-roll">✅ 使用此结果</button>
                     </div>
-                    <pre style="white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.5;max-height:280px;overflow-y:auto;">${JSON.stringify(roll.result, null, 2)}</pre>
+                    <pre class="ttw-roll-detail-content">${JSON.stringify(roll.result, null, 2)}</pre>
                 `;
 
                 detailDiv.querySelector('#ttw-use-this-roll').addEventListener('click', async () => {
@@ -1756,11 +1794,12 @@
     function convertToSillyTavernFormat(worldbook) {
         const entries = [];
         let entryId = 0;
-        const triggerCategories = new Set(['地点', '剧情大纲']);
 
         for (const [category, categoryData] of Object.entries(worldbook)) {
             if (typeof categoryData !== 'object' || categoryData === null) continue;
-            const isTriggerCategory = triggerCategories.has(category);
+
+            // 使用分类灯状态配置
+            const isGreenLight = getCategoryLightState(category);
 
             for (const [itemName, itemData] of Object.entries(categoryData)) {
                 if (typeof itemData !== 'object' || itemData === null) continue;
@@ -1775,8 +1814,8 @@
                         keysecondary: [],
                         comment: `${category} - ${itemName}`,
                         content: String(itemData.内容).trim(),
-                        constant: !isTriggerCategory,
-                        selective: isTriggerCategory,
+                        constant: !isGreenLight,  // 蓝灯 = constant: true
+                        selective: isGreenLight,   // 绿灯 = selective: true
                         selectiveLogic: 0,
                         addMemo: true,
                         order: entryId * 100,
@@ -1862,7 +1901,7 @@
 
     async function exportTaskState() {
         const state = {
-            version: '2.4.3',
+            version: '2.4.4',
             timestamp: Date.now(),
             memoryQueue,
             generatedWorldbook,
@@ -1870,7 +1909,8 @@
             currentVolumeIndex,
             fileHash: currentFileHash,
             settings,
-            parallelConfig
+            parallelConfig,
+            categoryLightSettings
         };
         const timeString = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[:/\s]/g, '').replace(/,/g, '-');
         const fileName = currentFile ? `${currentFile.name.replace(/\.[^/.]+$/, '')}-任务状态-${timeString}.json` : `任务状态-${timeString}.json`;
@@ -1903,6 +1943,7 @@
                 currentFileHash = state.fileHash || null;
                 if (state.settings) settings = { ...defaultSettings, ...state.settings };
                 if (state.parallelConfig) parallelConfig = { ...parallelConfig, ...state.parallelConfig };
+                if (state.categoryLightSettings) categoryLightSettings = { ...categoryLightSettings, ...state.categoryLightSettings };
                 const firstUnprocessed = memoryQueue.findIndex(m => !m.processed || m.failed);
                 startFromIndex = firstUnprocessed !== -1 ? firstUnprocessed : 0;
                 userSelectedStartIndex = null;
@@ -1957,7 +1998,7 @@
         helpModal.innerHTML = `
             <div class="ttw-modal" style="max-width:650px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">❓ TXT转世界书 v2.4.3 帮助</span>
+                    <span class="ttw-modal-title">❓ TXT转世界书 v2.4.4 帮助</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
@@ -1971,21 +2012,22 @@
                             <li><strong>📝 记忆编辑</strong>：点击记忆可编辑/复制内容</li>
                             <li><strong>🎲 重Roll功能</strong>：每个记忆可多次生成，选择最佳结果</li>
                             <li><strong>📥 合并导入的世界书</strong>：导入已有世界书，AI智能合并相同条目</li>
+                            <li><strong>🔵🟢 灯状态切换</strong>：每个分类可单独设置蓝灯(常驻)或绿灯(触发)</li>
                         </ul>
                     </div>
                     <div style="margin-bottom:16px;">
-                        <h4 style="color:#3498db;margin:0 0 10px;">🚀 处理模式</h4>
+                        <h4 style="color:#3498db;margin:0 0 10px;">💡 蓝灯/绿灯说明</h4>
                         <p style="color:#ccc;line-height:1.6;margin:0;">
-                            <strong>独立模式</strong>：最快，每个记忆独立提取<br>
-                            <strong>分批模式</strong>：批次间累积上下文，更连贯
+                            <strong style="color:#3498db;">🔵 蓝灯(常驻)</strong>：条目始终激活，constant=true<br>
+                            <strong style="color:#27ae60;">🟢 绿灯(触发)</strong>：关键词匹配时激活，selective=true
                         </p>
                     </div>
                     <div>
                         <h4 style="color:#9b59b6;margin:0 0 10px;">💡 使用技巧</h4>
                         <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
                             <li>点击记忆块可<strong>查看/编辑/复制</strong></li>
-                            <li>追加功能会将当前记忆合并到目标并<strong>删除当前记忆</strong></li>
-                            <li>用<strong>📥 合并导入的世界书</strong>合并多个世界书</li>
+                            <li>在世界书预览中点击分类旁的<strong>灯图标</strong>切换状态</li>
+                            <li>灯状态会在导出时应用</li>
                         </ul>
                     </div>
                 </div>
@@ -2289,7 +2331,7 @@
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v2.4.3</span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v2.4.4</span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -2496,35 +2538,30 @@
         addModalStyles();
         bindModalEvents();
         loadSavedSettings();
+        loadCategoryLightSettings();
         checkAndRestoreState();
 
-        // 【修复】恢复已有的memoryQueue数据到UI
+        // 恢复已有的memoryQueue数据到UI
         restoreExistingState();
     }
 
-    // 【修复】恢复已存在的状态到UI（关闭再打开时）
+    // 恢复已存在的状态到UI（关闭再打开时）
     function restoreExistingState() {
-        // 如果memoryQueue有数据，恢复UI状态
         if (memoryQueue.length > 0) {
-            // 显示文件信息
             document.getElementById('ttw-upload-area').style.display = 'none';
             document.getElementById('ttw-file-info').style.display = 'flex';
             document.getElementById('ttw-file-name').textContent = currentFile ? currentFile.name : '已加载的文件';
             const totalChars = memoryQueue.reduce((sum, m) => sum + m.content.length, 0);
             document.getElementById('ttw-file-size').textContent = `(${(totalChars / 1024).toFixed(1)} KB, ${memoryQueue.length}块)`;
 
-            // 显示记忆队列
             showQueueSection(true);
             updateMemoryQueueUI();
 
-            // 启用开始按钮
             document.getElementById('ttw-start-btn').disabled = false;
             updateStartButtonState(false);
 
-            // 如果有分卷模式，更新指示器
             if (useVolumeMode) updateVolumeIndicator();
 
-            // 如果有生成的世界书，显示结果区域
             if (Object.keys(generatedWorldbook).length > 0) {
                 showResultSection(true);
                 updateWorldbookPreview();
@@ -2631,6 +2668,41 @@
 
             .ttw-merge-option{display:flex;align-items:center;gap:8px;padding:10px;background:rgba(0,0,0,0.2);border-radius:6px;cursor:pointer;}
             .ttw-merge-option input{width:18px;height:18px;}
+
+            /* Roll历史弹窗优化样式 */
+            .ttw-roll-history-container{display:flex;gap:10px;height:400px;}
+            .ttw-roll-history-left{width:100px;min-width:100px;max-width:100px;display:flex;flex-direction:column;gap:8px;overflow:hidden;}
+            .ttw-roll-history-right{flex:1;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:8px;padding:12px;}
+            .ttw-roll-reroll-btn{width:100%;padding:8px 4px !important;font-size:11px !important;}
+            .ttw-roll-list{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:6px;}
+            .ttw-roll-item{padding:6px 8px;background:rgba(0,0,0,0.2);border-radius:4px;cursor:pointer;border-left:2px solid #9b59b6;transition:all 0.2s;}
+            .ttw-roll-item:hover,.ttw-roll-item.active{background:rgba(0,0,0,0.4);}
+            .ttw-roll-item.selected{border-left-color:#27ae60;background:rgba(39,174,96,0.15);}
+            .ttw-roll-item-header{display:flex;justify-content:space-between;align-items:center;gap:4px;}
+            .ttw-roll-item-title{font-size:11px;font-weight:bold;color:#e67e22;white-space:nowrap;}
+            .ttw-roll-item-time{font-size:9px;color:#888;white-space:nowrap;}
+            .ttw-roll-item-info{font-size:9px;color:#aaa;margin-top:2px;}
+            .ttw-roll-detail-header{margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid #444;}
+            .ttw-roll-detail-header h4{color:#e67e22;margin:0 0 6px 0;font-size:14px;}
+            .ttw-roll-detail-time{font-size:11px;color:#888;margin-bottom:8px;}
+            .ttw-roll-detail-content{white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.5;max-height:280px;overflow-y:auto;background:rgba(0,0,0,0.2);padding:10px;border-radius:6px;}
+
+            /* 灯状态切换按钮 */
+            .ttw-light-toggle{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;cursor:pointer;font-size:14px;transition:all 0.2s;border:none;margin-left:8px;}
+            .ttw-light-toggle.blue{background:rgba(52,152,219,0.3);color:#3498db;}
+            .ttw-light-toggle.blue:hover{background:rgba(52,152,219,0.5);}
+            .ttw-light-toggle.green{background:rgba(39,174,96,0.3);color:#27ae60;}
+            .ttw-light-toggle.green:hover{background:rgba(39,174,96,0.5);}
+
+            /* 手机端适配 */
+            @media (max-width: 768px) {
+                .ttw-roll-history-container{flex-direction:column;height:auto;}
+                .ttw-roll-history-left{width:100%;max-width:100%;flex-direction:row;flex-wrap:wrap;height:auto;max-height:120px;}
+                .ttw-roll-reroll-btn{width:auto;flex-shrink:0;}
+                .ttw-roll-list{flex-direction:row;flex-wrap:wrap;gap:4px;}
+                .ttw-roll-item{flex:0 0 auto;padding:4px 8px;}
+                .ttw-roll-history-right{min-height:250px;}
+            }
         `;
         document.head.appendChild(styles);
     }
@@ -2715,7 +2787,6 @@
         if (e.key === 'Escape' && modalContainer) { e.stopPropagation(); e.preventDefault(); closeModal(); }
     }
 
-    // 【修复】saveCurrentSettings - 添加保存customPlotPrompt和customStylePrompt
     function saveCurrentSettings() {
         settings.chunkSize = parseInt(document.getElementById('ttw-chunk-size').value) || 15000;
         settings.apiTimeout = (parseInt(document.getElementById('ttw-api-timeout').value) || 120) * 1000;
@@ -2725,13 +2796,13 @@
         settings.enablePlotOutline = document.getElementById('ttw-enable-plot').checked;
         settings.enableLiteraryStyle = document.getElementById('ttw-enable-style').checked;
         settings.customWorldbookPrompt = document.getElementById('ttw-worldbook-prompt').value;
-        // 【修复】添加这两行，保存剧情大纲和文风配置的自定义提示词
         settings.customPlotPrompt = document.getElementById('ttw-plot-prompt').value;
         settings.customStylePrompt = document.getElementById('ttw-style-prompt').value;
         settings.useTavernPreset = document.getElementById('ttw-use-tavern-preset').checked;
         settings.parallelEnabled = parallelConfig.enabled;
         settings.parallelConcurrency = parallelConfig.concurrency;
         settings.parallelMode = parallelConfig.mode;
+        settings.categoryLightSettings = { ...categoryLightSettings };
         try { localStorage.setItem('txtToWorldbookSettings', JSON.stringify(settings)); } catch (e) {}
     }
 
@@ -2755,7 +2826,6 @@
         document.getElementById('ttw-enable-plot').checked = settings.enablePlotOutline;
         document.getElementById('ttw-enable-style').checked = settings.enableLiteraryStyle;
         document.getElementById('ttw-worldbook-prompt').value = settings.customWorldbookPrompt || '';
-        // 【修复】加载时也要设置这两个textarea的值
         document.getElementById('ttw-plot-prompt').value = settings.customPlotPrompt || '';
         document.getElementById('ttw-style-prompt').value = settings.customStylePrompt || '';
         document.getElementById('ttw-use-tavern-preset').checked = settings.useTavernPreset || false;
@@ -2793,7 +2863,6 @@
                     updateSettingsUI();
                     document.getElementById('ttw-start-btn').disabled = false;
 
-                    // 更新文件信息显示
                     document.getElementById('ttw-upload-area').style.display = 'none';
                     document.getElementById('ttw-file-info').style.display = 'flex';
                     document.getElementById('ttw-file-name').textContent = '已恢复的任务';
@@ -2998,6 +3067,7 @@
             headerInfo = `<div style="margin-bottom:12px;padding:10px;background:rgba(155,89,182,0.2);border-radius:6px;font-size:12px;color:#bb86fc;">📦 分卷模式 | 共 ${worldbookVolumes.length} 卷</div>`;
         }
         container.innerHTML = headerInfo + formatWorldbookAsCards(worldbookToShow);
+        bindLightToggleEvents(container);
     }
 
     function formatWorldbookAsCards(worldbook) {
@@ -3011,9 +3081,16 @@
             const entryCount = typeof entries === 'object' ? Object.keys(entries).length : 0;
             if (entryCount === 0) continue;
             totalEntries += entryCount;
+
+            const isGreen = getCategoryLightState(category);
+            const lightClass = isGreen ? 'green' : 'blue';
+            const lightIcon = isGreen ? '🟢' : '🔵';
+            const lightTitle = isGreen ? '绿灯(触发式) - 点击切换为蓝灯' : '蓝灯(常驻) - 点击切换为绿灯';
+
             html += `<div style="margin-bottom:12px;border:1px solid #e67e22;border-radius:8px;overflow:hidden;">
-                <div style="background:linear-gradient(135deg,#e67e22,#d35400);padding:10px 14px;cursor:pointer;font-weight:bold;display:flex;justify-content:space-between;" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
-                    <span>📁 ${category}</span><span style="font-size:12px;">${entryCount} 条目</span>
+                <div style="background:linear-gradient(135deg,#e67e22,#d35400);padding:10px 14px;cursor:pointer;font-weight:bold;display:flex;justify-content:space-between;align-items:center;" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+                    <span style="display:flex;align-items:center;">📁 ${category}<button class="ttw-light-toggle ${lightClass}" data-category="${category}" title="${lightTitle}" onclick="event.stopPropagation();">${lightIcon}</button></span>
+                    <span style="font-size:12px;">${entryCount} 条目</span>
                 </div>
                 <div style="background:#2d2d2d;display:none;">`;
             for (const entryName in entries) {
@@ -3046,6 +3123,23 @@
         return `<div style="margin-bottom:12px;font-size:13px;">共 ${Object.keys(worldbook).filter(k => Object.keys(worldbook[k]).length > 0).length} 个分类, ${totalEntries} 个条目</div>` + html;
     }
 
+    function bindLightToggleEvents(container) {
+        container.querySelectorAll('.ttw-light-toggle').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const category = btn.dataset.category;
+                const currentState = getCategoryLightState(category);
+                const newState = !currentState;
+                setCategoryLightState(category, newState);
+
+                // 更新按钮显示
+                btn.className = `ttw-light-toggle ${newState ? 'green' : 'blue'}`;
+                btn.textContent = newState ? '🟢' : '🔵';
+                btn.title = newState ? '绿灯(触发式) - 点击切换为蓝灯' : '蓝灯(常驻) - 点击切换为绿灯';
+            });
+        });
+    }
+
     function showWorldbookView() {
         const existingModal = document.getElementById('ttw-worldbook-view-modal');
         if (existingModal) existingModal.remove();
@@ -3059,11 +3153,15 @@
                     <span class="ttw-modal-title">📖 世界书详细视图${useVolumeMode ? ` (${worldbookVolumes.length}卷合并)` : ''}</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
-                <div class="ttw-modal-body">${formatWorldbookAsCards(worldbookToShow)}</div>
-                <div class="ttw-modal-footer"><button class="ttw-btn" id="ttw-close-worldbook-view">关闭</button></div>
+                <div class="ttw-modal-body" id="ttw-worldbook-view-body">${formatWorldbookAsCards(worldbookToShow)}</div>
+                <div class="ttw-modal-footer">
+                    <div style="font-size:11px;color:#888;margin-right:auto;">💡 点击分类旁的灯图标切换蓝灯/绿灯状态</div>
+                    <button class="ttw-btn" id="ttw-close-worldbook-view">关闭</button>
+                </div>
             </div>
         `;
         document.body.appendChild(viewModal);
+        bindLightToggleEvents(viewModal.querySelector('#ttw-worldbook-view-body'));
         viewModal.querySelector('.ttw-modal-close').addEventListener('click', () => viewModal.remove());
         viewModal.querySelector('#ttw-close-worldbook-view').addEventListener('click', () => viewModal.remove());
         viewModal.addEventListener('click', (e) => { if (e.target === viewModal) viewModal.remove(); });
@@ -3172,7 +3270,6 @@
     function closeModal() {
         if (modalContainer) { modalContainer.remove(); modalContainer = null; }
         document.removeEventListener('keydown', handleEscKey, true);
-        // 【修复】关闭时不清空数据，只移除DOM
     }
 
     function open() { createModal(); }
@@ -3191,8 +3288,10 @@
         getParallelConfig: () => parallelConfig,
         rerollMemory,
         showRollHistory: showRollHistorySelector,
-        importAndMerge: importAndMergeWorldbook
+        importAndMerge: importAndMergeWorldbook,
+        getCategoryLightSettings: () => categoryLightSettings,
+        setCategoryLight: setCategoryLightState
     };
 
-    console.log('📚 TxtToWorldbook v2.4.3 已加载');
+    console.log('📚 TxtToWorldbook v2.4.4 已加载');
 })();
