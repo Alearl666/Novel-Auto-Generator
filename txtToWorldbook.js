@@ -1378,7 +1378,7 @@
         modal.id = 'ttw-roll-history-modal';
         modal.className = 'ttw-modal-container';
 
-        let listHtml = '';
+               let listHtml = '';
         if (rollResults.length === 0) {
             listHtml = '<div style="text-align:center;color:#888;padding:20px;">暂无历史结果<br><br>点击上方"🎲 重Roll"生成</div>';
         } else {
@@ -1387,9 +1387,12 @@
                 const entryCount = roll.result ? Object.keys(roll.result).reduce((sum, cat) => sum + (typeof roll.result[cat] === 'object' ? Object.keys(roll.result[cat]).length : 0), 0) : 0;
                 const isCurrentSelected = memory.result && JSON.stringify(memory.result) === JSON.stringify(roll.result);
                 listHtml += `
-                    <div class="ttw-roll-item ${isCurrentSelected ? 'selected' : ''}" data-roll-id="${roll.id}" data-roll-index="${idx}" style="padding:10px;background:${isCurrentSelected ? 'rgba(39,174,96,0.2)' : 'rgba(0,0,0,0.2)'};border-radius:6px;margin-bottom:8px;cursor:pointer;border-left:3px solid ${isCurrentSelected ? '#27ae60' : '#9b59b6'};">
-                        <div style="display:flex;justify-content:space-between;"><span style="font-weight:bold;color:${isCurrentSelected ? '#27ae60' : '#e67e22'};">Roll #${idx + 1} ${isCurrentSelected ? '(当前)' : ''}</span><span style="font-size:11px;color:#888;">${time}</span></div>
-                        <div style="font-size:11px;color:#aaa;margin-top:4px;">提取 ${entryCount} 个条目</div>
+                    <div class="ttw-roll-item ${isCurrentSelected ? 'selected' : ''}" data-roll-id="${roll.id}" data-roll-index="${idx}" style="padding:6px 8px;background:${isCurrentSelected ? 'rgba(39,174,96,0.2)' : 'rgba(0,0,0,0.2)'};border-radius:6px;margin-bottom:6px;cursor:pointer;border-left:3px solid ${isCurrentSelected ? '#27ae60' : '#9b59b6'};">
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <span style="font-weight:bold;font-size:11px;color:${isCurrentSelected ? '#27ae60' : '#e67e22'};">R${idx + 1}${isCurrentSelected ? '✓' : ''}</span>
+                            <span style="font-size:9px;color:#888;">${time}</span>
+                        </div>
+                        <div style="font-size:9px;color:#aaa;margin-top:2px;">${entryCount}条</div>
                     </div>
                 `;
             });
@@ -1403,7 +1406,7 @@
                 </div>
                 <div class="ttw-modal-body">
                     <div style="display:flex;gap:15px;height:400px;">
-                        <div style="width:220px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:8px;padding:10px;">
+                        <div style="width:100px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:8px;padding:10px;">
                             <button id="ttw-do-reroll" class="ttw-btn ttw-btn-primary" style="width:100%;margin-bottom:12px;">🎲 重新Roll</button>
                             ${listHtml}
                         </div>
