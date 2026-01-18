@@ -1,6 +1,6 @@
 /**
- * TXT转世界书独立模块 v2.4.2
- * 修复: UI样式、追加删除、恢复提示、文字说明
+ * TXT转世界书独立模块 v2.4.3
+ * 修复: UI关闭后数据恢复、剧情大纲/文风自定义提示词
  */
 
 (function() {
@@ -1859,7 +1859,7 @@
 
     async function exportTaskState() {
         const state = {
-            version: '2.4.2',
+            version: '2.4.3',
             timestamp: Date.now(),
             memoryQueue,
             generatedWorldbook,
@@ -1929,7 +1929,10 @@
             'ttw-incremental-mode': incrementalOutputMode,
             'ttw-volume-mode': useVolumeMode,
             'ttw-enable-plot': settings.enablePlotOutline,
-            'ttw-enable-style': settings.enableLiteraryStyle
+            'ttw-enable-style': settings.enableLiteraryStyle,
+            'ttw-worldbook-prompt': settings.customWorldbookPrompt || '',
+            'ttw-plot-prompt': settings.customPlotPrompt || '',
+            'ttw-style-prompt': settings.customStylePrompt || ''
         };
         for (const [id, value] of Object.entries(elements)) {
             const el = document.getElementById(id);
@@ -1951,7 +1954,7 @@
         helpModal.innerHTML = `
             <div class="ttw-modal" style="max-width:650px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">❓ TXT转世界书 v2.4.2 帮助</span>
+                    <span class="ttw-modal-title">❓ TXT转世界书 v2.4.3 帮助</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
@@ -1964,7 +1967,7 @@
                         <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
                             <li><strong>📝 记忆编辑</strong>：点击记忆可编辑/复制内容</li>
                             <li><strong>🎲 重Roll功能</strong>：每个记忆可多次生成，选择最佳结果</li>
-                            <li><strong>📥 导入JSON合并</strong>：导入已有世界书，AI智能合并相同条目</li>
+                            <li><strong>📥 合并导入的世界书</strong>：导入已有世界书，AI智能合并相同条目</li>
                         </ul>
                     </div>
                     <div style="margin-bottom:16px;">
@@ -1979,7 +1982,7 @@
                         <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
                             <li>点击记忆块可<strong>查看/编辑/复制</strong></li>
                             <li>追加功能会将当前记忆合并到目标并<strong>删除当前记忆</strong></li>
-                            <li>用<strong>📥 导入世界书JSON进行合并</strong>合并多个世界书</li>
+                            <li>用<strong>📥 合并导入的世界书</strong>合并多个世界书</li>
                         </ul>
                     </div>
                 </div>
@@ -2046,7 +2049,7 @@
         selectorModal.addEventListener('click', (e) => { if (e.target === selectorModal) selectorModal.remove(); });
     }
 
-    // ========== 【修复】查看/编辑记忆内容 - 追加后删除当前记忆 ==========
+    // ========== 查看/编辑记忆内容 ==========
     function showMemoryContentModal(index) {
         const memory = memoryQueue[index];
         if (!memory) return;
@@ -2149,7 +2152,6 @@
             deleteMemoryAt(index);
         });
 
-        // 【修复】追加到上一个 - 追加后删除当前记忆
         contentModal.querySelector('#ttw-append-to-prev').addEventListener('click', () => {
             if (index === 0) return;
             const prevMemory = memoryQueue[index - 1];
@@ -2158,23 +2160,14 @@
                 prevMemory.processed = false;
                 prevMemory.failed = false;
                 prevMemory.result = null;
-
-                // 删除当前记忆
                 memoryQueue.splice(index, 1);
-
-                // 重新编号
-                memoryQueue.forEach((m, i) => {
-                    if (!m.title.includes('-')) m.title = `记忆${i + 1}`;
-                });
-
-                // 调整索引
+                memoryQueue.forEach((m, i) => { if (!m.title.includes('-')) m.title = `记忆${i + 1}`; });
                 if (startFromIndex > index) startFromIndex = Math.max(0, startFromIndex - 1);
                 else if (startFromIndex >= memoryQueue.length) startFromIndex = Math.max(0, memoryQueue.length - 1);
                 if (userSelectedStartIndex !== null) {
                     if (userSelectedStartIndex > index) userSelectedStartIndex = Math.max(0, userSelectedStartIndex - 1);
                     else if (userSelectedStartIndex >= memoryQueue.length) userSelectedStartIndex = null;
                 }
-
                 updateMemoryQueueUI();
                 updateStartButtonState(false);
                 contentModal.remove();
@@ -2182,7 +2175,6 @@
             }
         });
 
-        // 【修复】追加到下一个 - 追加后删除当前记忆
         contentModal.querySelector('#ttw-append-to-next').addEventListener('click', () => {
             if (index === memoryQueue.length - 1) return;
             const nextMemory = memoryQueue[index + 1];
@@ -2191,23 +2183,14 @@
                 nextMemory.processed = false;
                 nextMemory.failed = false;
                 nextMemory.result = null;
-
-                // 删除当前记忆
                 memoryQueue.splice(index, 1);
-
-                // 重新编号
-                memoryQueue.forEach((m, i) => {
-                    if (!m.title.includes('-')) m.title = `记忆${i + 1}`;
-                });
-
-                // 调整索引
+                memoryQueue.forEach((m, i) => { if (!m.title.includes('-')) m.title = `记忆${i + 1}`; });
                 if (startFromIndex > index) startFromIndex = Math.max(0, startFromIndex - 1);
                 else if (startFromIndex >= memoryQueue.length) startFromIndex = Math.max(0, memoryQueue.length - 1);
                 if (userSelectedStartIndex !== null) {
                     if (userSelectedStartIndex > index) userSelectedStartIndex = Math.max(0, userSelectedStartIndex - 1);
                     else if (userSelectedStartIndex >= memoryQueue.length) userSelectedStartIndex = null;
                 }
-
                 updateMemoryQueueUI();
                 updateStartButtonState(false);
                 contentModal.remove();
@@ -2303,7 +2286,7 @@
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v2.4.2</span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v2.4.3</span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -2431,7 +2414,7 @@
                         <div class="ttw-section-header">
                             <span>📄 文件上传</span>
                             <div style="display:flex;gap:8px;">
-                                <button id="ttw-import-json" class="ttw-btn-small" title="导入已有世界书JSON进行合并">📥 导入世界书JSON进行合并</button>
+                                <button id="ttw-import-json" class="ttw-btn-small" title="导入已有世界书JSON进行合并">📥 合并导入的世界书</button>
                                 <button id="ttw-import-task" class="ttw-btn-small">📥 导入任务</button>
                                 <button id="ttw-export-task" class="ttw-btn-small">📤 导出任务</button>
                             </div>
@@ -2511,6 +2494,39 @@
         bindModalEvents();
         loadSavedSettings();
         checkAndRestoreState();
+
+        // 【修复】恢复已有的memoryQueue数据到UI
+        restoreExistingState();
+    }
+
+    // 【修复】恢复已存在的状态到UI（关闭再打开时）
+    function restoreExistingState() {
+        // 如果memoryQueue有数据，恢复UI状态
+        if (memoryQueue.length > 0) {
+            // 显示文件信息
+            document.getElementById('ttw-upload-area').style.display = 'none';
+            document.getElementById('ttw-file-info').style.display = 'flex';
+            document.getElementById('ttw-file-name').textContent = currentFile ? currentFile.name : '已加载的文件';
+            const totalChars = memoryQueue.reduce((sum, m) => sum + m.content.length, 0);
+            document.getElementById('ttw-file-size').textContent = `(${(totalChars / 1024).toFixed(1)} KB, ${memoryQueue.length}块)`;
+
+            // 显示记忆队列
+            showQueueSection(true);
+            updateMemoryQueueUI();
+
+            // 启用开始按钮
+            document.getElementById('ttw-start-btn').disabled = false;
+            updateStartButtonState(false);
+
+            // 如果有分卷模式，更新指示器
+            if (useVolumeMode) updateVolumeIndicator();
+
+            // 如果有生成的世界书，显示结果区域
+            if (Object.keys(generatedWorldbook).length > 0) {
+                showResultSection(true);
+                updateWorldbookPreview();
+            }
+        }
     }
 
     function addModalStyles() {
@@ -2536,7 +2552,6 @@
             .ttw-section.collapsed .ttw-collapse-icon{transform:rotate(-90deg);}
             .ttw-section.collapsed .ttw-section-content{display:none;}
 
-            /* 【修复】统一输入框样式 */
             .ttw-input,.ttw-select,.ttw-textarea,.ttw-textarea-small,.ttw-input-small{
                 background:rgba(0,0,0,0.3);
                 border:1px solid var(--SmartThemeBorderColor,#555);
@@ -2555,21 +2570,17 @@
             .ttw-label{display:block;margin-bottom:6px;font-size:12px;opacity:0.9;}
             .ttw-setting-hint{font-size:11px;color:#888;margin-top:4px;}
 
-            /* 设置卡片 */
             .ttw-setting-card{margin-bottom:16px;padding:12px;border-radius:8px;}
             .ttw-setting-card-green{background:rgba(39,174,96,0.1);border:1px solid rgba(39,174,96,0.3);}
             .ttw-setting-card-blue{background:rgba(52,152,219,0.15);border:1px solid rgba(52,152,219,0.3);}
 
-            /* 复选框样式 */
             .ttw-checkbox-label{display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;}
             .ttw-checkbox-label input[type="checkbox"]{width:18px;height:18px;accent-color:#e67e22;flex-shrink:0;}
             .ttw-checkbox-with-hint{padding:8px 12px;background:rgba(0,0,0,0.15);border-radius:6px;}
             .ttw-checkbox-purple{background:rgba(155,89,182,0.15);border:1px solid rgba(155,89,182,0.3);}
 
-            /* 分卷指示器 */
             .ttw-volume-indicator{display:none;margin-top:12px;padding:8px 12px;background:rgba(155,89,182,0.2);border-radius:6px;font-size:12px;color:#bb86fc;}
 
-            /* 提示词配置 */
             .ttw-prompt-config{margin-top:16px;border:1px solid var(--SmartThemeBorderColor,#444);border-radius:8px;overflow:hidden;}
             .ttw-prompt-config-header{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:rgba(230,126,34,0.15);border-bottom:1px solid var(--SmartThemeBorderColor,#444);font-weight:500;}
             .ttw-prompt-section{border-bottom:1px solid var(--SmartThemeBorderColor,#333);}
@@ -2581,37 +2592,30 @@
             .ttw-prompt-header-green{background:rgba(46,204,113,0.1);}
             .ttw-prompt-content{display:none;padding:12px 14px;background:rgba(0,0,0,0.15);}
 
-            /* 徽章 */
             .ttw-badge{font-size:10px;padding:2px 6px;border-radius:10px;font-weight:500;}
             .ttw-badge-blue{background:rgba(52,152,219,0.3);color:#5dade2;}
             .ttw-badge-gray{background:rgba(149,165,166,0.3);color:#bdc3c7;}
 
-            /* 上传区域 */
             .ttw-upload-area{border:2px dashed var(--SmartThemeBorderColor,#555);border-radius:8px;padding:40px 20px;text-align:center;cursor:pointer;transition:all 0.2s;}
             .ttw-upload-area:hover{border-color:#e67e22;background:rgba(230,126,34,0.1);}
             .ttw-file-info{display:none;align-items:center;gap:12px;padding:12px;background:rgba(0,0,0,0.3);border-radius:6px;margin-top:12px;}
 
-            /* 记忆队列 */
             .ttw-memory-queue{max-height:200px;overflow-y:auto;}
             .ttw-memory-item{padding:8px 12px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:6px;font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer;transition:background 0.2s;}
             .ttw-memory-item:hover{background:rgba(0,0,0,0.4);}
 
-            /* 进度条 */
             .ttw-progress-bar{width:100%;height:8px;background:rgba(0,0,0,0.3);border-radius:4px;overflow:hidden;margin-bottom:12px;}
             .ttw-progress-fill{height:100%;background:linear-gradient(90deg,#e67e22,#f39c12);border-radius:4px;transition:width 0.3s;width:0%;}
             .ttw-progress-text{font-size:13px;text-align:center;margin-bottom:12px;}
             .ttw-progress-controls{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;}
 
-            /* 实时输出 */
             .ttw-stream-container{display:none;margin-top:12px;border:1px solid var(--SmartThemeBorderColor,#444);border-radius:6px;overflow:hidden;}
             .ttw-stream-header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:rgba(0,0,0,0.3);font-size:12px;}
             .ttw-stream-content{max-height:200px;overflow-y:auto;padding:12px;background:rgba(0,0,0,0.2);font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all;margin:0;font-family:monospace;}
 
-            /* 结果区域 */
             .ttw-result-preview{max-height:300px;overflow-y:auto;background:rgba(0,0,0,0.3);border-radius:6px;padding:12px;margin-bottom:12px;font-size:12px;}
             .ttw-result-actions{display:flex;flex-wrap:wrap;gap:10px;}
 
-            /* 按钮 */
             .ttw-btn{padding:10px 16px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:6px;background:rgba(255,255,255,0.1);color:#fff;font-size:13px;cursor:pointer;transition:all 0.2s;}
             .ttw-btn:hover{background:rgba(255,255,255,0.2);}
             .ttw-btn:disabled{opacity:0.5;cursor:not-allowed;}
@@ -2622,7 +2626,6 @@
             .ttw-btn-small{padding:6px 12px;font-size:12px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:4px;background:rgba(255,255,255,0.1);color:#fff;cursor:pointer;transition:all 0.2s;}
             .ttw-btn-small:hover{background:rgba(255,255,255,0.2);}
 
-            /* 合并选项 */
             .ttw-merge-option{display:flex;align-items:center;gap:8px;padding:10px;background:rgba(0,0,0,0.2);border-radius:6px;cursor:pointer;}
             .ttw-merge-option input{width:18px;height:18px;}
         `;
@@ -2709,6 +2712,7 @@
         if (e.key === 'Escape' && modalContainer) { e.stopPropagation(); e.preventDefault(); closeModal(); }
     }
 
+    // 【修复】saveCurrentSettings - 添加保存customPlotPrompt和customStylePrompt
     function saveCurrentSettings() {
         settings.chunkSize = parseInt(document.getElementById('ttw-chunk-size').value) || 15000;
         settings.apiTimeout = (parseInt(document.getElementById('ttw-api-timeout').value) || 120) * 1000;
@@ -2718,6 +2722,7 @@
         settings.enablePlotOutline = document.getElementById('ttw-enable-plot').checked;
         settings.enableLiteraryStyle = document.getElementById('ttw-enable-style').checked;
         settings.customWorldbookPrompt = document.getElementById('ttw-worldbook-prompt').value;
+        // 【修复】添加这两行，保存剧情大纲和文风配置的自定义提示词
         settings.customPlotPrompt = document.getElementById('ttw-plot-prompt').value;
         settings.customStylePrompt = document.getElementById('ttw-style-prompt').value;
         settings.useTavernPreset = document.getElementById('ttw-use-tavern-preset').checked;
@@ -2747,6 +2752,7 @@
         document.getElementById('ttw-enable-plot').checked = settings.enablePlotOutline;
         document.getElementById('ttw-enable-style').checked = settings.enableLiteraryStyle;
         document.getElementById('ttw-worldbook-prompt').value = settings.customWorldbookPrompt || '';
+        // 【修复】加载时也要设置这两个textarea的值
         document.getElementById('ttw-plot-prompt').value = settings.customPlotPrompt || '';
         document.getElementById('ttw-style-prompt').value = settings.customStylePrompt || '';
         document.getElementById('ttw-use-tavern-preset').checked = settings.useTavernPreset || false;
@@ -2762,7 +2768,6 @@
         alert(`当前提示词预览:\n\n使用酒馆预设: ${settings.useTavernPreset ? '是' : '否'}\n并行模式: ${parallelConfig.enabled ? parallelConfig.mode : '关闭'}\n\n${prompt.substring(0, 2000)}${prompt.length > 2000 ? '...' : ''}`);
     }
 
-    // 【修复】关闭UI重新打开时恢复数据
     async function checkAndRestoreState() {
         try {
             const savedState = await MemoryHistoryDB.loadState();
@@ -2782,7 +2787,15 @@
                     if (useVolumeMode) updateVolumeIndicator();
                     if (startFromIndex >= memoryQueue.length) { showResultSection(true); updateWorldbookPreview(); }
                     updateStartButtonState(false);
+                    updateSettingsUI();
                     document.getElementById('ttw-start-btn').disabled = false;
+
+                    // 更新文件信息显示
+                    document.getElementById('ttw-upload-area').style.display = 'none';
+                    document.getElementById('ttw-file-info').style.display = 'flex';
+                    document.getElementById('ttw-file-name').textContent = '已恢复的任务';
+                    const totalChars = memoryQueue.reduce((sum, m) => sum + m.content.length, 0);
+                    document.getElementById('ttw-file-size').textContent = `(${(totalChars / 1024).toFixed(1)} KB, ${memoryQueue.length}块)`;
                 } else {
                     await MemoryHistoryDB.clearState();
                 }
@@ -3156,6 +3169,7 @@
     function closeModal() {
         if (modalContainer) { modalContainer.remove(); modalContainer = null; }
         document.removeEventListener('keydown', handleEscKey, true);
+        // 【修复】关闭时不清空数据，只移除DOM
     }
 
     function open() { createModal(); }
@@ -3177,5 +3191,5 @@
         importAndMerge: importAndMergeWorldbook
     };
 
-    console.log('📚 TxtToWorldbook v2.4.2 已加载');
+    console.log('📚 TxtToWorldbook v2.4.3 已加载');
 })();
