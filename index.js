@@ -4,9 +4,7 @@ import './txtToWorldbook.js';
 
 const extensionName = "novel-auto-generator";
 
-const defaultSettings = {
-    // 可以根据需要保留 txtToWorldbook 相关的设置
-};
+const defaultSettings = {};
 
 let settings = {};
 
@@ -35,33 +33,25 @@ function saveSettings() {
 
 function createUI() {
     const html = `
-    <div id="nag-container">
-        <div class="inline-drawer">
-            <div class="inline-drawer-toggle inline-drawer-header">
-                <b>📚 TXT转世界书工具</b>
-                <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
-            </div>
-            <div class="inline-drawer-content">
-                <div class="nag-section">
-                    <div class="nag-btn-row">
-                        <button id="nag-btn-txt-to-worldbook" class="menu_button" style="background: linear-gradient(135deg, #e67e22, #d35400); width: 100%;">
-                            📚 TXT转世界书
-                        </button>
-                    </div>
-                    <div style="margin-top: 10px; font-size: 12px; opacity: 0.7; text-align: center;">
-                        将TXT文件转换为SillyTavern世界书格式
-                    </div>
-                </div>
+    <div id="nag-container" class="nag-panel">
+        <div class="nag-header">
+            <h4>📚 TXT转世界书工具</h4>
+        </div>
+        <div class="nag-content">
+            <button id="nag-btn-txt-to-worldbook" class="menu_button" style="background: linear-gradient(135deg, #e67e22, #d35400); width: 100%;">
+                📚 TXT转世界书
+            </button>
+            <div style="margin-top: 10px; font-size: 12px; opacity: 0.7; text-align: center;">
+                将TXT文件转换为SillyTavern世界书格式
             </div>
         </div>
     </div>`;
-    
+
     $('#extensions_settings').append(html);
     bindEvents();
 }
 
 function bindEvents() {
-    // TXT转世界书入口
     $('#nag-btn-txt-to-worldbook').on('click', () => {
         if (typeof window.TxtToWorldbook !== 'undefined') {
             window.TxtToWorldbook.open();
