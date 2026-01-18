@@ -1,6 +1,6 @@
 /**
- * TXT转世界书独立模块 v2.4.1
- * 修复: CSRF问题、重Roll、新增JSON导入合并功能
+ * TXT转世界书独立模块 v2.4.2
+ * 修复: UI样式、追加删除、恢复提示、文字说明
  */
 
 (function() {
@@ -22,8 +22,6 @@
     let currentStreamContent = '';
     let startFromIndex = 0;
     let userSelectedStartIndex = null;
-
-    // ========== 重Roll功能状态 ==========
     let isRerolling = false;
 
     // ========== 并行处理配置 ==========
@@ -87,7 +85,6 @@
 }
 }`;
 
-    // 【新增】默认合并提示词
     const defaultMergePrompt = `你是世界书条目合并专家。请将以下两个相同名称的世界书条目合并为一个，保留所有重要信息，去除重复内容。
 
 ## 合并规则
@@ -119,7 +116,7 @@
         parallelConcurrency: 3,
         parallelMode: 'independent',
         useTavernPreset: false,
-        customMergePrompt: '' // 【新增】
+        customMergePrompt: ''
     };
 
     let settings = { ...defaultSettings };
@@ -499,12 +496,7 @@
         }
     }
 
-    // ========== 【修复】API调用 - 正确使用SillyTavern API ==========
-
-    /**
-     * 【修复】使用SillyTavern的generateRaw或generate函数
-     * 这些函数已经处理了CSRF和预设
-     */
+    // ========== API调用 ==========
     async function callSillyTavernAPI(prompt, useTavernPreset = false, taskId = null) {
         const timeout = settings.apiTimeout || 120000;
 
@@ -512,7 +504,6 @@
         updateStreamContent(`\n📤 ${logPrefix} 发送请求...\n`);
 
         try {
-            // 检查SillyTavern环境
             if (typeof SillyTavern === 'undefined' || !SillyTavern.getContext) {
                 throw new Error('无法访问SillyTavern上下文');
             }
@@ -526,20 +517,14 @@
             let apiPromise;
 
             if (useTavernPreset) {
-                // 【修复】使用酒馆预设时，通过generateQuietPrompt发送
-                // 这会使用当前的对话补全预设设置
                 if (typeof context.generateQuietPrompt === 'function') {
                     apiPromise = context.generateQuietPrompt(prompt, false, false);
                 } else if (typeof context.generateRaw === 'function') {
-                    // 回退到generateRaw，但添加系统提示词
-                    const mainPrompt = context.getMainPrompt ? context.getMainPrompt() : '';
-                    const fullPrompt = mainPrompt ? `${mainPrompt}\n\n${prompt}` : prompt;
-                    apiPromise = context.generateRaw(fullPrompt, '', false);
+                    apiPromise = context.generateRaw(prompt, '', false);
                 } else {
                     throw new Error('无法找到可用的生成函数');
                 }
             } else {
-                // 不使用预设，直接发送原始提示词
                 apiPromise = context.generateRaw(prompt, '', false);
             }
 
@@ -874,7 +859,6 @@
         const maxRetries = 3;
         const taskId = index + 1;
 
-        // 【修复】检查是否为重Roll模式，重Roll时不检查isProcessingStopped
         if (!isRerolling && isProcessingStopped) throw new Error('ABORTED');
 
         memory.processing = true;
@@ -891,7 +875,6 @@
         try {
             const response = await callAPI(prompt, taskId);
 
-            // 【修复】重Roll时不检查stopped
             if (!isRerolling && isProcessingStopped) {
                 memory.processing = false;
                 throw new Error('ABORTED');
@@ -1334,12 +1317,11 @@
         updateMemoryQueueUI();
     }
 
-    // ========== 【修复】重Roll功能 ==========
+    // ========== 重Roll功能 ==========
     async function rerollMemory(index) {
         const memory = memoryQueue[index];
         if (!memory) return;
 
-        // 【修复】设置重Roll标志，防止被ABORTED
         isRerolling = true;
 
         updateStreamContent(`\n🎲 开始重Roll: ${memory.title}\n`);
@@ -1369,7 +1351,6 @@
             updateMemoryQueueUI();
             throw error;
         } finally {
-            // 【修复】重置重Roll标志
             isRerolling = false;
         }
     }
@@ -1434,7 +1415,6 @@
         modal.querySelector('#ttw-close-roll-history').addEventListener('click', () => modal.remove());
         modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
 
-        // 【修复】重Roll按钮
         modal.querySelector('#ttw-do-reroll').addEventListener('click', async () => {
             const btn = modal.querySelector('#ttw-do-reroll');
             btn.disabled = true;
@@ -1442,7 +1422,7 @@
             try {
                 await rerollMemory(index);
                 modal.remove();
-                showRollHistorySelector(index); // 重新打开显示新结果
+                showRollHistorySelector(index);
             } catch (error) {
                 btn.disabled = false;
                 btn.textContent = '🎲 重新Roll';
@@ -1492,7 +1472,7 @@
         });
     }
 
-    // ========== 【新增】导入JSON合并世界书 ==========
+    // ========== 导入JSON合并世界书 ==========
     async function importAndMergeWorldbook() {
         const input = document.createElement('input');
         input.type = 'file';
@@ -1506,21 +1486,16 @@
                 const content = await file.text();
                 const importedData = JSON.parse(content);
 
-                // 检测导入数据的格式
                 let worldbookToMerge = {};
 
                 if (importedData.entries && Array.isArray(importedData.entries)) {
-                    // SillyTavern世界书格式
                     worldbookToMerge = convertSTFormatToInternal(importedData);
                 } else if (importedData.merged) {
-                    // 我们导出的分卷格式
                     worldbookToMerge = importedData.merged;
                 } else {
-                    // 直接是我们的内部格式
                     worldbookToMerge = importedData;
                 }
 
-                // 显示合并选项弹窗
                 showMergeOptionsModal(worldbookToMerge, file.name);
 
             } catch (error) {
@@ -1532,33 +1507,25 @@
         input.click();
     }
 
-    // 将ST格式转换为内部格式
     function convertSTFormatToInternal(stData) {
         const result = {};
-
         if (!stData.entries) return result;
-
         for (const entry of stData.entries) {
             const group = entry.group || '未分类';
             const name = entry.comment?.replace(/^[^-]+ - /, '') || `条目${entry.uid}`;
-
             if (!result[group]) result[group] = {};
-
             result[group][name] = {
                 '关键词': entry.key || [],
                 '内容': entry.content || ''
             };
         }
-
         return result;
     }
 
-    // 显示合并选项弹窗
     function showMergeOptionsModal(importedWorldbook, fileName) {
         const existingModal = document.getElementById('ttw-merge-modal');
         if (existingModal) existingModal.remove();
 
-        // 找出重复的条目
         const duplicates = findDuplicateEntries(generatedWorldbook, importedWorldbook);
         const newEntries = findNewEntries(generatedWorldbook, importedWorldbook);
 
@@ -1584,29 +1551,29 @@
                     <div style="margin-bottom:16px;">
                         <div style="font-weight:bold;color:#e67e22;margin-bottom:10px;">🔀 重复条目合并方式</div>
                         <div style="display:flex;flex-direction:column;gap:8px;">
-                            <label style="display:flex;align-items:center;gap:8px;padding:10px;background:rgba(0,0,0,0.2);border-radius:6px;cursor:pointer;">
-                                <input type="radio" name="merge-mode" value="ai" checked style="width:18px;height:18px;">
+                            <label class="ttw-merge-option">
+                                <input type="radio" name="merge-mode" value="ai" checked>
                                 <div>
                                     <div style="font-weight:bold;">🤖 AI智能合并</div>
                                     <div style="font-size:11px;color:#888;">使用AI合并相同名称的条目，保留所有信息</div>
                                 </div>
                             </label>
-                            <label style="display:flex;align-items:center;gap:8px;padding:10px;background:rgba(0,0,0,0.2);border-radius:6px;cursor:pointer;">
-                                <input type="radio" name="merge-mode" value="replace" style="width:18px;height:18px;">
+                            <label class="ttw-merge-option">
+                                <input type="radio" name="merge-mode" value="replace">
                                 <div>
                                     <div style="font-weight:bold;">📝 覆盖原有</div>
                                     <div style="font-size:11px;color:#888;">用导入的内容直接覆盖原有条目</div>
                                 </div>
                             </label>
-                            <label style="display:flex;align-items:center;gap:8px;padding:10px;background:rgba(0,0,0,0.2);border-radius:6px;cursor:pointer;">
-                                <input type="radio" name="merge-mode" value="keep" style="width:18px;height:18px;">
+                            <label class="ttw-merge-option">
+                                <input type="radio" name="merge-mode" value="keep">
                                 <div>
                                     <div style="font-weight:bold;">🔒 保留原有</div>
                                     <div style="font-size:11px;color:#888;">保留原有条目，跳过重复的</div>
                                 </div>
                             </label>
-                            <label style="display:flex;align-items:center;gap:8px;padding:10px;background:rgba(0,0,0,0.2);border-radius:6px;cursor:pointer;">
-                                <input type="radio" name="merge-mode" value="rename" style="width:18px;height:18px;">
+                            <label class="ttw-merge-option">
+                                <input type="radio" name="merge-mode" value="rename">
                                 <div>
                                     <div style="font-weight:bold;">📋 重命名添加</div>
                                     <div style="font-size:11px;color:#888;">将重复条目添加为新名称（如 角色名_导入）</div>
@@ -1642,12 +1609,10 @@
 
         document.body.appendChild(modal);
 
-        // 绑定事件
         modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
         modal.querySelector('#ttw-cancel-merge').addEventListener('click', () => modal.remove());
         modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
 
-        // 切换AI选项显示
         const aiOptions = modal.querySelector('#ttw-ai-merge-options');
         if (aiOptions) {
             modal.querySelectorAll('input[name="merge-mode"]').forEach(radio => {
@@ -1657,29 +1622,22 @@
             });
         }
 
-        // 预览默认提示词
         if (modal.querySelector('#ttw-preview-merge-prompt')) {
             modal.querySelector('#ttw-preview-merge-prompt').addEventListener('click', () => {
                 alert('默认合并提示词:\n\n' + defaultMergePrompt);
             });
         }
 
-        // 确认合并
         modal.querySelector('#ttw-confirm-merge').addEventListener('click', async () => {
             const mergeMode = modal.querySelector('input[name="merge-mode"]:checked')?.value || 'ai';
             const customPrompt = modal.querySelector('#ttw-merge-prompt')?.value || '';
-
-            // 保存自定义提示词
             settings.customMergePrompt = customPrompt;
             saveCurrentSettings();
-
             modal.remove();
-
             await performMerge(importedWorldbook, duplicates, newEntries, mergeMode, customPrompt);
         });
     }
 
-    // 找出重复条目
     function findDuplicateEntries(existing, imported) {
         const duplicates = [];
         for (const category in imported) {
@@ -1693,7 +1651,6 @@
         return duplicates;
     }
 
-    // 找出新条目
     function findNewEntries(existing, imported) {
         const newEntries = [];
         for (const category in imported) {
@@ -1706,21 +1663,18 @@
         return newEntries;
     }
 
-    // 执行合并
     async function performMerge(importedWorldbook, duplicates, newEntries, mergeMode, customPrompt) {
         showProgressSection(true);
         updateProgress(0, '开始合并...');
         updateStreamContent('', true);
         updateStreamContent(`🔀 开始合并世界书\n合并模式: ${mergeMode}\n${'='.repeat(50)}\n`);
 
-        // 先添加所有新条目
         for (const item of newEntries) {
             if (!generatedWorldbook[item.category]) generatedWorldbook[item.category] = {};
             generatedWorldbook[item.category][item.name] = item.entry;
         }
         updateStreamContent(`✅ 添加了 ${newEntries.length} 个新条目\n`);
 
-        // 处理重复条目
         if (duplicates.length > 0) {
             updateStreamContent(`\n🔀 处理 ${duplicates.length} 个重复条目...\n`);
 
@@ -1731,7 +1685,6 @@
 
                 try {
                     if (mergeMode === 'ai') {
-                        // AI合并
                         const mergedEntry = await mergeEntriesWithAI(dup.existing, dup.imported, customPrompt);
                         generatedWorldbook[dup.category][dup.name] = mergedEntry;
                         updateStreamContent(`   ✅ AI合并完成\n`);
@@ -1747,7 +1700,6 @@
                     }
                 } catch (error) {
                     updateStreamContent(`   ❌ 错误: ${error.message}\n`);
-                    // 出错时保留原有
                 }
 
                 await new Promise(r => setTimeout(r, 100));
@@ -1762,10 +1714,8 @@
         alert('世界书合并完成！');
     }
 
-    // 使用AI合并两个条目
     async function mergeEntriesWithAI(entryA, entryB, customPrompt) {
         const promptTemplate = customPrompt?.trim() || defaultMergePrompt;
-
         const prompt = promptTemplate
             .replace('{ENTRY_A}', JSON.stringify(entryA, null, 2))
             .replace('{ENTRY_B}', JSON.stringify(entryB, null, 2));
@@ -1774,17 +1724,14 @@
 
         try {
             const result = parseAIResponse(response);
-            // 确保返回正确格式
             if (result['关键词'] || result['内容']) {
                 return {
                     '关键词': result['关键词'] || [...(entryA['关键词'] || []), ...(entryB['关键词'] || [])],
                     '内容': result['内容'] || entryA['内容'] || entryB['内容']
                 };
             }
-            // 如果AI返回了其他格式，尝试提取
             return result;
         } catch (e) {
-            // 解析失败，简单合并
             return {
                 '关键词': [...new Set([...(entryA['关键词'] || []), ...(entryB['关键词'] || [])])],
                 '内容': `${entryA['内容'] || ''}\n\n---\n\n${entryB['内容'] || ''}`
@@ -1902,7 +1849,7 @@
 
     async function exportTaskState() {
         const state = {
-            version: '2.4.1',
+            version: '2.4.2',
             timestamp: Date.now(),
             memoryQueue,
             generatedWorldbook,
@@ -1994,7 +1941,7 @@
         helpModal.innerHTML = `
             <div class="ttw-modal" style="max-width:650px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">❓ TXT转世界书 v2.4.1 帮助</span>
+                    <span class="ttw-modal-title">❓ TXT转世界书 v2.4.2 帮助</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
@@ -2003,27 +1950,26 @@
                         <p style="color:#ccc;line-height:1.6;margin:0;">将TXT小说转换为SillyTavern世界书格式，自动提取角色、地点、组织等信息。</p>
                     </div>
                     <div style="margin-bottom:16px;">
-                        <h4 style="color:#27ae60;margin:0 0 10px;">✨ v2.4.1 新功能</h4>
+                        <h4 style="color:#27ae60;margin:0 0 10px;">✨ 主要功能</h4>
                         <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
                             <li><strong>📝 记忆编辑</strong>：点击记忆可编辑/复制内容</li>
                             <li><strong>🎲 重Roll功能</strong>：每个记忆可多次生成，选择最佳结果</li>
                             <li><strong>📥 导入JSON合并</strong>：导入已有世界书，AI智能合并相同条目</li>
-                            <li><strong>🔧 修复酒馆预设</strong>：正确使用酒馆的generateQuietPrompt</li>
                         </ul>
                     </div>
                     <div style="margin-bottom:16px;">
-                        <h4 style="color:#3498db;margin:0 0 10px;">🚀 并行处理</h4>
+                        <h4 style="color:#3498db;margin:0 0 10px;">🚀 处理模式</h4>
                         <p style="color:#ccc;line-height:1.6;margin:0;">
-                            <strong>独立模式</strong>：最快，每个记忆独立提取后合并<br>
-                            <strong>分批模式</strong>：批次内并行，批次间累积上下文
+                            <strong>独立模式</strong>：最快，每个记忆独立提取<br>
+                            <strong>分批模式</strong>：批次间累积上下文，更连贯
                         </p>
                     </div>
                     <div>
                         <h4 style="color:#9b59b6;margin:0 0 10px;">💡 使用技巧</h4>
                         <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                            <li>点击记忆块可<strong>查看/编辑/复制</strong>内容</li>
-                            <li>使用<strong>🎲 Roll历史</strong>对比不同生成结果</li>
-                            <li>用<strong>📥 导入JSON</strong>合并多个世界书</li>
+                            <li>点击记忆块可<strong>查看/编辑/复制</strong></li>
+                            <li>追加功能会将当前记忆合并到目标并<strong>删除当前记忆</strong></li>
+                            <li>用<strong>📥 导入世界书JSON进行合并</strong>合并多个世界书</li>
                         </ul>
                     </div>
                 </div>
@@ -2065,7 +2011,7 @@
                 <div class="ttw-modal-body">
                     <div style="margin-bottom:16px;">
                         <label style="display:block;margin-bottom:8px;font-size:13px;">从哪个记忆块开始：</label>
-                        <select id="ttw-start-from-select" style="width:100%;padding:10px;border:1px solid #555;border-radius:6px;background:rgba(0,0,0,0.3);color:#fff;font-size:13px;">${optionsHtml}</select>
+                        <select id="ttw-start-from-select" class="ttw-select">${optionsHtml}</select>
                     </div>
                     <div style="padding:12px;background:rgba(230,126,34,0.1);border-radius:6px;font-size:12px;color:#f39c12;">⚠️ 从中间开始时，之前的世界书数据不会自动加载。</div>
                 </div>
@@ -2090,7 +2036,7 @@
         selectorModal.addEventListener('click', (e) => { if (e.target === selectorModal) selectorModal.remove(); });
     }
 
-    // ========== 查看/编辑记忆内容 ==========
+    // ========== 【修复】查看/编辑记忆内容 - 追加后删除当前记忆 ==========
     function showMemoryContentModal(index) {
         const memory = memoryQueue[index];
         if (!memory) return;
@@ -2137,11 +2083,11 @@
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
                             <h4 style="color:#3498db;margin:0;">📝 原文内容 <span style="font-size:12px;font-weight:normal;color:#888;">(可编辑)</span></h4>
                             <div style="display:flex;gap:8px;">
-                                <button id="ttw-append-to-prev" class="ttw-btn ttw-btn-small" ${index === 0 ? 'disabled style="opacity:0.5;"' : ''}>⬆️ 追加到上一个</button>
-                                <button id="ttw-append-to-next" class="ttw-btn ttw-btn-small" ${index === memoryQueue.length - 1 ? 'disabled style="opacity:0.5;"' : ''}>⬇️ 追加到下一个</button>
+                                <button id="ttw-append-to-prev" class="ttw-btn ttw-btn-small" ${index === 0 ? 'disabled style="opacity:0.5;"' : ''} title="追加到上一个记忆末尾，并删除当前记忆">⬆️ 合并到上一个</button>
+                                <button id="ttw-append-to-next" class="ttw-btn ttw-btn-small" ${index === memoryQueue.length - 1 ? 'disabled style="opacity:0.5;"' : ''} title="追加到下一个记忆开头，并删除当前记忆">⬇️ 合并到下一个</button>
                             </div>
                         </div>
-                        <textarea id="ttw-memory-content-editor" style="width:100%;min-height:250px;padding:12px;background:rgba(0,0,0,0.3);border:1px solid #555;border-radius:6px;color:#fff;font-size:13px;line-height:1.6;resize:vertical;font-family:inherit;">${memory.content.replace(/</g, '<').replace(/>/g, '>')}</textarea>
+                        <textarea id="ttw-memory-content-editor" class="ttw-textarea">${memory.content.replace(/</g, '<').replace(/>/g, '>')}</textarea>
                     </div>
                     ${resultHtml}
                 </div>
@@ -2193,31 +2139,69 @@
             deleteMemoryAt(index);
         });
 
+        // 【修复】追加到上一个 - 追加后删除当前记忆
         contentModal.querySelector('#ttw-append-to-prev').addEventListener('click', () => {
             if (index === 0) return;
             const prevMemory = memoryQueue[index - 1];
-            if (confirm(`将当前内容追加到 "${prevMemory.title}" 的末尾？`)) {
+            if (confirm(`将当前内容合并到 "${prevMemory.title}" 的末尾？\n\n⚠️ 合并后当前记忆将被删除！`)) {
                 prevMemory.content += '\n\n' + editor.value;
                 prevMemory.processed = false;
                 prevMemory.failed = false;
                 prevMemory.result = null;
+
+                // 删除当前记忆
+                memoryQueue.splice(index, 1);
+
+                // 重新编号
+                memoryQueue.forEach((m, i) => {
+                    if (!m.title.includes('-')) m.title = `记忆${i + 1}`;
+                });
+
+                // 调整索引
+                if (startFromIndex > index) startFromIndex = Math.max(0, startFromIndex - 1);
+                else if (startFromIndex >= memoryQueue.length) startFromIndex = Math.max(0, memoryQueue.length - 1);
+                if (userSelectedStartIndex !== null) {
+                    if (userSelectedStartIndex > index) userSelectedStartIndex = Math.max(0, userSelectedStartIndex - 1);
+                    else if (userSelectedStartIndex >= memoryQueue.length) userSelectedStartIndex = null;
+                }
+
                 updateMemoryQueueUI();
                 updateStartButtonState(false);
-                alert(`已追加到 "${prevMemory.title}"`);
+                contentModal.remove();
+                alert(`已合并到 "${prevMemory.title}"，当前记忆已删除`);
             }
         });
 
+        // 【修复】追加到下一个 - 追加后删除当前记忆
         contentModal.querySelector('#ttw-append-to-next').addEventListener('click', () => {
             if (index === memoryQueue.length - 1) return;
             const nextMemory = memoryQueue[index + 1];
-            if (confirm(`将当前内容追加到 "${nextMemory.title}" 的开头？`)) {
+            if (confirm(`将当前内容合并到 "${nextMemory.title}" 的开头？\n\n⚠️ 合并后当前记忆将被删除！`)) {
                 nextMemory.content = editor.value + '\n\n' + nextMemory.content;
                 nextMemory.processed = false;
                 nextMemory.failed = false;
                 nextMemory.result = null;
+
+                // 删除当前记忆
+                memoryQueue.splice(index, 1);
+
+                // 重新编号
+                memoryQueue.forEach((m, i) => {
+                    if (!m.title.includes('-')) m.title = `记忆${i + 1}`;
+                });
+
+                // 调整索引
+                if (startFromIndex > index) startFromIndex = Math.max(0, startFromIndex - 1);
+                else if (startFromIndex >= memoryQueue.length) startFromIndex = Math.max(0, memoryQueue.length - 1);
+                if (userSelectedStartIndex !== null) {
+                    if (userSelectedStartIndex > index) userSelectedStartIndex = Math.max(0, userSelectedStartIndex - 1);
+                    else if (userSelectedStartIndex >= memoryQueue.length) userSelectedStartIndex = null;
+                }
+
                 updateMemoryQueueUI();
                 updateStartButtonState(false);
-                alert(`已追加到 "${nextMemory.title}"`);
+                contentModal.remove();
+                alert(`已合并到 "${nextMemory.title}"，当前记忆已删除`);
             }
         });
     }
@@ -2309,7 +2293,7 @@
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v2.4.1</span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v2.4.2</span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -2323,100 +2307,109 @@
                             <span class="ttw-collapse-icon">▼</span>
                         </div>
                         <div class="ttw-section-content" id="ttw-settings-content">
-                            <div style="margin-bottom:16px;padding:12px;background:rgba(39,174,96,0.1);border:1px solid rgba(39,174,96,0.3);border-radius:8px;">
-                                <label class="ttw-checkbox-label" style="display:flex;align-items:center;gap:10px;cursor:pointer;">
-                                    <input type="checkbox" id="ttw-use-tavern-preset" style="width:20px;height:20px;accent-color:#27ae60;">
+                            <div class="ttw-setting-card ttw-setting-card-green">
+                                <label class="ttw-checkbox-label">
+                                    <input type="checkbox" id="ttw-use-tavern-preset">
                                     <div>
                                         <span style="font-weight:bold;color:#27ae60;">🍺 使用酒馆对话补全预设</span>
-                                        <div style="font-size:11px;color:#888;margin-top:4px;">勾选后使用酒馆当前预设（使用generateQuietPrompt）</div>
+                                        <div class="ttw-setting-hint">勾选后使用酒馆当前预设</div>
                                     </div>
                                 </label>
                             </div>
-                            <div style="margin-bottom:16px;padding:12px;background:rgba(52,152,219,0.15);border:1px solid rgba(52,152,219,0.3);border-radius:8px;">
+                            <div class="ttw-setting-card ttw-setting-card-blue">
                                 <div style="font-weight:bold;color:#3498db;margin-bottom:10px;">🚀 并行处理</div>
-                                <div style="display:flex;gap:12px;align-items:center;">
-                                    <label style="display:flex;align-items:center;gap:8px;">
-                                        <input type="checkbox" id="ttw-parallel-enabled" checked style="width:18px;height:18px;">
+                                <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+                                    <label class="ttw-checkbox-label">
+                                        <input type="checkbox" id="ttw-parallel-enabled" checked>
                                         <span>启用</span>
                                     </label>
-                                    <label style="font-size:12px;">并发数 <input type="number" id="ttw-parallel-concurrency" value="3" min="1" max="10" style="width:60px;padding:6px;margin-left:4px;"></label>
+                                    <label style="font-size:12px;display:flex;align-items:center;gap:6px;">
+                                        并发数
+                                        <input type="number" id="ttw-parallel-concurrency" value="3" min="1" max="10" class="ttw-input-small">
+                                    </label>
                                 </div>
                                 <div style="margin-top:10px;">
-                                    <select id="ttw-parallel-mode" style="width:100%;padding:8px;border:1px solid #555;border-radius:4px;background:rgba(0,0,0,0.3);color:#fff;font-size:12px;">
-                                        <option value="independent">🚀 独立模式（推荐）</option>
-                                        <option value="batch">📦 分批模式</option>
+                                    <select id="ttw-parallel-mode" class="ttw-select">
+                                        <option value="independent">🚀 独立模式 - 最快，每个记忆独立提取后合并</option>
+                                        <option value="batch">📦 分批模式 - 批次间累积上下文，更连贯</option>
                                     </select>
                                 </div>
                             </div>
                             <div style="display:flex;gap:12px;margin-bottom:12px;">
                                 <div style="flex:1;">
-                                    <label style="display:block;margin-bottom:6px;font-size:12px;">每块字数</label>
-                                    <input type="number" id="ttw-chunk-size" value="15000" min="1000" max="500000" style="width:100%;padding:10px;border:1px solid #555;border-radius:6px;background:rgba(0,0,0,0.3);color:#fff;">
+                                    <label class="ttw-label">每块字数</label>
+                                    <input type="number" id="ttw-chunk-size" value="15000" min="1000" max="500000" class="ttw-input">
                                 </div>
                                 <div style="flex:1;">
-                                    <label style="display:block;margin-bottom:6px;font-size:12px;">API超时(秒)</label>
-                                    <input type="number" id="ttw-api-timeout" value="120" min="30" max="600" style="width:100%;padding:10px;border:1px solid #555;border-radius:6px;background:rgba(0,0,0,0.3);color:#fff;">
+                                    <label class="ttw-label">API超时(秒)</label>
+                                    <input type="number" id="ttw-api-timeout" value="120" min="30" max="600" class="ttw-input">
                                 </div>
                             </div>
                             <div style="display:flex;flex-direction:column;gap:8px;">
-                                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
-                                    <input type="checkbox" id="ttw-incremental-mode" checked style="width:18px;height:18px;">
-                                    <span>📝 增量输出模式</span>
+                                <label class="ttw-checkbox-label ttw-checkbox-with-hint">
+                                    <input type="checkbox" id="ttw-incremental-mode" checked>
+                                    <div>
+                                        <span>📝 增量输出模式</span>
+                                        <div class="ttw-setting-hint">只输出变更的条目，减少重复内容</div>
+                                    </div>
                                 </label>
-                                <label style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(155,89,182,0.15);border-radius:6px;cursor:pointer;font-size:13px;">
-                                    <input type="checkbox" id="ttw-volume-mode" style="width:18px;height:18px;">
-                                    <span>📦 分卷模式</span>
+                                <label class="ttw-checkbox-label ttw-checkbox-with-hint ttw-checkbox-purple">
+                                    <input type="checkbox" id="ttw-volume-mode">
+                                    <div>
+                                        <span>📦 分卷模式</span>
+                                        <div class="ttw-setting-hint">上下文超限时自动分卷，避免记忆分裂</div>
+                                    </div>
                                 </label>
                             </div>
-                            <div id="ttw-volume-indicator" style="display:none;margin-top:12px;padding:8px 12px;background:rgba(155,89,182,0.2);border-radius:6px;font-size:12px;color:#bb86fc;"></div>
-                            <div style="margin-top:16px;border:1px solid #444;border-radius:8px;overflow:hidden;">
-                                <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:rgba(230,126,34,0.15);border-bottom:1px solid #444;">
+                            <div id="ttw-volume-indicator" class="ttw-volume-indicator"></div>
+                            <div class="ttw-prompt-config">
+                                <div class="ttw-prompt-config-header">
                                     <span>📝 提示词配置</span>
                                     <button id="ttw-preview-prompt" class="ttw-btn ttw-btn-small">👁️ 预览</button>
                                 </div>
-                                <div style="border-bottom:1px solid #333;">
-                                    <div class="ttw-prompt-header" data-target="ttw-worldbook-content" style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;cursor:pointer;background:rgba(52,152,219,0.1);">
+                                <div class="ttw-prompt-section">
+                                    <div class="ttw-prompt-header ttw-prompt-header-blue" data-target="ttw-worldbook-content">
                                         <div style="display:flex;align-items:center;gap:8px;">
                                             <span>📚</span><span style="font-weight:500;">世界书词条</span>
-                                            <span style="font-size:10px;padding:2px 6px;border-radius:10px;background:rgba(52,152,219,0.3);color:#5dade2;">必需</span>
+                                            <span class="ttw-badge ttw-badge-blue">必需</span>
                                         </div>
                                         <span class="ttw-collapse-icon">▶</span>
                                     </div>
-                                    <div id="ttw-worldbook-content" style="display:none;padding:12px 14px;background:rgba(0,0,0,0.15);">
-                                        <div style="font-size:11px;color:#888;margin-bottom:10px;">核心提示词。留空使用默认。</div>
-                                        <textarea id="ttw-worldbook-prompt" rows="6" placeholder="留空使用默认..." style="width:100%;padding:10px;border:1px solid #444;border-radius:4px;background:#1e1e2e;color:#fff;font-family:monospace;font-size:12px;resize:vertical;"></textarea>
+                                    <div id="ttw-worldbook-content" class="ttw-prompt-content">
+                                        <div class="ttw-setting-hint" style="margin-bottom:10px;">核心提示词。留空使用默认。</div>
+                                        <textarea id="ttw-worldbook-prompt" rows="6" placeholder="留空使用默认..." class="ttw-textarea-small"></textarea>
                                         <div style="margin-top:8px;"><button class="ttw-btn ttw-btn-small ttw-reset-prompt" data-type="worldbook">🔄 恢复默认</button></div>
                                     </div>
                                 </div>
-                                <div style="border-bottom:1px solid #333;">
-                                    <div class="ttw-prompt-header" data-target="ttw-plot-content" style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;cursor:pointer;background:rgba(155,89,182,0.1);">
+                                <div class="ttw-prompt-section">
+                                    <div class="ttw-prompt-header ttw-prompt-header-purple" data-target="ttw-plot-content">
                                         <div style="display:flex;align-items:center;gap:8px;">
                                             <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-                                                <input type="checkbox" id="ttw-enable-plot" style="width:16px;height:16px;">
+                                                <input type="checkbox" id="ttw-enable-plot">
                                                 <span>📖</span><span style="font-weight:500;">剧情大纲</span>
                                             </label>
-                                            <span style="font-size:10px;padding:2px 6px;border-radius:10px;background:rgba(149,165,166,0.3);color:#bdc3c7;">可选</span>
+                                            <span class="ttw-badge ttw-badge-gray">可选</span>
                                         </div>
                                         <span class="ttw-collapse-icon">▶</span>
                                     </div>
-                                    <div id="ttw-plot-content" style="display:none;padding:12px 14px;background:rgba(0,0,0,0.15);">
-                                        <textarea id="ttw-plot-prompt" rows="4" placeholder="留空使用默认..." style="width:100%;padding:10px;border:1px solid #444;border-radius:4px;background:#1e1e2e;color:#fff;font-family:monospace;font-size:12px;resize:vertical;"></textarea>
+                                    <div id="ttw-plot-content" class="ttw-prompt-content">
+                                        <textarea id="ttw-plot-prompt" rows="4" placeholder="留空使用默认..." class="ttw-textarea-small"></textarea>
                                         <div style="margin-top:8px;"><button class="ttw-btn ttw-btn-small ttw-reset-prompt" data-type="plot">🔄 恢复默认</button></div>
                                     </div>
                                 </div>
-                                <div>
-                                    <div class="ttw-prompt-header" data-target="ttw-style-content" style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;cursor:pointer;background:rgba(46,204,113,0.1);">
+                                <div class="ttw-prompt-section">
+                                    <div class="ttw-prompt-header ttw-prompt-header-green" data-target="ttw-style-content">
                                         <div style="display:flex;align-items:center;gap:8px;">
                                             <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-                                                <input type="checkbox" id="ttw-enable-style" style="width:16px;height:16px;">
+                                                <input type="checkbox" id="ttw-enable-style">
                                                 <span>🎨</span><span style="font-weight:500;">文风配置</span>
                                             </label>
-                                            <span style="font-size:10px;padding:2px 6px;border-radius:10px;background:rgba(149,165,166,0.3);color:#bdc3c7;">可选</span>
+                                            <span class="ttw-badge ttw-badge-gray">可选</span>
                                         </div>
                                         <span class="ttw-collapse-icon">▶</span>
                                     </div>
-                                    <div id="ttw-style-content" style="display:none;padding:12px 14px;background:rgba(0,0,0,0.15);">
-                                        <textarea id="ttw-style-prompt" rows="4" placeholder="留空使用默认..." style="width:100%;padding:10px;border:1px solid #444;border-radius:4px;background:#1e1e2e;color:#fff;font-family:monospace;font-size:12px;resize:vertical;"></textarea>
+                                    <div id="ttw-style-content" class="ttw-prompt-content">
+                                        <textarea id="ttw-style-prompt" rows="4" placeholder="留空使用默认..." class="ttw-textarea-small"></textarea>
                                         <div style="margin-top:8px;"><button class="ttw-btn ttw-btn-small ttw-reset-prompt" data-type="style">🔄 恢复默认</button></div>
                                     </div>
                                 </div>
@@ -2428,18 +2421,18 @@
                         <div class="ttw-section-header">
                             <span>📄 文件上传</span>
                             <div style="display:flex;gap:8px;">
-                                <button id="ttw-import-json" class="ttw-btn-small" title="导入JSON合并">📥 导入JSON</button>
+                                <button id="ttw-import-json" class="ttw-btn-small" title="导入已有世界书JSON进行合并">📥 导入世界书JSON进行合并</button>
                                 <button id="ttw-import-task" class="ttw-btn-small">📥 导入任务</button>
                                 <button id="ttw-export-task" class="ttw-btn-small">📤 导出任务</button>
                             </div>
                         </div>
                         <div class="ttw-section-content">
-                            <div class="ttw-upload-area" id="ttw-upload-area" style="border:2px dashed #555;border-radius:8px;padding:40px 20px;text-align:center;cursor:pointer;">
+                            <div class="ttw-upload-area" id="ttw-upload-area">
                                 <div style="font-size:48px;margin-bottom:12px;">📁</div>
                                 <div style="font-size:14px;opacity:0.8;">点击或拖拽TXT文件到此处</div>
                                 <input type="file" id="ttw-file-input" accept=".txt" style="display:none;">
                             </div>
-                            <div id="ttw-file-info" style="display:none;align-items:center;gap:12px;padding:12px;background:rgba(0,0,0,0.3);border-radius:6px;margin-top:12px;">
+                            <div id="ttw-file-info" class="ttw-file-info">
                                 <span id="ttw-file-name"></span>
                                 <span id="ttw-file-size"></span>
                                 <button id="ttw-clear-file" class="ttw-btn-small">清除</button>
@@ -2456,29 +2449,29 @@
                             </div>
                         </div>
                         <div class="ttw-section-content">
-                            <div style="font-size:11px;color:#888;margin-bottom:8px;">💡 点击记忆可<strong>查看/编辑/复制</strong>，支持<strong>🎲重Roll</strong></div>
-                            <div id="ttw-memory-queue" style="max-height:200px;overflow-y:auto;"></div>
+                            <div class="ttw-setting-hint" style="margin-bottom:8px;">💡 点击记忆可<strong>查看/编辑/复制</strong>，支持<strong>🎲重Roll</strong></div>
+                            <div id="ttw-memory-queue" class="ttw-memory-queue"></div>
                         </div>
                     </div>
                     <!-- 进度 -->
                     <div class="ttw-section" id="ttw-progress-section" style="display:none;">
                         <div class="ttw-section-header"><span>⏳ 处理进度</span></div>
                         <div class="ttw-section-content">
-                            <div style="width:100%;height:8px;background:rgba(0,0,0,0.3);border-radius:4px;overflow:hidden;margin-bottom:12px;">
-                                <div id="ttw-progress-fill" style="height:100%;background:linear-gradient(90deg,#e67e22,#f39c12);border-radius:4px;transition:width 0.3s;width:0%;"></div>
+                            <div class="ttw-progress-bar">
+                                <div id="ttw-progress-fill" class="ttw-progress-fill"></div>
                             </div>
-                            <div id="ttw-progress-text" style="font-size:13px;text-align:center;margin-bottom:12px;">准备中...</div>
-                            <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-                                <button id="ttw-stop-btn" class="ttw-btn" style="background:rgba(108,117,125,0.5);">⏸️ 暂停</button>
-                                <button id="ttw-repair-btn" class="ttw-btn" style="display:none;background:rgba(255,107,53,0.5);border-color:#ff6b35;">🔧 修复失败</button>
+                            <div id="ttw-progress-text" class="ttw-progress-text">准备中...</div>
+                            <div class="ttw-progress-controls">
+                                <button id="ttw-stop-btn" class="ttw-btn ttw-btn-secondary">⏸️ 暂停</button>
+                                <button id="ttw-repair-btn" class="ttw-btn ttw-btn-warning" style="display:none;">🔧 修复失败</button>
                                 <button id="ttw-toggle-stream" class="ttw-btn ttw-btn-small">👁️ 实时输出</button>
                             </div>
-                            <div id="ttw-stream-container" style="display:none;margin-top:12px;border:1px solid #444;border-radius:6px;overflow:hidden;">
-                                <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:rgba(0,0,0,0.3);font-size:12px;">
+                            <div id="ttw-stream-container" class="ttw-stream-container">
+                                <div class="ttw-stream-header">
                                     <span>📤 实时输出</span>
                                     <button id="ttw-clear-stream" class="ttw-btn-small">清空</button>
                                 </div>
-                                <pre id="ttw-stream-content" style="max-height:200px;overflow-y:auto;padding:12px;background:rgba(0,0,0,0.2);font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all;margin:0;font-family:monospace;"></pre>
+                                <pre id="ttw-stream-content" class="ttw-stream-content"></pre>
                             </div>
                         </div>
                     </div>
@@ -2486,19 +2479,19 @@
                     <div class="ttw-section" id="ttw-result-section" style="display:none;">
                         <div class="ttw-section-header"><span>📊 生成结果</span></div>
                         <div class="ttw-section-content">
-                            <div id="ttw-result-preview" style="max-height:300px;overflow-y:auto;background:rgba(0,0,0,0.3);border-radius:6px;padding:12px;margin-bottom:12px;font-size:12px;"></div>
-                            <div style="display:flex;flex-wrap:wrap;gap:10px;">
+                            <div id="ttw-result-preview" class="ttw-result-preview"></div>
+                            <div class="ttw-result-actions">
                                 <button id="ttw-view-worldbook" class="ttw-btn">📖 查看世界书</button>
                                 <button id="ttw-view-history" class="ttw-btn">📜 修改历史</button>
                                 <button id="ttw-export-json" class="ttw-btn">📥 导出JSON</button>
                                 <button id="ttw-export-volumes" class="ttw-btn" style="display:none;">📦 分卷导出</button>
-                                <button id="ttw-export-st" class="ttw-btn" style="background:linear-gradient(135deg,#e67e22,#d35400);border-color:#e67e22;">📥 导出SillyTavern格式</button>
+                                <button id="ttw-export-st" class="ttw-btn ttw-btn-primary">📥 导出SillyTavern格式</button>
                             </div>
                         </div>
                     </div>
                 </div>
                 <div class="ttw-modal-footer">
-                    <button id="ttw-start-btn" class="ttw-btn" style="background:linear-gradient(135deg,#e67e22,#d35400);border-color:#e67e22;" disabled>🚀 开始转换</button>
+                    <button id="ttw-start-btn" class="ttw-btn ttw-btn-primary" disabled>🚀 开始转换</button>
                 </div>
             </div>
         `;
@@ -2532,13 +2525,96 @@
             .ttw-collapse-icon{font-size:10px;transition:transform 0.2s;}
             .ttw-section.collapsed .ttw-collapse-icon{transform:rotate(-90deg);}
             .ttw-section.collapsed .ttw-section-content{display:none;}
+
+            /* 【修复】统一输入框样式 */
+            .ttw-input,.ttw-select,.ttw-textarea,.ttw-textarea-small,.ttw-input-small{
+                background:rgba(0,0,0,0.3);
+                border:1px solid var(--SmartThemeBorderColor,#555);
+                border-radius:6px;
+                color:#fff;
+                font-size:13px;
+                box-sizing:border-box;
+            }
+            .ttw-input{width:100%;padding:10px 12px;}
+            .ttw-input-small{width:60px;padding:6px 8px;text-align:center;}
+            .ttw-select{width:100%;padding:8px 10px;}
+            .ttw-textarea{width:100%;min-height:250px;padding:12px;line-height:1.6;resize:vertical;font-family:inherit;}
+            .ttw-textarea-small{width:100%;min-height:80px;padding:10px;font-family:monospace;font-size:12px;line-height:1.5;resize:vertical;}
+            .ttw-input:focus,.ttw-select:focus,.ttw-textarea:focus,.ttw-textarea-small:focus{outline:none;border-color:#e67e22;}
+
+            .ttw-label{display:block;margin-bottom:6px;font-size:12px;opacity:0.9;}
+            .ttw-setting-hint{font-size:11px;color:#888;margin-top:4px;}
+
+            /* 设置卡片 */
+            .ttw-setting-card{margin-bottom:16px;padding:12px;border-radius:8px;}
+            .ttw-setting-card-green{background:rgba(39,174,96,0.1);border:1px solid rgba(39,174,96,0.3);}
+            .ttw-setting-card-blue{background:rgba(52,152,219,0.15);border:1px solid rgba(52,152,219,0.3);}
+
+            /* 复选框样式 */
+            .ttw-checkbox-label{display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;}
+            .ttw-checkbox-label input[type="checkbox"]{width:18px;height:18px;accent-color:#e67e22;flex-shrink:0;}
+            .ttw-checkbox-with-hint{padding:8px 12px;background:rgba(0,0,0,0.15);border-radius:6px;}
+            .ttw-checkbox-purple{background:rgba(155,89,182,0.15);border:1px solid rgba(155,89,182,0.3);}
+
+            /* 分卷指示器 */
+            .ttw-volume-indicator{display:none;margin-top:12px;padding:8px 12px;background:rgba(155,89,182,0.2);border-radius:6px;font-size:12px;color:#bb86fc;}
+
+            /* 提示词配置 */
+            .ttw-prompt-config{margin-top:16px;border:1px solid var(--SmartThemeBorderColor,#444);border-radius:8px;overflow:hidden;}
+            .ttw-prompt-config-header{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:rgba(230,126,34,0.15);border-bottom:1px solid var(--SmartThemeBorderColor,#444);font-weight:500;}
+            .ttw-prompt-section{border-bottom:1px solid var(--SmartThemeBorderColor,#333);}
+            .ttw-prompt-section:last-child{border-bottom:none;}
+            .ttw-prompt-header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;cursor:pointer;font-size:13px;transition:background 0.2s;}
+            .ttw-prompt-header:hover{filter:brightness(1.1);}
+            .ttw-prompt-header-blue{background:rgba(52,152,219,0.1);}
+            .ttw-prompt-header-purple{background:rgba(155,89,182,0.1);}
+            .ttw-prompt-header-green{background:rgba(46,204,113,0.1);}
+            .ttw-prompt-content{display:none;padding:12px 14px;background:rgba(0,0,0,0.15);}
+
+            /* 徽章 */
+            .ttw-badge{font-size:10px;padding:2px 6px;border-radius:10px;font-weight:500;}
+            .ttw-badge-blue{background:rgba(52,152,219,0.3);color:#5dade2;}
+            .ttw-badge-gray{background:rgba(149,165,166,0.3);color:#bdc3c7;}
+
+            /* 上传区域 */
+            .ttw-upload-area{border:2px dashed var(--SmartThemeBorderColor,#555);border-radius:8px;padding:40px 20px;text-align:center;cursor:pointer;transition:all 0.2s;}
+            .ttw-upload-area:hover{border-color:#e67e22;background:rgba(230,126,34,0.1);}
+            .ttw-file-info{display:none;align-items:center;gap:12px;padding:12px;background:rgba(0,0,0,0.3);border-radius:6px;margin-top:12px;}
+
+            /* 记忆队列 */
+            .ttw-memory-queue{max-height:200px;overflow-y:auto;}
+            .ttw-memory-item{padding:8px 12px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:6px;font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer;transition:background 0.2s;}
+            .ttw-memory-item:hover{background:rgba(0,0,0,0.4);}
+
+            /* 进度条 */
+            .ttw-progress-bar{width:100%;height:8px;background:rgba(0,0,0,0.3);border-radius:4px;overflow:hidden;margin-bottom:12px;}
+            .ttw-progress-fill{height:100%;background:linear-gradient(90deg,#e67e22,#f39c12);border-radius:4px;transition:width 0.3s;width:0%;}
+            .ttw-progress-text{font-size:13px;text-align:center;margin-bottom:12px;}
+            .ttw-progress-controls{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;}
+
+            /* 实时输出 */
+            .ttw-stream-container{display:none;margin-top:12px;border:1px solid var(--SmartThemeBorderColor,#444);border-radius:6px;overflow:hidden;}
+            .ttw-stream-header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:rgba(0,0,0,0.3);font-size:12px;}
+            .ttw-stream-content{max-height:200px;overflow-y:auto;padding:12px;background:rgba(0,0,0,0.2);font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all;margin:0;font-family:monospace;}
+
+            /* 结果区域 */
+            .ttw-result-preview{max-height:300px;overflow-y:auto;background:rgba(0,0,0,0.3);border-radius:6px;padding:12px;margin-bottom:12px;font-size:12px;}
+            .ttw-result-actions{display:flex;flex-wrap:wrap;gap:10px;}
+
+            /* 按钮 */
             .ttw-btn{padding:10px 16px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:6px;background:rgba(255,255,255,0.1);color:#fff;font-size:13px;cursor:pointer;transition:all 0.2s;}
             .ttw-btn:hover{background:rgba(255,255,255,0.2);}
             .ttw-btn:disabled{opacity:0.5;cursor:not-allowed;}
+            .ttw-btn-primary{background:linear-gradient(135deg,#e67e22,#d35400);border-color:#e67e22;}
+            .ttw-btn-primary:hover{background:linear-gradient(135deg,#f39c12,#e67e22);}
+            .ttw-btn-secondary{background:rgba(108,117,125,0.5);}
+            .ttw-btn-warning{background:rgba(255,107,53,0.5);border-color:#ff6b35;}
             .ttw-btn-small{padding:6px 12px;font-size:12px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:4px;background:rgba(255,255,255,0.1);color:#fff;cursor:pointer;transition:all 0.2s;}
             .ttw-btn-small:hover{background:rgba(255,255,255,0.2);}
-            .ttw-checkbox-label{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;}
-            .ttw-checkbox-label input{width:18px;height:18px;accent-color:#e67e22;}
+
+            /* 合并选项 */
+            .ttw-merge-option{display:flex;align-items:center;gap:8px;padding:10px;background:rgba(0,0,0,0.2);border-radius:6px;cursor:pointer;}
+            .ttw-merge-option input{width:18px;height:18px;}
         `;
         document.head.appendChild(styles);
     }
@@ -2553,7 +2629,6 @@
         modalContainer.addEventListener('click', (e) => { if (e.target === modalContainer) closeModal(); });
         document.addEventListener('keydown', handleEscKey, true);
 
-        // 设置
         ['ttw-chunk-size', 'ttw-api-timeout'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.addEventListener('change', saveCurrentSettings);
@@ -2573,7 +2648,7 @@
                 const targetId = header.getAttribute('data-target');
                 const content = document.getElementById(targetId);
                 const icon = header.querySelector('.ttw-collapse-icon');
-                if (content.style.display === 'none') { content.style.display = 'block'; icon.textContent = '▼'; }
+                if (content.style.display === 'none' || !content.style.display) { content.style.display = 'block'; icon.textContent = '▼'; }
                 else { content.style.display = 'none'; icon.textContent = '▶'; }
             });
         });
@@ -2677,6 +2752,7 @@
         alert(`当前提示词预览:\n\n使用酒馆预设: ${settings.useTavernPreset ? '是' : '否'}\n并行模式: ${parallelConfig.enabled ? parallelConfig.mode : '关闭'}\n\n${prompt.substring(0, 2000)}${prompt.length > 2000 ? '...' : ''}`);
     }
 
+    // 【修复】关闭UI重新打开时恢复数据
     async function checkAndRestoreState() {
         try {
             const savedState = await MemoryHistoryDB.loadState();
@@ -2701,7 +2777,9 @@
                     await MemoryHistoryDB.clearState();
                 }
             }
-        } catch (e) {}
+        } catch (e) {
+            console.error('恢复状态失败:', e);
+        }
     }
 
     async function handleFileSelect(file) {
@@ -2872,7 +2950,7 @@
         container.innerHTML = '';
         memoryQueue.forEach((memory, index) => {
             const item = document.createElement('div');
-            item.style.cssText = 'padding:8px 12px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:6px;font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer;transition:background 0.2s;';
+            item.className = 'ttw-memory-item';
             if (memory.processing) { item.style.borderLeft = '3px solid #3498db'; item.style.background = 'rgba(52,152,219,0.15)'; }
             else if (memory.processed && !memory.failed) { item.style.opacity = '0.6'; }
             else if (memory.failed) { item.style.borderLeft = '3px solid #e74c3c'; }
@@ -2882,8 +2960,6 @@
             else if (memory.failed) statusIcon = '❗';
             item.innerHTML = `<span>${statusIcon}</span><span style="flex:1;">${memory.title}</span><small>(${memory.content.length.toLocaleString()}字)</small>${memory.failed && memory.failedError ? `<small style="color:#e74c3c;margin-left:8px;" title="${memory.failedError}">错误</small>` : ''}`;
             item.addEventListener('click', () => showMemoryContentModal(index));
-            item.addEventListener('mouseenter', () => { item.style.background = 'rgba(0,0,0,0.4)'; });
-            item.addEventListener('mouseleave', () => { item.style.background = memory.processing ? 'rgba(52,152,219,0.15)' : 'rgba(0,0,0,0.2)'; });
             container.appendChild(item);
         });
     }
@@ -3008,7 +3084,7 @@
                     </div>
                 </div>
                 <div class="ttw-modal-footer">
-                    <button class="ttw-btn" style="background:rgba(255,107,53,0.5);border-color:#ff6b35;" id="ttw-clear-history">🗑️ 清空历史</button>
+                    <button class="ttw-btn ttw-btn-warning" id="ttw-clear-history">🗑️ 清空历史</button>
                     <button class="ttw-btn" id="ttw-close-history">关闭</button>
                 </div>
             </div>
@@ -3035,7 +3111,7 @@
                     <div style="margin-bottom:15px;padding-bottom:15px;border-bottom:1px solid #444;">
                         <h4 style="color:#e67e22;margin:0 0 10px;">📝 ${history.memoryTitle}</h4>
                         <div style="font-size:12px;color:#888;">时间: ${time}</div>
-                        <div style="margin-top:10px;"><button class="ttw-btn ttw-btn-small" style="background:rgba(255,107,53,0.5);" onclick="window.TxtToWorldbook._rollbackToHistory(${historyId})">⏪ 回退到此版本前</button></div>
+                        <div style="margin-top:10px;"><button class="ttw-btn ttw-btn-small ttw-btn-warning" onclick="window.TxtToWorldbook._rollbackToHistory(${historyId})">⏪ 回退到此版本前</button></div>
                     </div>
                     <div style="font-size:14px;font-weight:bold;color:#9b59b6;margin-bottom:10px;">变更 (${history.changedEntries?.length || 0}项)</div>
                 `;
@@ -3091,5 +3167,5 @@
         importAndMerge: importAndMergeWorldbook
     };
 
-    console.log('📚 TxtToWorldbook v2.4.1 已加载 (修复CSRF/重Roll/新增JSON导入合并)');
+    console.log('📚 TxtToWorldbook v2.4.2 已加载');
 })();
