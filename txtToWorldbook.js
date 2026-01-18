@@ -1,6 +1,6 @@
 /**
- * TXT转世界书独立模块 v2.2
- * 修复：分卷触发、暂停继续、恢复进度、超大章节切分、选择起始记忆
+ * TXT转世界书独立模块 v2.1.1
+ * Bug修复版本
  */
 
 (function() {
@@ -20,7 +20,7 @@
     let incrementalOutputMode = true;
     let useVolumeMode = false;
     let currentStreamContent = '';
-    let startFromIndex = 0; // 新增：从第几个记忆开始
+    let startFromIndex = 0; // 新增：起始索引
 
     // ========== 默认设置 ==========
     const defaultWorldbookPrompt = `你是专业的小说世界书生成专家。请仔细阅读提供的小说内容，提取其中的关键信息，生成高质量的世界书条目。
@@ -145,6 +145,7 @@
                     const duplicates = allHistory.filter(h => h.memoryTitle === memoryTitle);
 
                     if (duplicates.length > 0) {
+                        console.log(`🗑️ 删除 ${duplicates.length} 条重复记录: "${memoryTitle}"`);
                         const deleteTransaction = db.transaction([this.storeName], 'readwrite');
                         const deleteStore = deleteTransaction.objectStore(this.storeName);
 
@@ -214,7 +215,10 @@
                 const store = transaction.objectStore(this.storeName);
                 const request = store.clear();
 
-                request.onsuccess = () => resolve();
+                request.onsuccess = () => {
+                    console.log('📚 记忆历史已清除');
+                    resolve();
+                };
                 request.onerror = () => reject(request.error);
             });
         },
@@ -338,6 +342,7 @@
             }
 
             if (toDelete.length > 0) {
+                console.log(`🗑️ 清理 ${toDelete.length} 条重复历史记录`);
                 const transaction = db.transaction([this.storeName], 'readwrite');
                 const store = transaction.objectStore(this.storeName);
 
@@ -370,20 +375,27 @@
         return settings.language === 'zh' ? '请用中文回复。\n\n' : '';
     }
 
-    // ========== 修复：Token超限检测函数 ==========
+    // ========== 【Bug1修复】改进的token超限检测 ==========
     function isTokenLimitError(errorMsg) {
         if (!errorMsg) return false;
         const msg = errorMsg.toLowerCase();
-        return msg.includes('prompt is too long') ||
-               msg.includes('too long') ||
-               msg.includes('max_prompt_tokens') ||
-               msg.includes('exceeded') ||
-               msg.includes('maximum') && msg.includes('token') ||
-               msg.includes('input tokens') ||
-               msg.includes('context_length') ||
-               msg.includes('context length') ||
-               (msg.includes('20015') && msg.includes('limit')) ||
-               /\d+\s*tokens?\s*>\s*\d+/.test(msg);
+
+        // 匹配各种token超限错误格式
+        const patterns = [
+            /prompt is too long/i,
+            /tokens? >\s*\d+\s*maximum/i,
+            /max_prompt_tokens/i,
+            /exceeded/i,
+            /input tokens/i,
+            /context_length/i,
+            /too many tokens/i,
+            /token limit/i,
+            /maximum.*tokens/i,
+            /20015.*limit/i,
+            /INVALID_ARGUMENT/i
+        ];
+
+        return patterns.some(pattern => pattern.test(errorMsg));
     }
 
     // ========== 文件编码检测 ==========
@@ -414,7 +426,7 @@
         });
     }
 
-    // ========== API调用 ==========
+    // ========== 使用SillyTavern内置API调用 ==========
     async function callSillyTavernAPI(prompt) {
         updateStreamContent('', true);
         updateStreamContent('📤 正在发送请求...\n');
@@ -422,6 +434,7 @@
         try {
             if (typeof SillyTavern !== 'undefined' && SillyTavern.getContext) {
                 const context = SillyTavern.getContext();
+
                 updateStreamContent('✅ 已获取酒馆上下文\n');
 
                 const result = await context.generateRaw(prompt, '', false);
@@ -462,8 +475,86 @@
         }
     }
 
+    async function callDirectAPI(prompt, apiConfig) {
+        updateStreamContent('', true);
+        updateStreamContent('📤 使用直接API调用...\n');
+
+        const { provider, apiKey, endpoint, model } = apiConfig;
+
+        let requestUrl, requestOptions;
+
+        switch (provider) {
+            case 'gemini':
+                requestUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model || 'gemini-2.5-flash'}:generateContent?key=${apiKey}`;
+                requestOptions = {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: prompt }] }],
+                        generationConfig: { maxOutputTokens: 63000, temperature: 0.3 }
+                    }),
+                };
+                break;
+
+            case 'openai':
+            default:
+                requestUrl = endpoint || 'https://api.openai.com/v1/chat/completions';
+                requestOptions = {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`
+                    },
+                    body: JSON.stringify({
+                        model: model || 'gpt-4',
+                        messages: [{ role: 'user', content: prompt }],
+                        temperature: 0.3,
+                        max_tokens: 8192
+                    }),
+                };
+                break;
+        }
+
+        const response = await fetch(requestUrl, requestOptions);
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            updateStreamContent(`\n❌ API错误: ${response.status}\n${errorText}`);
+            throw new Error(`API请求失败: ${response.status} - ${errorText}`);
+        }
+
+        const data = await response.json();
+        let content = '';
+
+        if (provider === 'gemini') {
+            content = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        } else {
+            content = data.choices?.[0]?.message?.content || '';
+        }
+
+        updateStreamContent(`\n📥 收到响应 (${content.length}字符)\n`);
+        updateStreamContent(content.substring(0, 500) + (content.length > 500 ? '...' : ''));
+
+        return content;
+    }
+
     async function callAPI(prompt) {
-        return await callSillyTavernAPI(prompt);
+        try {
+            return await callSillyTavernAPI(prompt);
+        } catch (stError) {
+            console.warn('SillyTavern API调用失败，尝试备用方案:', stError);
+
+            if (settings.backupApiKey) {
+                return await callDirectAPI(prompt, {
+                    provider: settings.backupApiProvider || 'openai',
+                    apiKey: settings.backupApiKey,
+                    endpoint: settings.backupApiEndpoint,
+                    model: settings.backupApiModel
+                });
+            }
+
+            throw stError;
+        }
     }
 
     // ========== 实时内容显示 ==========
@@ -535,6 +626,8 @@
     function mergeWorldbookDataIncremental(target, source) {
         normalizeWorldbookData(source);
 
+        const stats = { updated: [], added: [] };
+
         for (const category in source) {
             if (typeof source[category] !== 'object' || source[category] === null) continue;
 
@@ -560,10 +653,20 @@
                     if (sourceEntry['内容']) {
                         targetEntry['内容'] = sourceEntry['内容'];
                     }
+
+                    stats.updated.push(`[${category}] ${entryName}`);
                 } else {
                     target[category][entryName] = sourceEntry;
+                    stats.added.push(`[${category}] ${entryName}`);
                 }
             }
+        }
+
+        if (stats.updated.length > 0) {
+            console.log(`📝 增量更新 ${stats.updated.length} 个条目`);
+        }
+        if (stats.added.length > 0) {
+            console.log(`➕ 增量新增 ${stats.added.length} 个条目`);
         }
     }
 
@@ -579,9 +682,21 @@
                 const newEntry = newCategory[entryName];
 
                 if (!oldEntry) {
-                    changes.push({ type: 'add', category, entryName, oldValue: null, newValue: newEntry });
+                    changes.push({
+                        type: 'add',
+                        category: category,
+                        entryName: entryName,
+                        oldValue: null,
+                        newValue: newEntry
+                    });
                 } else if (JSON.stringify(oldEntry) !== JSON.stringify(newEntry)) {
-                    changes.push({ type: 'modify', category, entryName, oldValue: oldEntry, newValue: newEntry });
+                    changes.push({
+                        type: 'modify',
+                        category: category,
+                        entryName: entryName,
+                        oldValue: oldEntry,
+                        newValue: newEntry
+                    });
                 }
             }
         }
@@ -592,7 +707,13 @@
 
             for (const entryName in oldCategory) {
                 if (!newCategory[entryName]) {
-                    changes.push({ type: 'delete', category, entryName, oldValue: oldCategory[entryName], newValue: null });
+                    changes.push({
+                        type: 'delete',
+                        category: category,
+                        entryName: entryName,
+                        oldValue: oldCategory[entryName],
+                        newValue: null
+                    });
                 }
             }
         }
@@ -612,7 +733,14 @@
         const changedEntries = findChangedEntries(previousWorldbook, target);
 
         if (changedEntries.length > 0) {
-            await MemoryHistoryDB.saveHistory(memoryIndex, memoryTitle, previousWorldbook, target, changedEntries);
+            await MemoryHistoryDB.saveHistory(
+                memoryIndex,
+                memoryTitle,
+                previousWorldbook,
+                target,
+                changedEntries
+            );
+            console.log(`📚 已保存历史记录: ${memoryTitle}, ${changedEntries.length}个变更`);
         }
 
         return changedEntries;
@@ -620,7 +748,9 @@
 
     // ========== 正则回退解析 ==========
     function extractWorldbookDataByRegex(jsonString) {
+        console.log('🔧 开始正则提取世界书数据...');
         const result = {};
+
         const categories = ['角色', '地点', '组织', '剧情大纲', '知识书', '文风配置'];
 
         for (const category of categories) {
@@ -639,7 +769,10 @@
                 endPos++;
             }
 
-            if (braceCount !== 0) continue;
+            if (braceCount !== 0) {
+                console.log(`⚠️ 分类 "${category}" 括号不匹配，跳过`);
+                continue;
+            }
 
             const categoryContent = jsonString.substring(startPos, endPos - 1);
             result[category] = {};
@@ -698,7 +831,11 @@
                 }
 
                 if (content || keywords.length > 0) {
-                    result[category][entryName] = { '关键词': keywords, '内容': content };
+                    result[category][entryName] = {
+                        '关键词': keywords,
+                        '内容': content
+                    };
+                    console.log(`  ✓ 提取条目: ${category} -> ${entryName}`);
                 }
             }
 
@@ -706,6 +843,10 @@
                 delete result[category];
             }
         }
+
+        const extractedCategories = Object.keys(result);
+        const totalEntries = extractedCategories.reduce((sum, cat) => sum + Object.keys(result[cat]).length, 0);
+        console.log(`🔧 正则提取完成: ${extractedCategories.length}个分类, ${totalEntries}个条目`);
 
         return result;
     }
@@ -718,7 +859,7 @@
                 worldbook: JSON.parse(JSON.stringify(generatedWorldbook)),
                 timestamp: Date.now()
             });
-            console.log(`📦 第${currentVolumeIndex + 1}卷已保存`);
+            console.log(`📦 第${currentVolumeIndex + 1}卷已保存，共${Object.keys(generatedWorldbook).length}个分类`);
         }
 
         currentVolumeIndex++;
@@ -737,7 +878,7 @@
         const indicator = document.getElementById('ttw-volume-indicator');
         if (indicator) {
             indicator.textContent = `当前: 第${currentVolumeIndex + 1}卷 | 已完成: ${worldbookVolumes.length}卷`;
-            indicator.style.display = useVolumeMode ? 'block' : 'none';
+            indicator.style.display = 'block';
         }
     }
 
@@ -776,7 +917,10 @@
     // ========== 记忆分裂机制 ==========
     function splitMemoryIntoTwo(memoryIndex) {
         const memory = memoryQueue[memoryIndex];
-        if (!memory) return null;
+        if (!memory) {
+            console.error('❌ 无法找到要分裂的记忆');
+            return null;
+        }
 
         const content = memory.content;
         const halfLength = Math.floor(content.length / 2);
@@ -829,13 +973,17 @@
 
         memoryQueue.splice(memoryIndex, 1, memory1, memory2);
 
+        console.log(`🔀 记忆分裂完成: "${originalTitle}" -> "${memory1.title}" + "${memory2.title}"`);
+        console.log(`   原始长度: ${content.length}, 分裂后: ${content1.length} + ${content2.length}`);
+
         return { part1: memory1, part2: memory2 };
     }
 
     // ========== 记忆处理核心 ==========
     async function processMemoryChunk(index, retryCount = 0) {
         if (isProcessingStopped) {
-            return 'stopped';
+            console.log(`处理被暂停，跳过记忆块 ${index + 1}`);
+            return;
         }
 
         const memory = memoryQueue[index];
@@ -860,7 +1008,7 @@
 
         prompt += '\n\n';
 
-        if (index > 0 && memoryQueue[index - 1]) {
+        if (index > 0) {
             prompt += `这是你上一次阅读的结尾部分：
 ---
 ${memoryQueue[index - 1].content.slice(-500)}
@@ -880,7 +1028,7 @@ ${memory.content}
 
 `;
 
-        if (index === 0 || (useVolumeMode && Object.keys(generatedWorldbook.角色 || {}).length === 0)) {
+        if (index === 0 || index === startFromIndex) {
             prompt += `现在开始分析小说内容，请专注于提取文中实际出现的信息：
 
 `;
@@ -900,7 +1048,14 @@ ${memory.content}
 
 `;
             } else {
-                prompt += `请基于新内容**累积补充**世界书。
+                prompt += `请基于新内容**累积补充**世界书，注意以下要点：
+
+**重要规则**：
+1. **已有角色**：如果角色已存在，请在原有内容基础上**追加新信息**，不要删除或覆盖已有描述
+2. **新角色**：如果是新出现的角色，添加为新条目
+3. **剧情大纲**：持续追踪主线发展，**追加新的剧情进展**而不是重写
+4. **关键词**：为已有条目补充新的关键词（如新称呼、新关系等）
+5. **保持完整性**：确保之前章节提取的重要信息不会丢失
 
 `;
             }
@@ -908,17 +1063,29 @@ ${memory.content}
 
         prompt += `请直接输出JSON格式的结果，不要添加任何代码块标记或解释文字。`;
 
+        console.log(`=== 第${index + 1}步 Prompt (前500字) ===`);
+        console.log(prompt.substring(0, 500) + '...');
+        console.log('=====================');
+
         try {
-            updateProgress(progress, `正在调用API: ${memory.title}`);
+            console.log(`开始调用API处理第${index + 1}个记忆块...`);
+            updateProgress(progress, `正在调用API: ${memory.title} (${index + 1}/${memoryQueue.length})`);
 
             const response = await callAPI(prompt);
 
             if (isProcessingStopped) {
-                return 'stopped';
+                console.log(`API调用完成后检测到暂停，跳过后续处理`);
+                return;
             }
 
-            // 检查返回内容是否包含token超限错误
-            if (isTokenLimitError(response)) {
+            console.log(`API调用完成，返回内容长度: ${response.length}`);
+
+            // 【Bug1修复】使用改进的检测函数
+            const containsTokenError = isTokenLimitError(response);
+
+            if (containsTokenError) {
+                console.log(`⚠️ 返回内容包含token超限错误`);
+
                 if (useVolumeMode) {
                     console.log(`📦 分卷模式：开启新卷继续处理`);
                     updateProgress(progress, `📦 上下文超限，开启第${currentVolumeIndex + 2}卷...`);
@@ -926,7 +1093,8 @@ ${memory.content}
                     startNewVolume();
                     await MemoryHistoryDB.saveState(index);
 
-                    return await processMemoryChunk(index, 0);
+                    await processMemoryChunk(index, 0);
+                    return;
                 }
 
                 updateProgress(progress, `🔀 上下文超限，分裂当前记忆块...`);
@@ -935,16 +1103,21 @@ ${memory.content}
                 if (splitResult) {
                     updateMemoryQueueUI();
                     await MemoryHistoryDB.saveState(index);
-                    return 'split';
+
+                    await processMemoryChunk(index, 0);
+                    await processMemoryChunk(index + 1, 0);
+                    return;
                 }
             }
 
-            // 解析JSON
             let memoryUpdate;
             try {
                 memoryUpdate = JSON.parse(response);
+                console.log('✅ JSON直接解析成功');
             } catch (jsonError) {
+                console.log('直接JSON解析失败，开始清理...');
                 let cleanResponse = response.trim();
+
                 cleanResponse = cleanResponse.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
 
                 if (!cleanResponse.startsWith('{')) {
@@ -957,17 +1130,27 @@ ${memory.content}
 
                 try {
                     memoryUpdate = JSON.parse(cleanResponse);
+                    console.log('✅ JSON清理后解析成功');
                 } catch (secondError) {
+                    console.error('❌ JSON解析仍然失败');
+
                     const openBraces = (cleanResponse.match(/{/g) || []).length;
                     const closeBraces = (cleanResponse.match(/}/g) || []).length;
                     const missingBraces = openBraces - closeBraces;
 
                     if (missingBraces > 0) {
+                        console.log(`⚠️ 检测到内容不完整：缺少${missingBraces}个闭合括号`);
+
                         try {
                             memoryUpdate = JSON.parse(cleanResponse + '}'.repeat(missingBraces));
+                            console.log(`✅ 自动添加${missingBraces}个闭合括号后解析成功`);
                         } catch (autoFixError) {
+                            console.log('❌ 自动添加闭合括号后仍然失败，尝试正则提取...');
+
                             const regexExtractedData = extractWorldbookDataByRegex(cleanResponse);
+
                             if (regexExtractedData && Object.keys(regexExtractedData).length > 0) {
+                                console.log('✅ 正则提取成功！');
                                 memoryUpdate = regexExtractedData;
                             } else {
                                 throw new Error(`JSON解析失败: ${secondError.message}`);
@@ -975,7 +1158,9 @@ ${memory.content}
                         }
                     } else {
                         const regexExtractedData = extractWorldbookDataByRegex(cleanResponse);
+
                         if (regexExtractedData && Object.keys(regexExtractedData).length > 0) {
+                            console.log('✅ 正则提取成功！');
                             memoryUpdate = regexExtractedData;
                         } else {
                             throw new Error(`JSON解析失败: ${secondError.message}`);
@@ -984,55 +1169,74 @@ ${memory.content}
                 }
             }
 
-            await mergeWorldbookDataWithHistory(generatedWorldbook, memoryUpdate, index, memory.title);
+            const changedEntries = await mergeWorldbookDataWithHistory(generatedWorldbook, memoryUpdate, index, memory.title);
+
+            if (incrementalOutputMode && changedEntries.length > 0) {
+                console.log(`📝 第${index + 1}个记忆块变更 ${changedEntries.length} 个条目`);
+            }
 
             memory.processed = true;
             updateMemoryQueueUI();
-
-            return 'success';
+            console.log(`记忆块 ${index + 1} 处理完成`);
 
         } catch (error) {
-            console.error(`处理记忆块 ${index + 1} 时出错:`, error);
+            console.error(`处理记忆块 ${index + 1} 时出错 (第${retryCount + 1}次尝试):`, error);
 
             const errorMsg = error.message || '';
 
+            // 【Bug1修复】使用改进的检测函数
             if (isTokenLimitError(errorMsg)) {
                 if (useVolumeMode) {
                     console.log(`📦 分卷模式：开启新卷继续处理`);
-                    updateProgress(progress, `📦 上下文超限，开启第${currentVolumeIndex + 2}卷...`);
+                    updateProgress((index / memoryQueue.length) * 100, `📦 上下文超限，开启第${currentVolumeIndex + 2}卷...`);
 
                     startNewVolume();
                     await MemoryHistoryDB.saveState(index);
                     await new Promise(resolve => setTimeout(resolve, 500));
 
-                    return await processMemoryChunk(index, 0);
+                    await processMemoryChunk(index, 0);
+                    return;
                 }
 
-                updateProgress(progress, `🔀 字数超限，正在分裂记忆: ${memory.title}`);
+                console.log(`⚠️ 检测到token超限错误，分裂当前记忆块: ${memory.title}`);
+                updateProgress((index / memoryQueue.length) * 100, `🔀 字数超限，正在分裂记忆: ${memory.title}`);
 
                 const splitResult = splitMemoryIntoTwo(index);
                 if (splitResult) {
+                    console.log(`✅ 记忆分裂成功`);
                     updateMemoryQueueUI();
                     await MemoryHistoryDB.saveState(index);
                     await new Promise(resolve => setTimeout(resolve, 500));
-                    return 'split';
+
+                    await processMemoryChunk(index, 0);
+                    await processMemoryChunk(index + 1, 0);
+
+                    return;
                 } else {
+                    console.error(`❌ 记忆分裂失败: ${memory.title}`);
                     memory.processed = true;
                     memory.failed = true;
                     memory.failedError = error.message;
+                    if (!failedMemoryQueue.find(m => m.index === index)) {
+                        failedMemoryQueue.push({ index, memory, error: error.message });
+                    }
                     updateMemoryQueueUI();
-                    return 'failed';
+                    return;
                 }
             }
 
             if (retryCount < maxRetries) {
+                console.log(`准备重试，当前重试次数: ${retryCount + 1}/${maxRetries}`);
                 const retryDelay = Math.min(1000 * Math.pow(2, retryCount), 10000);
-                updateProgress(progress, `处理失败，${retryDelay/1000}秒后重试: ${memory.title}`);
+                updateProgress((index / memoryQueue.length) * 100, `处理失败，${retryDelay/1000}秒后重试: ${memory.title}`);
 
                 await new Promise(resolve => setTimeout(resolve, retryDelay));
 
                 return await processMemoryChunk(index, retryCount + 1);
             } else {
+                console.error(`记忆块 ${index + 1} 重试${maxRetries}次后仍然失败`);
+                updateProgress((index / memoryQueue.length) * 100, `处理失败 (已重试${maxRetries}次): ${memory.title}`);
+
                 memory.processed = true;
                 memory.failed = true;
                 memory.failedError = error.message;
@@ -1042,8 +1246,11 @@ ${memory.content}
                 }
 
                 updateMemoryQueueUI();
-                return 'failed';
             }
+        }
+
+        if (memory.processed) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
         }
     }
 
@@ -1051,11 +1258,10 @@ ${memory.content}
         showProgressSection(true);
         isProcessingStopped = false;
 
-        // 如果不是从头开始，保留已有数据
+        // 【Bug3修复】如果不是从头开始，保留之前的状态
         if (startFromIndex === 0) {
             worldbookVolumes = [];
             currentVolumeIndex = 0;
-
             generatedWorldbook = {
                 地图环境: {},
                 剧情节点: {},
@@ -1068,52 +1274,46 @@ ${memory.content}
             updateVolumeIndicator();
         }
 
-        // 更新按钮状态
-        const startBtn = document.getElementById('ttw-start-btn');
-        startBtn.disabled = true;
-        startBtn.textContent = '⏳ 处理中...';
+        // 【Bug2修复】更新按钮状态
+        updateStartButtonState(true);
 
         try {
+            // 【Bug3修复】从指定索引开始处理
             let i = startFromIndex;
             while (i < memoryQueue.length) {
                 if (isProcessingStopped) {
                     console.log('处理被用户停止');
-                    updateProgress((i / memoryQueue.length) * 100, `⏸️ 已暂停 (${i}/${memoryQueue.length})`);
+                    updateProgress((i / memoryQueue.length) * 100, `⏸️ 已暂停处理 (${i}/${memoryQueue.length})`);
                     await MemoryHistoryDB.saveState(i);
 
-                    // 恢复按钮状态为继续
-                    startBtn.disabled = false;
-                    startBtn.textContent = '▶️ 继续转换';
-                    startFromIndex = i;
-
-                    alert(`处理已暂停！\n当前进度: ${i}/${memoryQueue.length}\n\n点击"继续转换"可继续。`);
+                    // 【Bug2修复】暂停后更新按钮
+                    updateStartButtonState(false, i);
                     return;
                 }
 
-                // 跳过已处理的
-                if (memoryQueue[i].processed && !memoryQueue[i].failed) {
-                    i++;
-                    continue;
+                if (isRepairingMemories) {
+                    console.log(`检测到修复模式，暂停当前处理于索引 ${i}`);
+                    currentProcessingIndex = i;
+                    updateProgress((i / memoryQueue.length) * 100, `⏸️ 修复记忆中，已暂停处理 (${i}/${memoryQueue.length})`);
+
+                    while (isRepairingMemories) {
+                        await new Promise(resolve => setTimeout(resolve, 500));
+                    }
+
+                    console.log(`修复完成，从索引 ${i} 继续处理`);
                 }
 
                 const currentQueueLength = memoryQueue.length;
-                const result = await processMemoryChunk(i);
+                await processMemoryChunk(i);
 
-                if (result === 'stopped') {
-                    break;
-                }
-
-                if (result === 'split') {
-                    // 分裂后重新处理当前索引
-                    continue;
+                if (memoryQueue.length > currentQueueLength) {
+                    i += (memoryQueue.length - currentQueueLength);
                 }
 
                 i++;
                 await MemoryHistoryDB.saveState(i);
-                await new Promise(resolve => setTimeout(resolve, 1000));
             }
 
-            // 保存最后一卷
             if (useVolumeMode && Object.keys(generatedWorldbook).length > 0) {
                 worldbookVolumes.push({
                     volumeIndex: currentVolumeIndex,
@@ -1122,38 +1322,67 @@ ${memory.content}
                 });
             }
 
-            if (!isProcessingStopped) {
-                const failedCount = memoryQueue.filter(m => m.failed === true).length;
+            const failedCount = memoryQueue.filter(m => m.failed === true).length;
 
-                if (failedCount > 0) {
-                    updateProgress(100, `⚠️ 处理完成，但有 ${failedCount} 个记忆块失败`);
-                } else {
-                    const volumeInfo = useVolumeMode ? ` (共${worldbookVolumes.length}卷)` : '';
-                    updateProgress(100, `✅ 全部完成！${volumeInfo}`);
-                }
-
-                showResultSection(true);
-                updateWorldbookPreview();
-
-                await MemoryHistoryDB.saveState(memoryQueue.length);
-
-                startBtn.disabled = false;
-                startBtn.textContent = '🚀 重新开始';
-                startFromIndex = 0;
+            if (failedCount > 0) {
+                updateProgress(100, `⚠️ 处理完成，但有 ${failedCount} 个记忆块失败，请点击修复`);
+            } else {
+                const volumeInfo = useVolumeMode ? ` (共${worldbookVolumes.length}卷)` : '';
+                updateProgress(100, `✅ 所有记忆块处理完成！${volumeInfo}`);
             }
+
+            showResultSection(true);
+            updateWorldbookPreview();
+
+            console.log('AI记忆大师处理完成');
+
+            if (!isProcessingStopped) {
+                await MemoryHistoryDB.saveState(memoryQueue.length);
+                await MemoryHistoryDB.clearState(); // 完成后清除状态
+                console.log('✅ 转换完成，状态已保存');
+            }
+
+            // 【Bug2修复】完成后更新按钮
+            updateStartButtonState(false, memoryQueue.length);
 
         } catch (error) {
             console.error('AI处理过程中发生错误:', error);
-            updateProgress(0, `❌ 处理出错: ${error.message}`);
+            updateProgress(0, `❌ 处理过程出错: ${error.message}`);
 
+            // 【Bug2修复】出错后更新按钮
+            const processedCount = memoryQueue.filter(m => m.processed).length;
+            updateStartButtonState(false, processedCount);
+        }
+    }
+
+    // 【Bug2修复】新增：更新开始按钮状态
+    function updateStartButtonState(isProcessing, processedIndex = 0) {
+        const startBtn = document.getElementById('ttw-start-btn');
+        if (!startBtn) return;
+
+        if (isProcessing) {
+            startBtn.disabled = true;
+            startBtn.textContent = '转换中...';
+        } else {
             startBtn.disabled = false;
-            startBtn.textContent = '▶️ 继续转换';
+            if (processedIndex > 0 && processedIndex < memoryQueue.length) {
+                startBtn.textContent = `▶️ 继续转换 (从记忆${processedIndex + 1})`;
+                startFromIndex = processedIndex;
+            } else if (processedIndex >= memoryQueue.length) {
+                startBtn.textContent = '🚀 重新转换';
+                startFromIndex = 0;
+            } else {
+                startBtn.textContent = '🚀 开始转换';
+                startFromIndex = 0;
+            }
         }
     }
 
     // ========== 修复失败记忆 ==========
     async function repairSingleMemory(index) {
         const memory = memoryQueue[index];
+        const enableLiteraryStyle = settings.enableLiteraryStyle;
+        const enablePlotOutline = settings.enablePlotOutline;
 
         let prompt = getLanguagePrefix() + `你是专业的小说世界书生成专家。请仔细阅读提供的小说内容，提取关键信息，生成世界书条目。
 
@@ -1162,10 +1391,12 @@ ${memory.content}
 {
 "角色": { "角色名": { "关键词": ["..."], "内容": "..." } },
 "地点": { "地点名": { "关键词": ["..."], "内容": "..." } },
-"组织": { "组织名": { "关键词": ["..."], "内容": "..." } }
+"组织": { "组织名": { "关键词": ["..."], "内容": "..." } }${enablePlotOutline ? `,
+"剧情大纲": { "主线剧情": { "关键词": ["主线"], "内容": "..." } }` : ''}${enableLiteraryStyle ? `,
+"文风配置": { "作品文风": { "关键词": ["文风"], "内容": "..." } }` : ''}
 }
 
-直接输出JSON，不要包含代码块标记。
+直接输出更新后的JSON，保持一致性，不要包含代码块标记。
 `;
 
         if (Object.keys(generatedWorldbook).length > 0) {
@@ -1173,6 +1404,8 @@ ${memory.content}
         }
 
         prompt += `阅读内容：\n---\n${memory.content}\n---\n\n请基于内容更新世界书，直接输出JSON。`;
+
+        console.log(`=== 修复记忆 第${index + 1}步 ===`);
 
         const response = await callAPI(prompt);
         let memoryUpdate;
@@ -1190,16 +1423,92 @@ ${memory.content}
             try {
                 memoryUpdate = JSON.parse(cleanResponse);
             } catch (secondError) {
-                const regexData = extractWorldbookDataByRegex(cleanResponse);
-                if (regexData && Object.keys(regexData).length > 0) {
-                    memoryUpdate = regexData;
+                const openBraces = (cleanResponse.match(/{/g) || []).length;
+                const closeBraces = (cleanResponse.match(/}/g) || []).length;
+                if (openBraces > closeBraces) {
+                    try {
+                        memoryUpdate = JSON.parse(cleanResponse + '}'.repeat(openBraces - closeBraces));
+                    } catch (e) {
+                        const regexData = extractWorldbookDataByRegex(cleanResponse);
+                        if (regexData && Object.keys(regexData).length > 0) {
+                            memoryUpdate = regexData;
+                        } else {
+                            throw new Error(`JSON解析失败: ${secondError.message}`);
+                        }
+                    }
                 } else {
-                    throw new Error(`JSON解析失败`);
+                    const regexData = extractWorldbookDataByRegex(cleanResponse);
+                    if (regexData && Object.keys(regexData).length > 0) {
+                        memoryUpdate = regexData;
+                    } else {
+                        throw new Error(`JSON解析失败: ${secondError.message}`);
+                    }
                 }
             }
         }
 
-        await mergeWorldbookDataWithHistory(generatedWorldbook, memoryUpdate, index, `修复-${memory.title}`);
+        const memoryTitle = `记忆-修复-${memory.title}`;
+        await mergeWorldbookDataWithHistory(generatedWorldbook, memoryUpdate, index, memoryTitle);
+        console.log(`记忆块 ${index + 1} 修复完成`);
+    }
+
+    async function repairMemoryWithSplit(memoryIndex, stats) {
+        const memory = memoryQueue[memoryIndex];
+        if (!memory) return;
+
+        updateProgress((memoryIndex / memoryQueue.length) * 100, `正在修复: ${memory.title}`);
+
+        try {
+            await repairSingleMemory(memoryIndex);
+            memory.failed = false;
+            memory.failedError = null;
+            memory.processed = true;
+            stats.successCount++;
+            console.log(`✅ 修复成功: ${memory.title}`);
+            updateMemoryQueueUI();
+            await MemoryHistoryDB.saveState(memoryQueue.filter(m => m.processed).length);
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (error) {
+            const errorMsg = error.message || '';
+
+            if (isTokenLimitError(errorMsg)) {
+                if (useVolumeMode) {
+                    console.log(`📦 分卷模式：开启新卷继续修复`);
+                    startNewVolume();
+                    await MemoryHistoryDB.saveState(memoryQueue.filter(m => m.processed).length);
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    await repairMemoryWithSplit(memoryIndex, stats);
+                    return;
+                }
+
+                console.log(`⚠️ 检测到token超限错误，分裂当前记忆: ${memory.title}`);
+                updateProgress((memoryIndex / memoryQueue.length) * 100, `🔀 正在分裂记忆: ${memory.title}`);
+
+                const splitResult = splitMemoryIntoTwo(memoryIndex);
+                if (splitResult) {
+                    console.log(`✅ 记忆分裂成功`);
+                    updateMemoryQueueUI();
+                    await MemoryHistoryDB.saveState(memoryQueue.filter(m => m.processed).length);
+                    await new Promise(resolve => setTimeout(resolve, 500));
+
+                    const part1Index = memoryQueue.indexOf(splitResult.part1);
+                    await repairMemoryWithSplit(part1Index, stats);
+
+                    const part2Index = memoryQueue.indexOf(splitResult.part2);
+                    await repairMemoryWithSplit(part2Index, stats);
+                } else {
+                    stats.stillFailedCount++;
+                    memory.failedError = error.message;
+                    console.error(`❌ 记忆分裂失败: ${memory.title}`);
+                }
+            } else {
+                stats.stillFailedCount++;
+                memory.failedError = error.message;
+                console.error(`❌ 修复失败: ${memory.title}`, error);
+                updateMemoryQueueUI();
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        }
     }
 
     async function startRepairFailedMemories() {
@@ -1210,12 +1519,15 @@ ${memory.content}
         }
 
         isRepairingMemories = true;
+        console.log(`🔧 开始一键修复 ${failedMemories.length} 个失败的记忆...`);
 
         showProgressSection(true);
         updateProgress(0, `正在修复失败的记忆 (0/${failedMemories.length})`);
 
-        let successCount = 0;
-        let stillFailedCount = 0;
+        const stats = {
+            successCount: 0,
+            stillFailedCount: 0
+        };
 
         for (let i = 0; i < failedMemories.length; i++) {
             const memory = failedMemories[i];
@@ -1225,59 +1537,25 @@ ${memory.content}
 
             updateProgress(((i + 1) / failedMemories.length) * 100, `正在修复: ${memory.title}`);
 
-            try {
-                await repairSingleMemory(memoryIndex);
-                memory.failed = false;
-                memory.failedError = null;
-                memory.processed = true;
-                successCount++;
-                updateMemoryQueueUI();
-            } catch (error) {
-                if (isTokenLimitError(error.message)) {
-                    if (useVolumeMode) {
-                        startNewVolume();
-                        try {
-                            await repairSingleMemory(memoryIndex);
-                            memory.failed = false;
-                            memory.failedError = null;
-                            memory.processed = true;
-                            successCount++;
-                            updateMemoryQueueUI();
-                            continue;
-                        } catch (e) {
-                            stillFailedCount++;
-                            memory.failedError = e.message;
-                        }
-                    } else {
-                        const splitResult = splitMemoryIntoTwo(memoryIndex);
-                        if (splitResult) {
-                            updateMemoryQueueUI();
-                            // 新分裂的块会在下次修复时处理
-                        } else {
-                            stillFailedCount++;
-                            memory.failedError = error.message;
-                        }
-                    }
-                } else {
-                    stillFailedCount++;
-                    memory.failedError = error.message;
-                }
-                updateMemoryQueueUI();
-            }
-
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            await repairMemoryWithSplit(memoryIndex, stats);
         }
 
-        updateProgress(100, `修复完成: 成功 ${successCount} 个, 仍失败 ${stillFailedCount} 个`);
+        failedMemoryQueue = failedMemoryQueue.filter(item => {
+            const memory = memoryQueue[item.index];
+            return memory && memory.failed === true;
+        });
+
+        updateProgress(100, `修复完成: 成功 ${stats.successCount} 个, 仍失败 ${stats.stillFailedCount} 个`);
 
         await MemoryHistoryDB.saveState(memoryQueue.length);
 
         isRepairingMemories = false;
+        console.log(`🔧 修复模式结束`);
 
-        if (stillFailedCount > 0) {
-            alert(`修复完成！\n成功: ${successCount} 个\n仍失败: ${stillFailedCount} 个`);
+        if (stats.stillFailedCount > 0) {
+            alert(`修复完成！\n成功: ${stats.successCount} 个\n仍失败: ${stats.stillFailedCount} 个\n\n失败的记忆仍显示❗，可继续点击修复。`);
         } else {
-            alert(`全部修复成功！共修复 ${successCount} 个记忆块。`);
+            alert(`全部修复成功！共修复 ${stats.successCount} 个记忆块。`);
         }
 
         updateMemoryQueueUI();
@@ -1294,6 +1572,8 @@ ${memory.content}
             if (typeof categoryData !== 'object' || categoryData === null) continue;
 
             const isTriggerCategory = triggerCategories.has(category);
+            const constant = !isTriggerCategory;
+            const selective = isTriggerCategory;
 
             for (const [itemName, itemData] of Object.entries(categoryData)) {
                 if (typeof itemData !== 'object' || itemData === null) continue;
@@ -1302,9 +1582,12 @@ ${memory.content}
                     const keywords = Array.isArray(itemData.关键词) ? itemData.关键词 : [itemData.关键词];
 
                     const cleanKeywords = keywords.map(keyword => {
-                        return String(keyword).trim().replace(/[-_\s]+/g, '');
+                        const keywordStr = String(keyword).trim();
+                        return keywordStr.replace(/[-_\s]+/g, '');
                     }).filter(keyword =>
-                        keyword.length > 0 && keyword.length <= 20
+                        keyword.length > 0 &&
+                        keyword.length <= 20 &&
+                        !['的', '了', '在', '是', '有', '和', '与', '或', '但'].includes(keyword)
                     );
 
                     if (cleanKeywords.length === 0) {
@@ -1313,14 +1596,16 @@ ${memory.content}
 
                     const uniqueKeywords = [...new Set(cleanKeywords)];
 
+                    let content = String(itemData.内容).trim();
+
                     entries.push({
                         uid: entryId++,
                         key: uniqueKeywords,
                         keysecondary: [],
                         comment: `${category} - ${itemName}`,
-                        content: String(itemData.内容).trim(),
-                        constant: !isTriggerCategory,
-                        selective: isTriggerCategory,
+                        content: content,
+                        constant,
+                        selective,
                         selectiveLogic: 0,
                         addMemo: true,
                         order: entryId * 100,
@@ -1349,25 +1634,70 @@ ${memory.content}
             }
         }
 
+        if (entries.length === 0) {
+            entries.push({
+                uid: 0,
+                key: ['默认条目'],
+                keysecondary: [],
+                comment: '世界书转换时生成的默认条目',
+                content: '这是一个从小说自动生成的世界书条目。',
+                constant: false,
+                selective: true,
+                selectiveLogic: 0,
+                addMemo: true,
+                order: 100,
+                position: 0,
+                disable: false,
+                excludeRecursion: false,
+                preventRecursion: false,
+                delayUntilRecursion: false,
+                probability: 100,
+                depth: 4,
+                group: '默认',
+                groupOverride: false,
+                groupWeight: 100,
+                scanDepth: null,
+                caseSensitive: false,
+                matchWholeWords: true,
+                useGroupScoring: null,
+                automationId: '',
+                role: 0,
+                vectorized: false,
+                sticky: null,
+                cooldown: null,
+                delay: null
+            });
+        }
+
         return {
             entries: entries,
             originalData: {
                 name: '小说转换的世界书',
                 description: '由TXT转世界书功能生成',
-                version: 1
+                version: 1,
+                author: 'TxtToWorldbook',
+                tags: ['小说', 'AI生成', '世界书'],
+                source: 'TxtToWorldbook'
             }
         };
     }
 
     function exportWorldbook() {
         const timeString = new Date().toLocaleString('zh-CN', {
-            year: 'numeric', month: '2-digit', day: '2-digit',
-            hour: '2-digit', minute: '2-digit'
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
         }).replace(/[:/\s]/g, '').replace(/,/g, '-');
 
-        let fileName = currentFile
-            ? `${currentFile.name.replace(/\.[^/.]+$/, '')}-世界书-${timeString}`
-            : `世界书-${timeString}`;
+        let fileName = '转换数据';
+        if (currentFile && currentFile.name) {
+            const baseName = currentFile.name.replace(/\.[^/.]+$/, '');
+            fileName = `${baseName}-世界书生成数据-${timeString}`;
+        } else {
+            fileName = `转换数据-${timeString}`;
+        }
 
         const exportData = useVolumeMode ? {
             volumes: worldbookVolumes,
@@ -1386,17 +1716,24 @@ ${memory.content}
 
     function exportToSillyTavern() {
         const timeString = new Date().toLocaleString('zh-CN', {
-            year: 'numeric', month: '2-digit', day: '2-digit',
-            hour: '2-digit', minute: '2-digit'
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
         }).replace(/[:/\s]/g, '').replace(/,/g, '-');
 
         try {
             const worldbookToExport = useVolumeMode ? getAllVolumesWorldbook() : generatedWorldbook;
             const sillyTavernWorldbook = convertToSillyTavernFormat(worldbookToExport);
 
-            let fileName = currentFile
-                ? `${currentFile.name.replace(/\.[^/.]+$/, '')}-酒馆世界书-${timeString}`
-                : `酒馆世界书-${timeString}`;
+            let fileName = '酒馆书';
+            if (currentFile && currentFile.name) {
+                const baseName = currentFile.name.replace(/\.[^/.]+$/, '');
+                fileName = `${baseName}-世界书参考-${timeString}`;
+            } else {
+                fileName = `酒馆书-${timeString}`;
+            }
 
             const blob = new Blob([JSON.stringify(sillyTavernWorldbook, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
@@ -1406,8 +1743,10 @@ ${memory.content}
             a.click();
             URL.revokeObjectURL(url);
 
-            alert(`导出成功！请在SillyTavern中手动导入。`);
+            const volumeInfo = useVolumeMode ? `\n\n共${worldbookVolumes.length}卷已合并导出。` : '';
+            alert(`世界书已转换为SillyTavern格式并下载${volumeInfo}\n请在SillyTavern中手动导入该文件。`);
         } catch (error) {
+            console.error('转换为SillyTavern格式失败:', error);
             alert('转换失败：' + error.message);
         }
     }
@@ -1419,14 +1758,17 @@ ${memory.content}
         }
 
         const timeString = new Date().toLocaleString('zh-CN', {
-            year: 'numeric', month: '2-digit', day: '2-digit',
-            hour: '2-digit', minute: '2-digit'
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
         }).replace(/[:/\s]/g, '').replace(/,/g, '-');
 
         for (let i = 0; i < worldbookVolumes.length; i++) {
             const volume = worldbookVolumes[i];
             const fileName = currentFile
-                ? `${currentFile.name.replace(/\.[^/.]+$/, '')}-卷${i + 1}-${timeString}.json`
+                ? `${currentFile.name.replace(/\.[^/.]+$/, '')}-世界书-卷${i + 1}-${timeString}.json`
                 : `世界书-卷${i + 1}-${timeString}.json`;
 
             const blob = new Blob([JSON.stringify(volume.worldbook, null, 2)], { type: 'application/json' });
@@ -1471,6 +1813,125 @@ ${memory.content}
         return fullPrompt;
     }
 
+    // ========== 帮助弹窗 ==========
+    function showHelpModal() {
+        const existingHelp = document.getElementById('ttw-help-modal');
+        if (existingHelp) existingHelp.remove();
+
+        const helpModal = document.createElement('div');
+        helpModal.id = 'ttw-help-modal';
+        helpModal.className = 'ttw-modal-container';
+        helpModal.innerHTML = `
+            <div class="ttw-modal" style="max-width: 600px;">
+                <div class="ttw-modal-header">
+                    <span class="ttw-modal-title">❓ TXT转世界书 使用帮助</span>
+                    <button class="ttw-modal-close" type="button">✕</button>
+                </div>
+                <div class="ttw-modal-body" style="max-height: 70vh; overflow-y: auto;">
+                    <div class="ttw-help-section">
+                        <h4 style="color: #e67e22; margin: 0 0 10px 0;">📌 基本功能</h4>
+                        <p style="margin: 0 0 8px 0; line-height: 1.6; color: #ccc;">
+                            将TXT格式的小说文本转换为SillyTavern世界书格式，自动提取角色、地点、组织等信息。
+                        </p>
+                    </div>
+
+                    <div class="ttw-help-section" style="margin-top: 16px;">
+                        <h4 style="color: #3498db; margin: 0 0 10px 0;">⚙️ API设置</h4>
+                        <p style="margin: 0 0 8px 0; line-height: 1.6; color: #ccc;">
+                            <strong>本工具使用酒馆当前配置的API预设</strong>，无需额外配置API。请确保酒馆已正确配置并能正常对话。
+                        </p>
+                    </div>
+
+                    <div class="ttw-help-section" style="margin-top: 16px;">
+                        <h4 style="color: #9b59b6; margin: 0 0 10px 0;">📦 分卷模式</h4>
+                        <p style="margin: 0 0 8px 0; line-height: 1.6; color: #ccc;">
+                            开启后，当上下文超限时会<strong>自动开启新卷</strong>，而不是分裂记忆块。
+                        </p>
+                    </div>
+
+                    <div class="ttw-help-section" style="margin-top: 16px;">
+                        <h4 style="color: #1abc9c; margin: 0 0 10px 0;">💡 使用技巧</h4>
+                        <ul style="margin: 0; padding-left: 20px; line-height: 1.8; color: #ccc;">
+                            <li>超长小说建议开启分卷模式</li>
+                            <li>处理中途可以暂停，刷新后继续</li>
+                            <li>可以手动选择从哪个记忆块开始</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="ttw-modal-footer">
+                    <button class="ttw-btn ttw-btn-primary" id="ttw-close-help">我知道了</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(helpModal);
+
+        helpModal.querySelector('.ttw-modal-close').addEventListener('click', () => helpModal.remove());
+        helpModal.querySelector('#ttw-close-help').addEventListener('click', () => helpModal.remove());
+        helpModal.addEventListener('click', (e) => {
+            if (e.target === helpModal) helpModal.remove();
+        });
+    }
+
+    // ========== 【Bug5新增】选择起始记忆弹窗 ==========
+    function showStartFromSelector() {
+        if (memoryQueue.length === 0) {
+            alert('请先上传文件');
+            return;
+        }
+
+        const existingModal = document.getElementById('ttw-start-selector-modal');
+        if (existingModal) existingModal.remove();
+
+        const selectorModal = document.createElement('div');
+        selectorModal.id = 'ttw-start-selector-modal';
+        selectorModal.className = 'ttw-modal-container';
+
+        let optionsHtml = '';
+        memoryQueue.forEach((memory, index) => {
+            const status = memory.processed ? '✅' : (memory.failed ? '❗' : '⏳');
+            optionsHtml += `<option value="${index}" ${index === startFromIndex ? 'selected' : ''}>${status} ${memory.title} (${memory.content.length.toLocaleString()}字)</option>`;
+        });
+
+        selectorModal.innerHTML = `
+            <div class="ttw-modal" style="max-width: 500px;">
+                <div class="ttw-modal-header">
+                    <span class="ttw-modal-title">📍 选择起始位置</span>
+                    <button class="ttw-modal-close" type="button">✕</button>
+                </div>
+                <div class="ttw-modal-body">
+                    <div style="margin-bottom: 16px;">
+                        <label style="display: block; margin-bottom: 8px; font-size: 13px;">从哪个记忆块开始处理：</label>
+                        <select id="ttw-start-from-select" style="width: 100%; padding: 10px; border: 1px solid #555; border-radius: 6px; background: rgba(0,0,0,0.3); color: #fff; font-size: 13px;">
+                            ${optionsHtml}
+                        </select>
+                    </div>
+                    <div style="padding: 12px; background: rgba(230, 126, 34, 0.1); border-radius: 6px; font-size: 12px; color: #f39c12;">
+                        ⚠️ 注意：从中间开始时，之前记忆块的世界书数据不会自动加载。如需保留之前的数据，请先恢复保存的状态。
+                    </div>
+                </div>
+                <div class="ttw-modal-footer">
+                    <button class="ttw-btn" id="ttw-cancel-start-select">取消</button>
+                    <button class="ttw-btn ttw-btn-primary" id="ttw-confirm-start-select">确定</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(selectorModal);
+
+        selectorModal.querySelector('.ttw-modal-close').addEventListener('click', () => selectorModal.remove());
+        selectorModal.querySelector('#ttw-cancel-start-select').addEventListener('click', () => selectorModal.remove());
+        selectorModal.querySelector('#ttw-confirm-start-select').addEventListener('click', () => {
+            const select = document.getElementById('ttw-start-from-select');
+            startFromIndex = parseInt(select.value);
+            updateStartButtonState(false, startFromIndex);
+            selectorModal.remove();
+        });
+        selectorModal.addEventListener('click', (e) => {
+            if (e.target === selectorModal) selectorModal.remove();
+        });
+    }
+
     // ========== UI 相关 ==========
     let modalContainer = null;
 
@@ -1485,8 +1946,11 @@ ${memory.content}
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v2.2</span>
-                    <button class="ttw-modal-close" type="button">✕</button>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v2.1.1</span>
+                    <div class="ttw-header-actions">
+                        <span class="ttw-help-btn" title="帮助">❓</span>
+                        <button class="ttw-modal-close" type="button">✕</button>
+                    </div>
                 </div>
                 <div class="ttw-modal-body">
                     <!-- 设置区域 -->
@@ -1498,11 +1962,11 @@ ${memory.content}
                         <div class="ttw-section-content" id="ttw-settings-content">
                             <div class="ttw-api-notice">
                                 <div style="color: #27ae60; font-weight: bold; margin-bottom: 8px;">✅ 使用酒馆预设</div>
-                                <div style="color: #aaa; font-size: 12px;">本工具直接使用酒馆当前配置的API和预设。</div>
+                                <div style="color: #aaa; font-size: 12px;">本工具直接使用酒馆当前配置的API和预设，无需额外配置。</div>
                             </div>
                             <div class="ttw-setting-item">
-                                <label>每块字数上限</label>
-                                <input type="number" id="ttw-chunk-size" value="100000" min="10000" max="500000">
+                                <label>每块字数</label>
+                                <input type="number" id="ttw-chunk-size" value="150000" min="1000" max="500000">
                             </div>
                             <div class="ttw-checkbox-group">
                                 <label class="ttw-checkbox-label">
@@ -1511,16 +1975,76 @@ ${memory.content}
                                 </label>
                                 <label class="ttw-checkbox-label" style="background: rgba(155, 89, 182, 0.15); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(155, 89, 182, 0.3);">
                                     <input type="checkbox" id="ttw-volume-mode">
-                                    <span>📦 分卷模式（超限时开新卷）</span>
+                                    <span>📦 分卷模式（超限时开新卷而非分裂）</span>
                                 </label>
                             </div>
                             <div id="ttw-volume-indicator" style="display: none; margin-top: 12px; padding: 8px 12px; background: rgba(155, 89, 182, 0.2); border-radius: 6px; font-size: 12px; color: #bb86fc;">
                                 当前: 第1卷 | 已完成: 0卷
                             </div>
-                            <!-- 起始记忆选择 -->
-                            <div class="ttw-setting-item" style="margin-top: 12px;">
-                                <label>从第几个记忆开始（0=从头）</label>
-                                <input type="number" id="ttw-start-index" value="0" min="0">
+                            <!-- 提示词配置区域 -->
+                            <div class="ttw-prompt-config">
+                                <div class="ttw-prompt-config-header">
+                                    <span>📝 提示词配置</span>
+                                    <button id="ttw-preview-prompt" class="ttw-btn ttw-btn-small">👁️ 预览</button>
+                                </div>
+
+                                <div class="ttw-prompt-section ttw-prompt-worldbook">
+                                    <div class="ttw-prompt-header" data-target="ttw-worldbook-content">
+                                        <div class="ttw-prompt-header-left">
+                                            <span class="ttw-prompt-icon">📚</span>
+                                            <span class="ttw-prompt-title">世界书词条</span>
+                                            <span class="ttw-prompt-badge ttw-badge-required">必需</span>
+                                        </div>
+                                        <span class="ttw-collapse-icon">▶</span>
+                                    </div>
+                                    <div class="ttw-prompt-content" id="ttw-worldbook-content" style="display: none;">
+                                        <div class="ttw-prompt-hint">核心提示词。留空使用默认。</div>
+                                        <textarea id="ttw-worldbook-prompt" rows="6" placeholder="留空使用默认提示词..."></textarea>
+                                        <div class="ttw-prompt-actions">
+                                            <button class="ttw-btn ttw-btn-small ttw-reset-prompt" data-type="worldbook">🔄 恢复默认</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="ttw-prompt-section ttw-prompt-plot">
+                                    <div class="ttw-prompt-header" data-target="ttw-plot-content">
+                                        <div class="ttw-prompt-header-left">
+                                            <label class="ttw-prompt-enable-label">
+                                                <input type="checkbox" id="ttw-enable-plot">
+                                                <span class="ttw-prompt-icon">📖</span>
+                                                <span class="ttw-prompt-title">剧情大纲</span>
+                                            </label>
+                                            <span class="ttw-prompt-badge ttw-badge-optional">可选</span>
+                                        </div>
+                                        <span class="ttw-collapse-icon">▶</span>
+                                    </div>
+                                    <div class="ttw-prompt-content" id="ttw-plot-content" style="display: none;">
+                                        <textarea id="ttw-plot-prompt" rows="4" placeholder="留空使用默认提示词..."></textarea>
+                                        <div class="ttw-prompt-actions">
+                                            <button class="ttw-btn ttw-btn-small ttw-reset-prompt" data-type="plot">🔄 恢复默认</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="ttw-prompt-section ttw-prompt-style">
+                                    <div class="ttw-prompt-header" data-target="ttw-style-content">
+                                        <div class="ttw-prompt-header-left">
+                                            <label class="ttw-prompt-enable-label">
+                                                <input type="checkbox" id="ttw-enable-style">
+                                                <span class="ttw-prompt-icon">🎨</span>
+                                                <span class="ttw-prompt-title">文风配置</span>
+                                            </label>
+                                            <span class="ttw-prompt-badge ttw-badge-optional">可选</span>
+                                        </div>
+                                        <span class="ttw-collapse-icon">▶</span>
+                                    </div>
+                                    <div class="ttw-prompt-content" id="ttw-style-content" style="display: none;">
+                                        <textarea id="ttw-style-prompt" rows="4" placeholder="留空使用默认提示词..."></textarea>
+                                        <div class="ttw-prompt-actions">
+                                            <button class="ttw-btn ttw-btn-small ttw-reset-prompt" data-type="style">🔄 恢复默认</button>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1548,6 +2072,8 @@ ${memory.content}
                     <div class="ttw-section ttw-queue-section" id="ttw-queue-section" style="display: none;">
                         <div class="ttw-section-header">
                             <span>📋 记忆队列</span>
+                            <!-- 【Bug5新增】选择起始位置按钮 -->
+                            <button id="ttw-select-start" class="ttw-btn-small" style="margin-left: auto;">📍 选择起始</button>
                         </div>
                         <div class="ttw-section-content">
                             <div class="ttw-memory-queue" id="ttw-memory-queue"></div>
@@ -1564,10 +2090,10 @@ ${memory.content}
                                 <div class="ttw-progress-fill" id="ttw-progress-fill"></div>
                             </div>
                             <div class="ttw-progress-text" id="ttw-progress-text">准备中...</div>
-                            <div class="ttw-progress-controls">
+                            <div class="ttw-progress-controls" id="ttw-progress-controls">
                                 <button id="ttw-stop-btn" class="ttw-btn ttw-btn-secondary">⏸️ 暂停</button>
                                 <button id="ttw-repair-btn" class="ttw-btn ttw-btn-warning" style="display: none;">🔧 修复失败</button>
-                                <button id="ttw-toggle-stream" class="ttw-btn ttw-btn-small">👁️ 实时输出</button>
+                                <button id="ttw-toggle-stream" class="ttw-btn ttw-btn-small">👁️ 查看实时输出</button>
                             </div>
                             <div class="ttw-stream-container" id="ttw-stream-container" style="display: none;">
                                 <div class="ttw-stream-header">
@@ -1587,11 +2113,11 @@ ${memory.content}
                         <div class="ttw-section-content">
                             <div class="ttw-result-preview" id="ttw-result-preview"></div>
                             <div class="ttw-result-actions">
-                                <button id="ttw-view-worldbook" class="ttw-btn">📖 查看</button>
-                                <button id="ttw-view-history" class="ttw-btn">📜 历史</button>
-                                <button id="ttw-export-json" class="ttw-btn">📥 JSON</button>
+                                <button id="ttw-view-worldbook" class="ttw-btn">📖 查看世界书</button>
+                                <button id="ttw-view-history" class="ttw-btn">📜 修改历史</button>
+                                <button id="ttw-export-json" class="ttw-btn">📥 导出JSON</button>
                                 <button id="ttw-export-volumes" class="ttw-btn" style="display: none;">📦 分卷导出</button>
-                                <button id="ttw-export-st" class="ttw-btn ttw-btn-primary">📥 酒馆格式</button>
+                                <button id="ttw-export-st" class="ttw-btn ttw-btn-primary">📥 导出SillyTavern格式</button>
                             </div>
                         </div>
                     </div>
@@ -1658,6 +2184,32 @@ ${memory.content}
                 color: #e67e22;
             }
 
+            .ttw-header-actions {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+            }
+
+            .ttw-help-btn {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: 28px;
+                height: 28px;
+                border-radius: 50%;
+                background: rgba(231, 76, 60, 0.2);
+                color: #e74c3c;
+                font-size: 14px;
+                cursor: pointer;
+                transition: all 0.2s;
+                border: 1px solid rgba(231, 76, 60, 0.4);
+            }
+
+            .ttw-help-btn:hover {
+                background: rgba(231, 76, 60, 0.4);
+                transform: scale(1.1);
+            }
+
             .ttw-modal-close {
                 background: rgba(255, 255, 255, 0.1);
                 border: none;
@@ -1672,6 +2224,7 @@ ${memory.content}
 
             .ttw-modal-close:hover {
                 background: rgba(255, 100, 100, 0.3);
+                color: #ff6b6b;
             }
 
             .ttw-modal-body {
@@ -1743,7 +2296,8 @@ ${memory.content}
                 opacity: 0.9;
             }
 
-            .ttw-setting-item input {
+            .ttw-setting-item input,
+            .ttw-setting-item select {
                 width: 100%;
                 padding: 10px 12px;
                 border: 1px solid var(--SmartThemeBorderColor, #555);
@@ -1773,6 +2327,139 @@ ${memory.content}
                 width: 18px;
                 height: 18px;
                 accent-color: #e67e22;
+            }
+
+            .ttw-prompt-config {
+                margin-top: 16px;
+                border: 1px solid var(--SmartThemeBorderColor, #444);
+                border-radius: 8px;
+                overflow: hidden;
+            }
+
+            .ttw-prompt-config-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 12px 14px;
+                background: rgba(230, 126, 34, 0.15);
+                border-bottom: 1px solid var(--SmartThemeBorderColor, #444);
+                font-weight: 500;
+            }
+
+            .ttw-prompt-section {
+                border-bottom: 1px solid var(--SmartThemeBorderColor, #333);
+            }
+
+            .ttw-prompt-section:last-child {
+                border-bottom: none;
+            }
+
+            .ttw-prompt-worldbook .ttw-prompt-header {
+                background: rgba(52, 152, 219, 0.1);
+            }
+
+            .ttw-prompt-plot .ttw-prompt-header {
+                background: rgba(155, 89, 182, 0.1);
+            }
+
+            .ttw-prompt-style .ttw-prompt-header {
+                background: rgba(46, 204, 113, 0.1);
+            }
+
+            .ttw-prompt-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 10px 14px;
+                cursor: pointer;
+                font-size: 13px;
+                transition: background 0.2s;
+            }
+
+            .ttw-prompt-header:hover {
+                filter: brightness(1.1);
+            }
+
+            .ttw-prompt-header-left {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+
+            .ttw-prompt-enable-label {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                cursor: pointer;
+            }
+
+            .ttw-prompt-enable-label input {
+                width: 16px;
+                height: 16px;
+                accent-color: #e67e22;
+                cursor: pointer;
+            }
+
+            .ttw-prompt-icon {
+                font-size: 14px;
+            }
+
+            .ttw-prompt-title {
+                font-weight: 500;
+            }
+
+            .ttw-prompt-badge {
+                font-size: 10px;
+                padding: 2px 6px;
+                border-radius: 10px;
+                font-weight: 500;
+            }
+
+            .ttw-badge-required {
+                background: rgba(52, 152, 219, 0.3);
+                color: #5dade2;
+            }
+
+            .ttw-badge-optional {
+                background: rgba(149, 165, 166, 0.3);
+                color: #bdc3c7;
+            }
+
+            .ttw-prompt-content {
+                padding: 12px 14px;
+                background: rgba(0, 0, 0, 0.15);
+            }
+
+            .ttw-prompt-hint {
+                font-size: 11px;
+                color: #888;
+                margin-bottom: 10px;
+            }
+
+            .ttw-prompt-config textarea {
+                width: 100%;
+                min-height: 80px;
+                padding: 10px;
+                border: 1px solid var(--SmartThemeBorderColor, #444);
+                border-radius: 4px;
+                background: var(--SmartThemeBlurTintColor, #1e1e2e);
+                color: inherit;
+                font-family: monospace;
+                font-size: 12px;
+                line-height: 1.5;
+                resize: vertical;
+                box-sizing: border-box;
+            }
+
+            .ttw-prompt-config textarea:focus {
+                outline: none;
+                border-color: #e67e22;
+            }
+
+            .ttw-prompt-actions {
+                display: flex;
+                gap: 8px;
+                margin-top: 8px;
             }
 
             .ttw-upload-area {
@@ -1828,12 +2515,6 @@ ${memory.content}
                 display: flex;
                 align-items: center;
                 gap: 8px;
-                cursor: pointer;
-                transition: background 0.2s;
-            }
-
-            .ttw-memory-item:hover {
-                background: rgba(0, 0, 0, 0.4);
             }
 
             .ttw-memory-item.processed {
@@ -1965,6 +2646,7 @@ ${memory.content}
                 background: rgba(255, 255, 255, 0.1);
                 color: #fff;
                 cursor: pointer;
+                transition: all 0.2s;
             }
 
             .ttw-btn-small:hover {
@@ -2038,32 +2720,79 @@ ${memory.content}
     function bindModalEvents() {
         const modal = modalContainer.querySelector('.ttw-modal');
         modal.addEventListener('click', (e) => e.stopPropagation(), false);
+        modal.addEventListener('mousedown', (e) => e.stopPropagation(), false);
 
-        modalContainer.querySelector('.ttw-modal-close').addEventListener('click', closeModal);
+        modalContainer.querySelector('.ttw-modal-close').addEventListener('click', (e) => {
+            e.stopPropagation();
+            closeModal();
+        }, false);
+
+        modalContainer.querySelector('.ttw-help-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            showHelpModal();
+        }, false);
 
         modalContainer.addEventListener('click', (e) => {
-            if (e.target === modalContainer) closeModal();
-        });
+            if (e.target === modalContainer) {
+                closeModal();
+            }
+        }, false);
 
         document.addEventListener('keydown', handleEscKey, true);
 
-        // 设置保存
-        ['ttw-chunk-size', 'ttw-start-index'].forEach(id => {
+        ['ttw-chunk-size'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.addEventListener('change', saveCurrentSettings);
         });
 
-        ['ttw-incremental-mode', 'ttw-volume-mode'].forEach(id => {
+        ['ttw-incremental-mode', 'ttw-volume-mode', 'ttw-enable-plot', 'ttw-enable-style'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.addEventListener('change', saveCurrentSettings);
         });
 
         document.getElementById('ttw-volume-mode').addEventListener('change', (e) => {
             useVolumeMode = e.target.checked;
-            updateVolumeIndicator();
+            const indicator = document.getElementById('ttw-volume-indicator');
+            if (indicator) {
+                indicator.style.display = useVolumeMode ? 'block' : 'none';
+            }
         });
 
-        // 文件上传
+        document.querySelectorAll('.ttw-prompt-header[data-target]').forEach(header => {
+            header.addEventListener('click', (e) => {
+                if (e.target.type === 'checkbox') return;
+                const targetId = header.getAttribute('data-target');
+                const content = document.getElementById(targetId);
+                const icon = header.querySelector('.ttw-collapse-icon');
+                if (content.style.display === 'none') {
+                    content.style.display = 'block';
+                    icon.textContent = '▼';
+                } else {
+                    content.style.display = 'none';
+                    icon.textContent = '▶';
+                }
+            });
+        });
+
+        ['ttw-worldbook-prompt', 'ttw-plot-prompt', 'ttw-style-prompt'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.addEventListener('input', saveCurrentSettings);
+        });
+
+        document.querySelectorAll('.ttw-reset-prompt').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const type = btn.getAttribute('data-type');
+                const textareaId = `ttw-${type}-prompt`;
+                const textarea = document.getElementById(textareaId);
+                if (textarea) {
+                    textarea.value = '';
+                    saveCurrentSettings();
+                }
+            });
+        });
+
+        document.getElementById('ttw-preview-prompt').addEventListener('click', showPromptPreview);
+
         const uploadArea = document.getElementById('ttw-upload-area');
         const fileInput = document.getElementById('ttw-file-input');
 
@@ -2072,7 +2801,9 @@ ${memory.content}
             e.preventDefault();
             uploadArea.classList.add('dragover');
         });
-        uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
         uploadArea.addEventListener('drop', (e) => {
             e.preventDefault();
             uploadArea.classList.remove('dragover');
@@ -2092,6 +2823,9 @@ ${memory.content}
             isProcessingStopped = true;
         });
         document.getElementById('ttw-repair-btn').addEventListener('click', startRepairFailedMemories);
+
+        // 【Bug5新增】选择起始位置按钮
+        document.getElementById('ttw-select-start').addEventListener('click', showStartFromSelector);
 
         document.getElementById('ttw-toggle-stream').addEventListener('click', () => {
             const container = document.getElementById('ttw-stream-container');
@@ -2122,11 +2856,15 @@ ${memory.content}
     }
 
     function saveCurrentSettings() {
-        settings.chunkSize = parseInt(document.getElementById('ttw-chunk-size').value) || 100000;
+        settings.chunkSize = parseInt(document.getElementById('ttw-chunk-size').value) || 150000;
         incrementalOutputMode = document.getElementById('ttw-incremental-mode').checked;
         useVolumeMode = document.getElementById('ttw-volume-mode').checked;
         settings.useVolumeMode = useVolumeMode;
-        startFromIndex = parseInt(document.getElementById('ttw-start-index').value) || 0;
+        settings.enablePlotOutline = document.getElementById('ttw-enable-plot').checked;
+        settings.enableLiteraryStyle = document.getElementById('ttw-enable-style').checked;
+        settings.customWorldbookPrompt = document.getElementById('ttw-worldbook-prompt').value;
+        settings.customPlotPrompt = document.getElementById('ttw-plot-prompt').value;
+        settings.customStylePrompt = document.getElementById('ttw-style-prompt').value;
 
         try {
             localStorage.setItem('txtToWorldbookSettings', JSON.stringify(settings));
@@ -2150,20 +2888,71 @@ ${memory.content}
         document.getElementById('ttw-chunk-size').value = settings.chunkSize;
         document.getElementById('ttw-incremental-mode').checked = incrementalOutputMode;
         document.getElementById('ttw-volume-mode').checked = useVolumeMode;
-        document.getElementById('ttw-start-index').value = startFromIndex;
+        document.getElementById('ttw-enable-plot').checked = settings.enablePlotOutline;
+        document.getElementById('ttw-enable-style').checked = settings.enableLiteraryStyle;
+        document.getElementById('ttw-worldbook-prompt').value = settings.customWorldbookPrompt || '';
+        document.getElementById('ttw-plot-prompt').value = settings.customPlotPrompt || '';
+        document.getElementById('ttw-style-prompt').value = settings.customStylePrompt || '';
 
-        updateVolumeIndicator();
+        const indicator = document.getElementById('ttw-volume-indicator');
+        if (indicator) {
+            indicator.style.display = useVolumeMode ? 'block' : 'none';
+        }
     }
 
+    function showPromptPreview() {
+        const prompt = getSystemPrompt();
+
+        const statusItems = [
+            `📚 世界书词条: ${settings.customWorldbookPrompt?.trim() ? '自定义' : '默认'}`,
+            `📖 剧情大纲: ${settings.enablePlotOutline ? (settings.customPlotPrompt?.trim() ? '✅ 启用 (自定义)' : '✅ 启用 (默认)') : '❌ 禁用'}`,
+            `🎨 文风配置: ${settings.enableLiteraryStyle ? (settings.customStylePrompt?.trim() ? '✅ 启用 (自定义)' : '✅ 启用 (默认)') : '❌ 禁用'}`,
+            `📦 分卷模式: ${useVolumeMode ? '✅ 启用' : '❌ 禁用'}`
+        ];
+
+        const previewModal = document.createElement('div');
+        previewModal.className = 'ttw-modal-container';
+        previewModal.id = 'ttw-prompt-preview-modal';
+        previewModal.innerHTML = `
+            <div class="ttw-modal" style="max-width: 800px;">
+                <div class="ttw-modal-header">
+                    <span class="ttw-modal-title">👁️ 最终提示词预览</span>
+                    <button class="ttw-modal-close" type="button">✕</button>
+                </div>
+                <div class="ttw-modal-body" style="max-height: 70vh; overflow-y: auto;">
+                    <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; padding: 10px; background: rgba(0,0,0,0.15); border-radius: 6px; font-size: 12px;">
+                        ${statusItems.map(item => `<span style="padding: 4px 8px; background: rgba(0,0,0,0.2); border-radius: 4px;">${item}</span>`).join('')}
+                    </div>
+                    <pre style="white-space: pre-wrap; word-wrap: break-word; font-size: 12px; line-height: 1.5; background: rgba(0,0,0,0.2); padding: 12px; border-radius: 6px; max-height: 50vh; overflow-y: auto;">${prompt.replace(/</g, '<').replace(/>/g, '>')}</pre>
+                </div>
+                <div class="ttw-modal-footer">
+                    <button class="ttw-btn ttw-btn-primary ttw-close-preview">关闭</button>
+                </div>
+            </div>
+        `;
+
+        const modal = previewModal.querySelector('.ttw-modal');
+        modal.addEventListener('click', (e) => e.stopPropagation(), false);
+
+        previewModal.querySelector('.ttw-modal-close').addEventListener('click', () => previewModal.remove());
+        previewModal.querySelector('.ttw-close-preview').addEventListener('click', () => previewModal.remove());
+        previewModal.addEventListener('click', (e) => {
+            if (e.target === previewModal) previewModal.remove();
+        });
+
+        document.body.appendChild(previewModal);
+    }
+
+    // 【Bug3修复】改进的状态恢复
     async function checkAndRestoreState() {
         try {
             const savedState = await MemoryHistoryDB.loadState();
             if (savedState && savedState.memoryQueue && savedState.memoryQueue.length > 0) {
-                // 找出第一个未处理的索引
-                let firstUnprocessed = savedState.memoryQueue.findIndex(m => !m.processed || m.failed);
-                if (firstUnprocessed === -1) firstUnprocessed = savedState.memoryQueue.length;
+                // 计算实际已处理的数量
+                const processedCount = savedState.memoryQueue.filter(m => m.processed).length;
+                const unprocessedCount = savedState.memoryQueue.length - processedCount;
 
-                const shouldRestore = confirm(`检测到未完成的任务！\n已处理: ${firstUnprocessed}/${savedState.memoryQueue.length}\n\n是否恢复？`);
+                const shouldRestore = confirm(`检测到未完成的转换任务\n\n已处理: ${processedCount}/${savedState.memoryQueue.length}\n未处理: ${unprocessedCount}\n\n是否恢复？`);
 
                 if (shouldRestore) {
                     memoryQueue = savedState.memoryQueue;
@@ -2171,9 +2960,12 @@ ${memory.content}
                     worldbookVolumes = savedState.worldbookVolumes || [];
                     currentVolumeIndex = savedState.currentVolumeIndex || 0;
                     currentFileHash = savedState.fileHash;
-                    startFromIndex = firstUnprocessed;
 
-                    document.getElementById('ttw-start-index').value = startFromIndex;
+                    // 【Bug3修复】找到第一个未处理的记忆块索引
+                    startFromIndex = memoryQueue.findIndex(m => !m.processed);
+                    if (startFromIndex === -1) {
+                        startFromIndex = memoryQueue.length; // 全部已处理
+                    }
 
                     showQueueSection(true);
                     updateMemoryQueueUI();
@@ -2182,12 +2974,14 @@ ${memory.content}
                         updateVolumeIndicator();
                     }
 
-                    document.getElementById('ttw-start-btn').disabled = false;
-                    document.getElementById('ttw-start-btn').textContent = `▶️ 从记忆${startFromIndex + 1}继续`;
-
-                    if (firstUnprocessed >= savedState.memoryQueue.length) {
+                    if (startFromIndex >= memoryQueue.length) {
+                        // 全部完成
                         showResultSection(true);
                         updateWorldbookPreview();
+                        updateStartButtonState(false, memoryQueue.length);
+                    } else {
+                        // 还有未处理的
+                        updateStartButtonState(false, startFromIndex);
                     }
                 } else {
                     await MemoryHistoryDB.clearState();
@@ -2215,7 +3009,7 @@ ${memory.content}
             if (savedHash && savedHash !== newHash) {
                 const historyList = await MemoryHistoryDB.getAllHistory();
                 if (historyList.length > 0) {
-                    const shouldClear = confirm(`检测到新文件，是否清空旧的历史记录？`);
+                    const shouldClear = confirm(`检测到新文件，是否清空旧的历史记录？\n\n当前有 ${historyList.length} 条记录。`);
                     if (shouldClear) {
                         await MemoryHistoryDB.clearAllHistory();
                         await MemoryHistoryDB.clearState();
@@ -2237,38 +3031,44 @@ ${memory.content}
             updateMemoryQueueUI();
 
             document.getElementById('ttw-start-btn').disabled = false;
-            document.getElementById('ttw-start-btn').textContent = '🚀 开始转换';
             startFromIndex = 0;
-            document.getElementById('ttw-start-index').value = 0;
+            updateStartButtonState(false, 0);
 
         } catch (error) {
+            console.error('文件处理失败:', error);
             alert('文件处理失败: ' + error.message);
         }
     }
 
-    // ========== 修复：切分逻辑，强制限制大小 ==========
+    // 【Bug4修复】改进的切分逻辑
     function splitContentIntoMemory(content) {
         const chunkSize = settings.chunkSize;
         memoryQueue = [];
 
-        const chapterRegex = /第[一二三四五六七八九十百千0-9]+[章节卷集回]/g;
-        const chapters = [];
+        const chapterRegex = /第[一二三四五六七八九十百千万0-9]+[章节卷集回]/g;
         const matches = [...content.matchAll(chapterRegex)];
 
         if (matches.length > 0) {
+            // 提取所有章节
+            const chapters = [];
             for (let i = 0; i < matches.length; i++) {
                 const startIndex = matches[i].index;
                 const endIndex = i < matches.length - 1 ? matches[i + 1].index : content.length;
-                chapters.push(content.slice(startIndex, endIndex));
+                chapters.push({
+                    title: matches[i][0],
+                    content: content.slice(startIndex, endIndex)
+                });
             }
 
             let currentChunk = '';
             let chunkIndex = 1;
 
-            for (const chapter of chapters) {
-                // 如果单章就超过限制，强制切分这个章节
-                if (chapter.length > chunkSize) {
-                    // 先保存之前的
+            for (let i = 0; i < chapters.length; i++) {
+                const chapter = chapters[i];
+
+                // 【Bug4修复】如果单个章节超过上限，需要切分该章节
+                if (chapter.content.length > chunkSize) {
+                    // 先保存之前累积的内容
                     if (currentChunk.length > 0) {
                         memoryQueue.push({
                             title: `记忆${chunkIndex}`,
@@ -2276,88 +3076,128 @@ ${memory.content}
                             processed: false,
                             failed: false
                         });
-                        chunkIndex++;
                         currentChunk = '';
+                        chunkIndex++;
                     }
 
-                    // 强制切分超大章节
-                    let pos = 0;
-                    while (pos < chapter.length) {
-                        let endPos = Math.min(pos + chunkSize, chapter.length);
+                    // 切分大章节
+                    let remaining = chapter.content;
+                    let subIndex = 1;
+                    while (remaining.length > 0) {
+                        let endPos = Math.min(chunkSize, remaining.length);
 
                         // 尝试在段落边界切分
-                        if (endPos < chapter.length) {
-                            const paragraphBreak = chapter.lastIndexOf('\n\n', endPos);
-                            if (paragraphBreak > pos + chunkSize * 0.5) {
+                        if (endPos < remaining.length) {
+                            const paragraphBreak = remaining.lastIndexOf('\n\n', endPos);
+                            if (paragraphBreak > endPos * 0.5) {
                                 endPos = paragraphBreak + 2;
                             } else {
-                                const sentenceBreak = chapter.lastIndexOf('。', endPos);
-                                if (sentenceBreak > pos + chunkSize * 0.5) {
+                                const sentenceBreak = remaining.lastIndexOf('。', endPos);
+                                if (sentenceBreak > endPos * 0.5) {
                                     endPos = sentenceBreak + 1;
                                 }
                             }
                         }
 
                         memoryQueue.push({
-                            title: `记忆${chunkIndex}`,
-                            content: chapter.slice(pos, endPos),
+                            title: `记忆${chunkIndex}-${subIndex}`,
+                            content: remaining.slice(0, endPos),
                             processed: false,
                             failed: false
                         });
-                        chunkIndex++;
-                        pos = endPos;
+                        remaining = remaining.slice(endPos);
+                        subIndex++;
                     }
-                } else if (currentChunk.length + chapter.length > chunkSize && currentChunk.length > 0) {
+                    chunkIndex++;
+                    continue;
+                }
+
+                // 正常累积
+                if (currentChunk.length + chapter.content.length > chunkSize && currentChunk.length > 0) {
                     memoryQueue.push({
                         title: `记忆${chunkIndex}`,
                         content: currentChunk,
                         processed: false,
                         failed: false
                     });
-                    currentChunk = chapter;
+                    currentChunk = '';
                     chunkIndex++;
+                }
+                currentChunk += chapter.content;
+            }
+
+            // 【Bug4修复】处理剩余内容，尝试与上一块合并
+            if (currentChunk.length > 0) {
+                // 如果剩余内容很少且存在上一块，尝试合并
+                if (currentChunk.length < chunkSize * 0.2 && memoryQueue.length > 0) {
+                    const lastMemory = memoryQueue[memoryQueue.length - 1];
+                    if (lastMemory.content.length + currentChunk.length <= chunkSize) {
+                        lastMemory.content += currentChunk;
+                    } else {
+                        memoryQueue.push({
+                            title: `记忆${chunkIndex}`,
+                            content: currentChunk,
+                            processed: false,
+                            failed: false
+                        });
+                    }
                 } else {
-                    currentChunk += chapter;
+                    memoryQueue.push({
+                        title: `记忆${chunkIndex}`,
+                        content: currentChunk,
+                        processed: false,
+                        failed: false
+                    });
                 }
             }
-
-            if (currentChunk.length > 0) {
-                memoryQueue.push({
-                    title: `记忆${chunkIndex}`,
-                    content: currentChunk,
-                    processed: false,
-                    failed: false
-                });
-            }
         } else {
-            // 没有章节标记，按字数切分
-            let pos = 0;
+            // 无章节标记时按字数切分
+            let i = 0;
             let chunkIndex = 1;
-            while (pos < content.length) {
-                let endPos = Math.min(pos + chunkSize, content.length);
 
-                if (endPos < content.length) {
-                    const paragraphBreak = content.lastIndexOf('\n\n', endPos);
-                    if (paragraphBreak > pos + chunkSize * 0.5) {
-                        endPos = paragraphBreak + 2;
+            while (i < content.length) {
+                let endIndex = Math.min(i + chunkSize, content.length);
+
+                if (endIndex < content.length) {
+                    const paragraphBreak = content.lastIndexOf('\n\n', endIndex);
+                    if (paragraphBreak > i + chunkSize * 0.5) {
+                        endIndex = paragraphBreak + 2;
                     } else {
-                        const sentenceBreak = content.lastIndexOf('。', endPos);
-                        if (sentenceBreak > pos + chunkSize * 0.5) {
-                            endPos = sentenceBreak + 1;
+                        const sentenceBreak = content.lastIndexOf('。', endIndex);
+                        if (sentenceBreak > i + chunkSize * 0.5) {
+                            endIndex = sentenceBreak + 1;
                         }
                     }
                 }
 
                 memoryQueue.push({
                     title: `记忆${chunkIndex}`,
-                    content: content.slice(pos, endPos),
+                    content: content.slice(i, endIndex),
                     processed: false,
                     failed: false
                 });
+
+                i = endIndex;
                 chunkIndex++;
-                pos = endPos;
             }
         }
+
+        // 【Bug4修复】合并过小的块
+        const minChunkSize = chunkSize * 0.1; // 小于10%的块尝试合并
+        for (let i = memoryQueue.length - 1; i > 0; i--) {
+            if (memoryQueue[i].content.length < minChunkSize) {
+                const prevMemory = memoryQueue[i - 1];
+                if (prevMemory.content.length + memoryQueue[i].content.length <= chunkSize) {
+                    prevMemory.content += memoryQueue[i].content;
+                    memoryQueue.splice(i, 1);
+                }
+            }
+        }
+
+        // 重新编号
+        memoryQueue.forEach((memory, index) => {
+            memory.title = `记忆${index + 1}`;
+        });
 
         console.log(`文本已切分为 ${memoryQueue.length} 个记忆块`);
     }
@@ -2375,7 +3215,6 @@ ${memory.content}
         document.getElementById('ttw-file-input').value = '';
         document.getElementById('ttw-start-btn').disabled = true;
         document.getElementById('ttw-start-btn').textContent = '🚀 开始转换';
-        document.getElementById('ttw-start-index').value = 0;
 
         showQueueSection(false);
         showProgressSection(false);
@@ -2387,13 +3226,6 @@ ${memory.content}
 
         if (memoryQueue.length === 0) {
             alert('请先上传文件');
-            return;
-        }
-
-        // 获取起始索引
-        startFromIndex = parseInt(document.getElementById('ttw-start-index').value) || 0;
-        if (startFromIndex >= memoryQueue.length) {
-            alert(`起始索引超出范围！最大值: ${memoryQueue.length - 1}`);
             return;
         }
 
@@ -2423,8 +3255,12 @@ ${memory.content}
 
         const failedCount = memoryQueue.filter(m => m.failed === true).length;
         const repairBtn = document.getElementById('ttw-repair-btn');
-        repairBtn.style.display = failedCount > 0 ? 'inline-block' : 'none';
-        repairBtn.textContent = `🔧 修复失败 (${failedCount})`;
+        if (failedCount > 0) {
+            repairBtn.style.display = 'inline-block';
+            repairBtn.textContent = `🔧 修复失败 (${failedCount})`;
+        } else {
+            repairBtn.style.display = 'none';
+        }
     }
 
     function updateMemoryQueueUI() {
@@ -2445,17 +3281,8 @@ ${memory.content}
                 <span>${statusIcon}</span>
                 <span>${memory.title}</span>
                 <small>(${memory.content.length.toLocaleString()}字)</small>
+                ${memory.failed && memory.failedError ? `<small style="color:#e74c3c;margin-left:8px;">${memory.failedError.substring(0, 30)}...</small>` : ''}
             `;
-
-            // 点击记忆块设置起始位置
-            item.addEventListener('click', () => {
-                document.getElementById('ttw-start-index').value = index;
-                startFromIndex = index;
-
-                const startBtn = document.getElementById('ttw-start-btn');
-                startBtn.textContent = `▶️ 从记忆${index + 1}开始`;
-            });
-
             container.appendChild(item);
         });
     }
@@ -2468,7 +3295,7 @@ ${memory.content}
         let headerInfo = '';
         if (useVolumeMode && worldbookVolumes.length > 0) {
             headerInfo = `<div style="margin-bottom: 12px; padding: 10px; background: rgba(155, 89, 182, 0.2); border-radius: 6px; font-size: 12px; color: #bb86fc;">
-                📦 分卷模式 | 共 ${worldbookVolumes.length} 卷
+                📦 分卷模式 | 共 ${worldbookVolumes.length} 卷 | 下方为合并视图
             </div>`;
         }
 
@@ -2477,7 +3304,7 @@ ${memory.content}
 
     function formatWorldbookAsCards(worldbook) {
         if (!worldbook || Object.keys(worldbook).length === 0) {
-            return '<div style="text-align: center; color: #888; padding: 20px;">暂无数据</div>';
+            return '<div style="text-align: center; color: #888; padding: 20px;">暂无世界书数据</div>';
         }
 
         let html = '';
@@ -2492,47 +3319,61 @@ ${memory.content}
             totalEntries += entryCount;
 
             html += `
-            <div class="ttw-category-card">
+            <div class="ttw-category-card" data-category="${category}">
                 <div class="ttw-category-header" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'">
                     <span>📁 ${category}</span>
                     <span style="font-size: 12px;">${entryCount} 条目</span>
                 </div>
                 <div class="ttw-category-content">`;
 
-            for (const entryName in entries) {
-                const entry = entries[entryName];
+            if (typeof entries === 'object') {
+                for (const entryName in entries) {
+                    const entry = entries[entryName];
 
-                html += `
-                <div class="ttw-entry-card">
-                    <div class="ttw-entry-header" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'">
-                        <span>📄 ${entryName}</span>
-                        <span style="font-size: 11px;">▼</span>
-                    </div>
-                    <div class="ttw-entry-content">`;
+                    html += `
+                    <div class="ttw-entry-card">
+                        <div class="ttw-entry-header" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'">
+                            <span>📄 ${entryName}</span>
+                            <span style="font-size: 11px;">▼</span>
+                        </div>
+                        <div class="ttw-entry-content">`;
 
-                if (entry && typeof entry === 'object') {
-                    if (entry['关键词']) {
-                        const keywords = Array.isArray(entry['关键词']) ? entry['关键词'].join(', ') : entry['关键词'];
-                        html += `<div class="ttw-keywords"><div style="color: #9b59b6; font-size: 11px;">🔑 关键词</div><div>${keywords}</div></div>`;
+                    if (entry && typeof entry === 'object') {
+                        if (entry['关键词']) {
+                            const keywords = Array.isArray(entry['关键词']) ? entry['关键词'].join(', ') : entry['关键词'];
+                            html += `
+                            <div class="ttw-keywords">
+                                <div style="color: #9b59b6; font-size: 11px; margin-bottom: 4px;">🔑 关键词</div>
+                                <div style="font-size: 13px;">${keywords}</div>
+                            </div>`;
+                        }
+
+                        if (entry['内容']) {
+                            const content = String(entry['内容'])
+                                .replace(/</g, '<')
+                                .replace(/>/g, '>')
+                                .replace(/\*\*(.+?)\*\*/g, '<strong style="color: #3498db;">$1</strong>')
+                                .replace(/\n/g, '<br>');
+                            html += `
+                            <div class="ttw-content-text">
+                                <div style="color: #27ae60; font-size: 11px; margin-bottom: 4px;">📝 内容</div>
+                                <div style="font-size: 13px;">${content}</div>
+                            </div>`;
+                        }
                     }
 
-                    if (entry['内容']) {
-                        const content = String(entry['内容'])
-                            .replace(/</g, '<')
-                            .replace(/>/g, '>')
-                            .replace(/\*\*(.+?)\*\*/g, '<strong style="color: #3498db;">$1</strong>')
-                            .replace(/\n/g, '<br>');
-                        html += `<div class="ttw-content-text"><div style="color: #27ae60; font-size: 11px;">📝 内容</div><div>${content}</div></div>`;
-                    }
+                    html += `
+                        </div>
+                    </div>`;
                 }
-
-                html += `</div></div>`;
             }
 
-            html += `</div></div>`;
+            html += `
+                </div>
+            </div>`;
         }
 
-        return `<div style="margin-bottom: 12px; font-size: 13px;">共 ${totalEntries} 个条目</div>` + html;
+        return `<div style="margin-bottom: 12px; font-size: 13px;">共 ${Object.keys(worldbook).filter(k => Object.keys(worldbook[k]).length > 0).length} 个分类, ${totalEntries} 个条目</div>` + html;
     }
 
     function showWorldbookView() {
@@ -2547,7 +3388,7 @@ ${memory.content}
         viewModal.innerHTML = `
             <div class="ttw-modal" style="max-width: 900px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📖 世界书详情</span>
+                    <span class="ttw-modal-title">📖 世界书详细视图${useVolumeMode ? ` (${worldbookVolumes.length}卷合并)` : ''}</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body">
@@ -2574,33 +3415,33 @@ ${memory.content}
 
         let historyList = [];
         try {
+            await MemoryHistoryDB.cleanDuplicateHistory();
             historyList = await MemoryHistoryDB.getAllHistory();
         } catch (e) {
-            console.error('获取历史失败:', e);
+            console.error('获取历史记录失败:', e);
         }
 
         const historyModal = document.createElement('div');
         historyModal.id = 'ttw-history-modal';
         historyModal.className = 'ttw-modal-container';
         historyModal.innerHTML = `
-            <div class="ttw-modal" style="max-width: 600px;">
+            <div class="ttw-modal" style="max-width: 900px;">
                 <div class="ttw-modal-header">
                     <span class="ttw-modal-title">📜 修改历史 (${historyList.length}条)</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
-                <div class="ttw-modal-body" style="max-height: 400px; overflow-y: auto;">
-                    ${historyList.length === 0 ? '<div style="text-align:center;color:#888;padding:40px;">暂无历史记录</div>' :
-                        historyList.sort((a, b) => b.timestamp - a.timestamp).map(h => `
-                            <div style="background: rgba(0,0,0,0.2); border-radius: 6px; padding: 10px; margin-bottom: 8px; border-left: 3px solid #9b59b6;">
-                                <div style="font-weight: bold; color: #e67e22;">${h.memoryTitle || `记忆${h.memoryIndex + 1}`}</div>
-                                <div style="font-size: 11px; color: #888;">${new Date(h.timestamp).toLocaleString('zh-CN')}</div>
-                                <div style="font-size: 11px; color: #aaa;">${h.changedEntries?.length || 0} 项变更</div>
-                            </div>
-                        `).join('')
-                    }
+                <div class="ttw-modal-body">
+                    <div style="display: flex; gap: 15px; height: 400px;">
+                        <div style="width: 250px; overflow-y: auto; background: rgba(0,0,0,0.2); border-radius: 8px; padding: 10px;">
+                            ${generateHistoryListHTML(historyList)}
+                        </div>
+                        <div id="ttw-history-detail" style="flex: 1; overflow-y: auto; background: rgba(0,0,0,0.2); border-radius: 8px; padding: 15px;">
+                            <div style="text-align: center; color: #888; padding: 40px;">👈 点击左侧历史记录查看详情</div>
+                        </div>
+                    </div>
                 </div>
                 <div class="ttw-modal-footer">
-                    <button class="ttw-btn ttw-btn-warning" id="ttw-clear-history">🗑️ 清空</button>
+                    <button class="ttw-btn ttw-btn-warning" id="ttw-clear-history">🗑️ 清空历史</button>
                     <button class="ttw-btn" id="ttw-close-history">关闭</button>
                 </div>
             </div>
@@ -2611,14 +3452,148 @@ ${memory.content}
         historyModal.querySelector('.ttw-modal-close').addEventListener('click', () => historyModal.remove());
         historyModal.querySelector('#ttw-close-history').addEventListener('click', () => historyModal.remove());
         historyModal.querySelector('#ttw-clear-history').addEventListener('click', async () => {
-            if (confirm('确定清空所有历史？')) {
+            if (confirm('确定要清空所有历史记录吗？')) {
                 await MemoryHistoryDB.clearAllHistory();
                 historyModal.remove();
+                showHistoryView();
             }
         });
         historyModal.addEventListener('click', (e) => {
             if (e.target === historyModal) historyModal.remove();
         });
+
+        historyModal.querySelectorAll('.ttw-history-item').forEach(item => {
+            item.addEventListener('click', async () => {
+                const historyId = parseInt(item.dataset.historyId);
+                await showHistoryDetail(historyId, historyModal);
+
+                historyModal.querySelectorAll('.ttw-history-item').forEach(i => i.style.background = 'rgba(0,0,0,0.2)');
+                item.style.background = 'rgba(0,0,0,0.4)';
+            });
+        });
+    }
+
+    function generateHistoryListHTML(historyList) {
+        if (historyList.length === 0) {
+            return '<div style="text-align: center; color: #888; padding: 20px;">暂无历史记录</div>';
+        }
+
+        const sortedList = [...historyList].sort((a, b) => b.timestamp - a.timestamp);
+
+        let html = '';
+        sortedList.forEach((history) => {
+            const time = new Date(history.timestamp).toLocaleString('zh-CN', {
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+            const changeCount = history.changedEntries?.length || 0;
+            const volumeInfo = history.volumeIndex !== undefined ? ` [卷${history.volumeIndex + 1}]` : '';
+
+            html += `
+            <div class="ttw-history-item" data-history-id="${history.id}" style="background: rgba(0,0,0,0.2); border-radius: 6px; padding: 10px; margin-bottom: 8px; cursor: pointer; border-left: 3px solid #9b59b6;">
+                <div style="font-weight: bold; color: #e67e22; font-size: 13px; margin-bottom: 4px;">
+                    📝 ${history.memoryTitle || `记忆块 ${history.memoryIndex + 1}`}${volumeInfo}
+                </div>
+                <div style="font-size: 11px; color: #888;">${time}</div>
+                <div style="font-size: 11px; color: #aaa; margin-top: 4px;">共 ${changeCount} 项变更</div>
+            </div>`;
+        });
+
+        return html;
+    }
+
+    async function showHistoryDetail(historyId, modal) {
+        const detailContainer = modal.querySelector('#ttw-history-detail');
+        const history = await MemoryHistoryDB.getHistoryById(historyId);
+
+        if (!history) {
+            detailContainer.innerHTML = '<div style="text-align: center; color: #e74c3c; padding: 40px;">找不到该历史记录</div>';
+            return;
+        }
+
+        const time = new Date(history.timestamp).toLocaleString('zh-CN');
+        const volumeInfo = history.volumeIndex !== undefined ? ` [第${history.volumeIndex + 1}卷]` : '';
+
+        let html = `
+        <div style="margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid #444;">
+            <h4 style="color: #e67e22; margin: 0 0 10px 0;">📝 ${history.memoryTitle || `记忆块 ${history.memoryIndex + 1}`}${volumeInfo}</h4>
+            <div style="font-size: 12px; color: #888;">时间: ${time}</div>
+            <div style="margin-top: 10px;">
+                <button class="ttw-btn ttw-btn-warning ttw-btn-small" onclick="window.TxtToWorldbook._rollbackToHistory(${historyId})">⏪ 回退到此版本前</button>
+            </div>
+        </div>
+        <div style="font-size: 14px; font-weight: bold; color: #9b59b6; margin-bottom: 10px;">变更内容 (${history.changedEntries?.length || 0}项)</div>
+        `;
+
+        if (history.changedEntries && history.changedEntries.length > 0) {
+            history.changedEntries.forEach(change => {
+                const typeIcon = change.type === 'add' ? '➕ 新增' : change.type === 'modify' ? '✏️ 修改' : '❌ 删除';
+                const typeColor = change.type === 'add' ? '#27ae60' : change.type === 'modify' ? '#3498db' : '#e74c3c';
+
+                html += `
+                <div style="background: rgba(0,0,0,0.2); border-radius: 6px; padding: 12px; margin-bottom: 10px; border-left: 3px solid ${typeColor};">
+                    <div style="margin-bottom: 8px;">
+                        <span style="color: ${typeColor}; font-weight: bold;">${typeIcon}</span>
+                        <span style="color: #e67e22; margin-left: 8px;">[${change.category}] ${change.entryName}</span>
+                    </div>
+                    <div style="font-size: 12px; color: #ccc; max-height: 100px; overflow-y: auto;">
+                        ${change.newValue ? formatEntryForDisplay(change.newValue) : '<span style="color: #666;">无</span>'}
+                    </div>
+                </div>`;
+            });
+        } else {
+            html += '<div style="color: #888; text-align: center; padding: 20px;">无变更记录</div>';
+        }
+
+        detailContainer.innerHTML = html;
+    }
+
+    function formatEntryForDisplay(entry) {
+        if (!entry) return '';
+        if (typeof entry === 'string') return entry.replace(/</g, '<').replace(/>/g, '>').replace(/\n/g, '<br>');
+
+        let html = '';
+        if (entry['关键词']) {
+            const keywords = Array.isArray(entry['关键词']) ? entry['关键词'].join(', ') : entry['关键词'];
+            html += `<div style="color: #9b59b6; margin-bottom: 4px;"><strong>关键词:</strong> ${keywords}</div>`;
+        }
+        if (entry['内容']) {
+            const content = String(entry['内容']).replace(/</g, '<').replace(/>/g, '>').replace(/\n/g, '<br>');
+            html += `<div><strong>内容:</strong> ${content.substring(0, 200)}${content.length > 200 ? '...' : ''}</div>`;
+        }
+        return html || JSON.stringify(entry);
+    }
+
+    async function rollbackToHistory(historyId) {
+        if (!confirm('确定要回退到此版本吗？\n\n回退后将刷新页面以确保状态正确。')) {
+            return;
+        }
+
+        try {
+            const history = await MemoryHistoryDB.rollbackToHistory(historyId);
+            console.log(`📚 已回退到历史记录 #${historyId}: ${history.memoryTitle}`);
+
+            const rollbackMemoryIndex = history.memoryIndex;
+
+            for (let i = 0; i < memoryQueue.length; i++) {
+                if (i < rollbackMemoryIndex) {
+                    memoryQueue[i].processed = true;
+                } else {
+                    memoryQueue[i].processed = false;
+                    memoryQueue[i].failed = false;
+                }
+            }
+
+            await MemoryHistoryDB.saveState(rollbackMemoryIndex);
+
+            alert(`回退成功！页面将刷新。`);
+            location.reload();
+        } catch (error) {
+            console.error('回退失败:', error);
+            alert('回退失败: ' + error.message);
+        }
     }
 
     function closeModal() {
@@ -2637,11 +3612,12 @@ ${memory.content}
     window.TxtToWorldbook = {
         open: open,
         close: closeModal,
+        _rollbackToHistory: rollbackToHistory,
         getWorldbook: () => generatedWorldbook,
         getMemoryQueue: () => memoryQueue,
         getVolumes: () => worldbookVolumes,
         getAllVolumesWorldbook: getAllVolumesWorldbook
     };
 
-    console.log('📚 TxtToWorldbook v2.2 已加载');
+    console.log('📚 TxtToWorldbook v2.1.1 已加载 (Bug修复版)');
 })();
