@@ -1,6 +1,6 @@
 /**
- * TXT转世界书独立模块 v2.2.0
- * 修复版本 - 解决5个BUG
+ * TXT转世界书独立模块 v2.2.1
+ * Bug修复版本 - 修复选择起始位置无效的问题
  */
 
 (function() {
@@ -21,6 +21,7 @@
     let useVolumeMode = false;
     let currentStreamContent = '';
     let startFromIndex = 0;
+    let userSelectedStartIndex = null; // 【新增】用户手动选择的起始索引
 
     // ========== 默认设置 ==========
     const defaultWorldbookPrompt = `你是专业的小说世界书生成专家。请仔细阅读提供的小说内容，提取其中的关键信息，生成高质量的世界书条目。
@@ -91,7 +92,7 @@
         customPlotPrompt: '',
         customStylePrompt: '',
         useVolumeMode: false,
-        apiTimeout: 120000  // 【Bug1】新增：API超时时间，默认120秒
+        apiTimeout: 120000
     };
 
     let settings = { ...defaultSettings };
@@ -425,7 +426,7 @@
         });
     }
 
-    // ========== 【Bug1】带超时的API调用 ==========
+    // ========== 带超时的API调用 ==========
     async function callSillyTavernAPI(prompt) {
         updateStreamContent('', true);
         updateStreamContent('📤 正在发送请求...\n');
@@ -438,7 +439,6 @@
 
                 updateStreamContent('✅ 已获取酒馆上下文\n');
 
-                // 【Bug1】添加超时控制
                 const timeoutPromise = new Promise((_, reject) => {
                     setTimeout(() => reject(new Error(`API请求超时 (${timeout/1000}秒)`)), timeout);
                 });
@@ -1010,7 +1010,7 @@
         return { part1: memory1, part2: memory2 };
     }
 
-    // ========== 【Bug3】删除单个记忆 ==========
+    // ========== 删除单个记忆 ==========
     function deleteMemoryAt(index) {
         if (index < 0 || index >= memoryQueue.length) return;
 
@@ -1018,23 +1018,29 @@
         if (confirm(`确定要删除 "${memory.title}" 吗？\n\n该记忆包含 ${memory.content.length.toLocaleString()} 字`)) {
             memoryQueue.splice(index, 1);
 
-            // 重新编号
             memoryQueue.forEach((m, i) => {
-                // 保持分裂后的编号不变
                 if (!m.title.includes('-')) {
                     m.title = `记忆${i + 1}`;
                 }
             });
 
-            // 调整起始索引
             if (startFromIndex > index) {
                 startFromIndex = Math.max(0, startFromIndex - 1);
             } else if (startFromIndex >= memoryQueue.length) {
                 startFromIndex = Math.max(0, memoryQueue.length - 1);
             }
 
+            // 同步更新用户选择
+            if (userSelectedStartIndex !== null) {
+                if (userSelectedStartIndex > index) {
+                    userSelectedStartIndex = Math.max(0, userSelectedStartIndex - 1);
+                } else if (userSelectedStartIndex >= memoryQueue.length) {
+                    userSelectedStartIndex = null;
+                }
+            }
+
             updateMemoryQueueUI();
-            updateStartButtonState(false, startFromIndex);
+            updateStartButtonState(false);
 
             console.log(`🗑️ 已删除记忆: ${memory.title}`);
         }
@@ -1236,7 +1242,7 @@ ${memory.content}
             }
 
             memory.processed = true;
-            memory.result = memoryUpdate; // 【Bug4】保存处理结果
+            memory.result = memoryUpdate;
             updateMemoryQueueUI();
             console.log(`记忆块 ${index + 1} 处理完成`);
 
@@ -1318,7 +1324,11 @@ ${memory.content}
         showProgressSection(true);
         isProcessingStopped = false;
 
-        if (startFromIndex === 0) {
+        // 【核心修复】使用用户选择的索引
+        const effectiveStartIndex = userSelectedStartIndex !== null ? userSelectedStartIndex : startFromIndex;
+        console.log(`📍 开始处理，起始索引: ${effectiveStartIndex} (用户选择: ${userSelectedStartIndex}, 自动计算: ${startFromIndex})`);
+
+        if (effectiveStartIndex === 0) {
             worldbookVolumes = [];
             currentVolumeIndex = 0;
             generatedWorldbook = {
@@ -1329,6 +1339,9 @@ ${memory.content}
             };
         }
 
+        // 清除用户选择，避免下次自动使用
+        userSelectedStartIndex = null;
+
         if (useVolumeMode) {
             updateVolumeIndicator();
         }
@@ -1336,15 +1349,14 @@ ${memory.content}
         updateStartButtonState(true);
 
         try {
-            // 【Bug2修复】只处理从startFromIndex开始的未处理记忆
-            let i = startFromIndex;
+            let i = effectiveStartIndex;
             while (i < memoryQueue.length) {
                 if (isProcessingStopped) {
                     console.log('处理被用户停止');
                     updateProgress((i / memoryQueue.length) * 100, `⏸️ 已暂停处理 (${i}/${memoryQueue.length})`);
                     await MemoryHistoryDB.saveState(i);
 
-                    updateStartButtonState(false, i);
+                    updateStartButtonState(false);
                     return;
                 }
 
@@ -1360,7 +1372,7 @@ ${memory.content}
                     console.log(`修复完成，从索引 ${i} 继续处理`);
                 }
 
-                // 【Bug2修复】跳过已处理的记忆
+                // 跳过已处理的记忆
                 if (memoryQueue[i].processed && !memoryQueue[i].failed) {
                     console.log(`跳过已处理的记忆: ${memoryQueue[i].title}`);
                     i++;
@@ -1406,18 +1418,18 @@ ${memory.content}
                 console.log('✅ 转换完成，状态已保存');
             }
 
-            updateStartButtonState(false, memoryQueue.length);
+            updateStartButtonState(false);
 
         } catch (error) {
             console.error('AI处理过程中发生错误:', error);
             updateProgress(0, `❌ 处理过程出错: ${error.message}`);
 
-            const processedCount = memoryQueue.filter(m => m.processed).length;
-            updateStartButtonState(false, processedCount);
+            updateStartButtonState(false);
         }
     }
 
-    function updateStartButtonState(isProcessing, processedIndex = 0) {
+    // 【核心修复】重写updateStartButtonState，不再自动覆盖用户选择
+    function updateStartButtonState(isProcessing) {
         const startBtn = document.getElementById('ttw-start-btn');
         if (!startBtn) return;
 
@@ -1426,13 +1438,21 @@ ${memory.content}
             startBtn.textContent = '转换中...';
         } else {
             startBtn.disabled = false;
-            // 【Bug2修复】找到第一个未处理的记忆索引
+
+            // 如果用户手动选择了起始位置，优先使用
+            if (userSelectedStartIndex !== null) {
+                startBtn.textContent = `▶️ 从记忆${userSelectedStartIndex + 1}开始`;
+                startFromIndex = userSelectedStartIndex;
+                return;
+            }
+
+            // 否则自动计算第一个未处理的
             const firstUnprocessed = memoryQueue.findIndex(m => !m.processed || m.failed);
 
             if (firstUnprocessed !== -1 && firstUnprocessed < memoryQueue.length) {
                 startBtn.textContent = `▶️ 继续转换 (从记忆${firstUnprocessed + 1})`;
                 startFromIndex = firstUnprocessed;
-            } else if (processedIndex >= memoryQueue.length || firstUnprocessed === -1) {
+            } else if (memoryQueue.length > 0 && memoryQueue.every(m => m.processed && !m.failed)) {
                 startBtn.textContent = '🚀 重新转换';
                 startFromIndex = 0;
             } else {
@@ -1513,7 +1533,7 @@ ${memory.content}
 
         const memoryTitle = `记忆-修复-${memory.title}`;
         await mergeWorldbookDataWithHistory(generatedWorldbook, memoryUpdate, index, memoryTitle);
-        memory.result = memoryUpdate; // 【Bug4】保存结果
+        memory.result = memoryUpdate;
         console.log(`记忆块 ${index + 1} 修复完成`);
     }
 
@@ -1848,10 +1868,10 @@ ${memory.content}
         alert(`已导出 ${worldbookVolumes.length} 卷世界书`);
     }
 
-    // ========== 【Bug5】导出/导入未完成任务 ==========
+    // ========== 导出/导入未完成任务 ==========
     async function exportTaskState() {
         const state = {
-            version: '2.2.0',
+            version: '2.2.1',
             timestamp: Date.now(),
             memoryQueue: memoryQueue,
             generatedWorldbook: generatedWorldbook,
@@ -1914,6 +1934,7 @@ ${memory.content}
 
                 const firstUnprocessed = memoryQueue.findIndex(m => !m.processed || m.failed);
                 startFromIndex = firstUnprocessed !== -1 ? firstUnprocessed : 0;
+                userSelectedStartIndex = null;
 
                 showQueueSection(true);
                 updateMemoryQueueUI();
@@ -1922,7 +1943,7 @@ ${memory.content}
                     updateVolumeIndicator();
                 }
 
-                updateStartButtonState(false, startFromIndex);
+                updateStartButtonState(false);
 
                 const processedCount = memoryQueue.filter(m => m.processed).length;
                 alert(`任务状态已导入！\n\n已处理: ${processedCount}/${memoryQueue.length}\n将从记忆${startFromIndex + 1}继续`);
@@ -2030,7 +2051,7 @@ ${memory.content}
         });
     }
 
-    // ========== 选择起始记忆弹窗 ==========
+    // ========== 【核心修复】选择起始记忆弹窗 ==========
     function showStartFromSelector() {
         if (memoryQueue.length === 0) {
             alert('请先上传文件');
@@ -2047,7 +2068,8 @@ ${memory.content}
         let optionsHtml = '';
         memoryQueue.forEach((memory, index) => {
             const status = memory.processed ? (memory.failed ? '❗' : '✅') : '⏳';
-            optionsHtml += `<option value="${index}" ${index === startFromIndex ? 'selected' : ''}>${status} ${memory.title} (${memory.content.length.toLocaleString()}字)</option>`;
+            const currentSelected = userSelectedStartIndex !== null ? userSelectedStartIndex : startFromIndex;
+            optionsHtml += `<option value="${index}" ${index === currentSelected ? 'selected' : ''}>${status} ${memory.title} (${memory.content.length.toLocaleString()}字)</option>`;
         });
 
         selectorModal.innerHTML = `
@@ -2080,8 +2102,19 @@ ${memory.content}
         selectorModal.querySelector('#ttw-cancel-start-select').addEventListener('click', () => selectorModal.remove());
         selectorModal.querySelector('#ttw-confirm-start-select').addEventListener('click', () => {
             const select = document.getElementById('ttw-start-from-select');
-            startFromIndex = parseInt(select.value);
-            updateStartButtonState(false, startFromIndex);
+            const selectedIndex = parseInt(select.value);
+
+            // 【核心修复】设置用户选择的索引，不再调用updateStartButtonState自动计算
+            userSelectedStartIndex = selectedIndex;
+            startFromIndex = selectedIndex;
+
+            // 直接更新按钮文本
+            const startBtn = document.getElementById('ttw-start-btn');
+            if (startBtn) {
+                startBtn.textContent = `▶️ 从记忆${selectedIndex + 1}开始`;
+            }
+
+            console.log(`📍 用户选择从记忆${selectedIndex + 1}开始`);
             selectorModal.remove();
         });
         selectorModal.addEventListener('click', (e) => {
@@ -2089,7 +2122,7 @@ ${memory.content}
         });
     }
 
-    // ========== 【Bug3】查看记忆内容弹窗 ==========
+    // ========== 查看记忆内容弹窗 ==========
     function showMemoryContentModal(index) {
         const memory = memoryQueue[index];
         if (!memory) return;
@@ -2104,7 +2137,6 @@ ${memory.content}
         const statusText = memory.processed ? (memory.failed ? '❗ 处理失败' : '✅ 已处理') : '⏳ 未处理';
         const statusColor = memory.processed ? (memory.failed ? '#e74c3c' : '#27ae60') : '#f39c12';
 
-        // 【Bug4】显示处理结果
         let resultHtml = '';
         if (memory.processed && memory.result && !memory.failed) {
             resultHtml = `
@@ -2132,7 +2164,7 @@ ${memory.content}
                     ${memory.failedError ? `<div style="margin-bottom: 16px; padding: 10px; background: rgba(231, 76, 60, 0.2); border-radius: 6px; color: #e74c3c; font-size: 12px;">❌ 错误: ${memory.failedError}</div>` : ''}
                     <div>
                         <h4 style="color: #3498db; margin: 0 0 10px 0;">📝 原文内容</h4>
-                        <pre style="max-height: 300px; overflow-y: auto; background: rgba(0,0,0,0.3); padding: 12px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; line-height: 1.6;">${memory.content.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+                        <pre style="max-height: 300px; overflow-y: auto; background: rgba(0,0,0,0.3); padding: 12px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; line-height: 1.6;">${memory.content.replace(/</g, '<').replace(/>/g, '>')}</pre>
                     </div>
                     ${resultHtml}
                 </div>
@@ -2155,7 +2187,7 @@ ${memory.content}
         });
     }
 
-    // ========== 【Bug4】查看已处理结果 ==========
+    // ========== 查看已处理结果 ==========
     function showProcessedResults() {
         const processedMemories = memoryQueue.filter(m => m.processed && !m.failed && m.result);
 
@@ -2248,7 +2280,7 @@ ${memory.content}
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v2.2.0</span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v2.2.1</span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -2271,7 +2303,6 @@ ${memory.content}
                                     <label>每块字数</label>
                                     <input type="number" id="ttw-chunk-size" value="150000" min="1000" max="500000">
                                 </div>
-                                <!-- 【Bug1】新增超时设置 -->
                                 <div class="ttw-setting-item" style="flex: 1;">
                                     <label>API超时(秒)</label>
                                     <input type="number" id="ttw-api-timeout" value="120" min="30" max="600">
@@ -2362,7 +2393,6 @@ ${memory.content}
                     <div class="ttw-section ttw-upload-section">
                         <div class="ttw-section-header">
                             <span>📄 文件上传</span>
-                            <!-- 【Bug5】任务导入导出 -->
                             <div class="ttw-task-actions">
                                 <button id="ttw-import-task" class="ttw-btn-small" title="导入任务状态">📥 导入任务</button>
                                 <button id="ttw-export-task" class="ttw-btn-small" title="导出当前任务状态">📤 导出任务</button>
@@ -2387,7 +2417,6 @@ ${memory.content}
                         <div class="ttw-section-header">
                             <span>📋 记忆队列</span>
                             <div style="display: flex; gap: 8px; margin-left: auto;">
-                                <!-- 【Bug4】查看已处理结果 -->
                                 <button id="ttw-view-processed" class="ttw-btn-small">📊 已处理结果</button>
                                 <button id="ttw-select-start" class="ttw-btn-small">📍 选择起始</button>
                             </div>
@@ -3129,7 +3158,6 @@ ${memory.content}
 
         document.getElementById('ttw-preview-prompt').addEventListener('click', showPromptPreview);
 
-        // 【Bug5】任务导入导出
         document.getElementById('ttw-import-task').addEventListener('click', importTaskState);
         document.getElementById('ttw-export-task').addEventListener('click', exportTaskState);
 
@@ -3165,7 +3193,6 @@ ${memory.content}
         document.getElementById('ttw-repair-btn').addEventListener('click', startRepairFailedMemories);
 
         document.getElementById('ttw-select-start').addEventListener('click', showStartFromSelector);
-        // 【Bug4】查看已处理结果
         document.getElementById('ttw-view-processed').addEventListener('click', showProcessedResults);
 
         document.getElementById('ttw-toggle-stream').addEventListener('click', () => {
@@ -3198,7 +3225,7 @@ ${memory.content}
 
     function saveCurrentSettings() {
         settings.chunkSize = parseInt(document.getElementById('ttw-chunk-size').value) || 150000;
-        settings.apiTimeout = (parseInt(document.getElementById('ttw-api-timeout').value) || 120) * 1000; // 转换为毫秒
+        settings.apiTimeout = (parseInt(document.getElementById('ttw-api-timeout').value) || 120) * 1000;
         incrementalOutputMode = document.getElementById('ttw-incremental-mode').checked;
         useVolumeMode = document.getElementById('ttw-volume-mode').checked;
         settings.useVolumeMode = useVolumeMode;
@@ -3228,7 +3255,7 @@ ${memory.content}
         }
 
         document.getElementById('ttw-chunk-size').value = settings.chunkSize;
-        document.getElementById('ttw-api-timeout').value = Math.round((settings.apiTimeout || 120000) / 1000); // 转换为秒显示
+        document.getElementById('ttw-api-timeout').value = Math.round((settings.apiTimeout || 120000) / 1000);
         document.getElementById('ttw-incremental-mode').checked = incrementalOutputMode;
         document.getElementById('ttw-volume-mode').checked = useVolumeMode;
         document.getElementById('ttw-enable-plot').checked = settings.enablePlotOutline;
@@ -3267,7 +3294,7 @@ ${memory.content}
                     <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; padding: 10px; background: rgba(0,0,0,0.15); border-radius: 6px; font-size: 12px;">
                         ${statusItems.map(item => `<span style="padding: 4px 8px; background: rgba(0,0,0,0.2); border-radius: 4px;">${item}</span>`).join('')}
                     </div>
-                    <pre style="white-space: pre-wrap; word-wrap: break-word; font-size: 12px; line-height: 1.5; background: rgba(0,0,0,0.2); padding: 12px; border-radius: 6px; max-height: 50vh; overflow-y: auto;">${prompt.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+                    <pre style="white-space: pre-wrap; word-wrap: break-word; font-size: 12px; line-height: 1.5; background: rgba(0,0,0,0.2); padding: 12px; border-radius: 6px; max-height: 50vh; overflow-y: auto;">${prompt.replace(/</g, '<').replace(/>/g, '>')}</pre>
                 </div>
                 <div class="ttw-modal-footer">
                     <button class="ttw-btn ttw-btn-primary ttw-close-preview">关闭</button>
@@ -3307,6 +3334,7 @@ ${memory.content}
                     if (startFromIndex === -1) {
                         startFromIndex = memoryQueue.length;
                     }
+                    userSelectedStartIndex = null;
 
                     showQueueSection(true);
                     updateMemoryQueueUI();
@@ -3318,11 +3346,9 @@ ${memory.content}
                     if (startFromIndex >= memoryQueue.length) {
                         showResultSection(true);
                         updateWorldbookPreview();
-                        updateStartButtonState(false, memoryQueue.length);
-                    } else {
-                        updateStartButtonState(false, startFromIndex);
                     }
 
+                    updateStartButtonState(false);
                     document.getElementById('ttw-start-btn').disabled = false;
                 } else {
                     await MemoryHistoryDB.clearState();
@@ -3373,7 +3399,8 @@ ${memory.content}
 
             document.getElementById('ttw-start-btn').disabled = false;
             startFromIndex = 0;
-            updateStartButtonState(false, 0);
+            userSelectedStartIndex = null;
+            updateStartButtonState(false);
 
         } catch (error) {
             console.error('文件处理失败:', error);
@@ -3538,6 +3565,7 @@ ${memory.content}
         worldbookVolumes = [];
         currentVolumeIndex = 0;
         startFromIndex = 0;
+        userSelectedStartIndex = null;
 
         document.getElementById('ttw-upload-area').style.display = 'block';
         document.getElementById('ttw-file-info').style.display = 'none';
@@ -3592,7 +3620,6 @@ ${memory.content}
         }
     }
 
-    // 【Bug3修复】记忆队列UI支持点击查看
     function updateMemoryQueueUI() {
         const container = document.getElementById('ttw-memory-queue');
         container.innerHTML = '';
@@ -3614,7 +3641,6 @@ ${memory.content}
                 ${memory.failed && memory.failedError ? `<small style="color:#e74c3c;margin-left:8px;" title="${memory.failedError}">错误</small>` : ''}
             `;
 
-            // 【Bug3】点击查看记忆内容
             item.addEventListener('click', () => {
                 showMemoryContentModal(index);
             });
@@ -3686,8 +3712,8 @@ ${memory.content}
 
                         if (entry['内容']) {
                             const content = String(entry['内容'])
-                                .replace(/</g, '&lt;')
-                                .replace(/>/g, '&gt;')
+                                .replace(/</g, '<')
+                                .replace(/>/g, '>')
                                 .replace(/\*\*(.+?)\*\*/g, '<strong style="color: #3498db;">$1</strong>')
                                 .replace(/\n/g, '<br>');
                             html += `
@@ -3957,5 +3983,5 @@ ${memory.content}
         importTaskState: importTaskState
     };
 
-    console.log('📚 TxtToWorldbook v2.2.0 已加载 (5项Bug修复版)');
+    console.log('📚 TxtToWorldbook v2.2.1 已加载 (修复选择起始位置无效问题)');
 })();
