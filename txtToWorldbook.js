@@ -1,4 +1,3 @@
-javascript
 /**
  * TXT转世界书独立模块 v2.0
  * 使用SillyTavern内置API进行对话补全
