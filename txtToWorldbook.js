@@ -1,4 +1,3 @@
-
 /**
  * TXT转世界书独立模块 v2.1
  * 新增：世界书分卷功能 - 上下文超限时自动开新卷
@@ -2850,7 +2849,7 @@ ${memory.content}
                     <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; padding: 10px; background: rgba(0,0,0,0.15); border-radius: 6px; font-size: 12px;">
                         ${statusItems.map(item => `<span style="padding: 4px 8px; background: rgba(0,0,0,0.2); border-radius: 4px;">${item}</span>`).join('')}
                     </div>
-                    <pre style="white-space: pre-wrap; word-wrap: break-word; font-size: 12px; line-height: 1.5; background: rgba(0,0,0,0.2); padding: 12px; border-radius: 6px; max-height: 50vh; overflow-y: auto;">${prompt.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+                    <pre style="white-space: pre-wrap; word-wrap: break-word; font-size: 12px; line-height: 1.5; background: rgba(0,0,0,0.2); padding: 12px; border-radius: 6px; max-height: 50vh; overflow-y: auto;">${prompt.replace(/</g, '<').replace(/>/g, '>')}</pre>
                 </div>
                 <div class="ttw-modal-footer">
                     <button class="ttw-btn ttw-btn-primary ttw-close-preview">关闭</button>
@@ -3170,8 +3169,8 @@ ${memory.content}
 
                         if (entry['内容']) {
                             const content = String(entry['内容'])
-                                .replace(/</g, '&lt;')
-                                .replace(/>/g, '&gt;')
+                                .replace(/</g, '<')
+                                .replace(/>/g, '>')
                                 .replace(/\*\*(.+?)\*\*/g, '<strong style="color: #3498db;">$1</strong>')
                                 .replace(/\n/g, '<br>');
                             html += `
@@ -3372,7 +3371,7 @@ ${memory.content}
 
     function formatEntryForDisplay(entry) {
         if (!entry) return '';
-        if (typeof entry === 'string') return entry.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+        if (typeof entry === 'string') return entry.replace(/</g, '<').replace(/>/g, '>').replace(/\n/g, '<br>');
 
         let html = '';
         if (entry['关键词']) {
@@ -3380,7 +3379,7 @@ ${memory.content}
             html += `<div style="color: #9b59b6; margin-bottom: 4px;"><strong>关键词:</strong> ${keywords}</div>`;
         }
         if (entry['内容']) {
-            const content = String(entry['内容']).replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+            const content = String(entry['内容']).replace(/</g, '<').replace(/>/g, '>').replace(/\n/g, '<br>');
             html += `<div><strong>内容:</strong> ${content.substring(0, 200)}${content.length > 200 ? '...' : ''}</div>`;
         }
         return html || JSON.stringify(entry);
