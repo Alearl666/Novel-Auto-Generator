@@ -4,7 +4,9 @@ import './txtToWorldbook.js';
 
 const extensionName = "novel-auto-generator";
 
-const defaultSettings = {};
+const defaultSettings = {
+    // txtToWorldbook 相关设置可以放这里
+};
 
 let settings = {};
 
@@ -33,16 +35,49 @@ function saveSettings() {
 
 function createUI() {
     const html = `
-    <div id="nag-container" class="nag-panel">
-        <div class="nag-header">
-            <h4>📚 TXT转世界书工具</h4>
-        </div>
-        <div class="nag-content">
-            <button id="nag-btn-txt-to-worldbook" class="menu_button" style="background: linear-gradient(135deg, #e67e22, #d35400); width: 100%;">
-                📚 TXT转世界书
-            </button>
-            <div style="margin-top: 10px; font-size: 12px; opacity: 0.7; text-align: center;">
-                将TXT文件转换为SillyTavern世界书格式
+    <div id="nag-container">
+        <div class="inline-drawer">
+            <div class="inline-drawer-toggle inline-drawer-header">
+                <b>📚 TXT转世界书工具</b>
+                <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+            </div>
+            <div class="inline-drawer-content">
+
+                <!-- ✅ 直接把UI内容放这里，展开就能看到 -->
+                <div class="nag-section">
+                    <div style="margin-bottom: 10px; font-size: 12px; opacity: 0.7; text-align: center;">
+                        将TXT文件转换为SillyTavern世界书格式
+                    </div>
+
+                    <!-- 文件选择 -->
+                    <div class="nag-setting-item">
+                        <label>选择TXT文件</label>
+                        <input type="file" id="ttw-file-input" accept=".txt">
+                    </div>
+
+                    <!-- 设置选项 -->
+                    <div class="nag-setting-item">
+                        <label>世界书名称</label>
+                        <input type="text" id="ttw-worldbook-name" placeholder="输入世界书名称">
+                    </div>
+
+                    <!-- 更多设置... 根据你的 txtToWorldbook.js 添加 -->
+
+                    <!-- 操作按钮 -->
+                    <div class="nag-btn-row" style="margin-top: 15px;">
+                        <button id="ttw-btn-convert" class="menu_button" style="background: linear-gradient(135deg, #e67e22, #d35400); width: 100%;">
+                            🔄 开始转换
+                        </button>
+                    </div>
+
+                    <!-- 预览区域 -->
+                    <div id="ttw-preview" style="margin-top: 15px; display: none;">
+                        <label>预览</label>
+                        <div id="ttw-preview-content" style="max-height: 200px; overflow-y: auto; border: 1px solid #444; padding: 10px; border-radius: 5px;">
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </div>
     </div>`;
@@ -52,11 +87,22 @@ function createUI() {
 }
 
 function bindEvents() {
-    $('#nag-btn-txt-to-worldbook').on('click', () => {
+    // 绑定转换按钮事件
+    $('#ttw-btn-convert').on('click', () => {
         if (typeof window.TxtToWorldbook !== 'undefined') {
-            window.TxtToWorldbook.open();
+            // 调用转换逻辑
+            window.TxtToWorldbook.convert();
         } else {
             toastr.error('TXT转世界书模块未加载');
+        }
+    });
+
+    // 文件选择事件
+    $('#ttw-file-input').on('change', function() {
+        const file = this.files[0];
+        if (file) {
+            // 处理文件...
+            log(`已选择文件: ${file.name}`, 'info');
         }
     });
 }
