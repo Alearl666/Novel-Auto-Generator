@@ -1,6 +1,6 @@
 /**
- * TXT转世界书独立模块 v2.5.0
- * 修复: 手机布局、并行章节混乱、重Roll上下文、默认世界书、设置导入导出等
+ * TXT转世界书独立模块 v2.5.1
+ * 修复: 提示词章节标记、导入重生成世界书消失、设置保存默认世界书、默认世界书即时显示
  */
 
 (function() {
@@ -623,7 +623,6 @@
         return data;
     }
 
-    // 修复BUG9: 同名条目合并改为叠加而非覆盖
     function mergeWorldbookData(target, source) {
         normalizeWorldbookData(source);
         for (const key in source) {
@@ -636,7 +635,6 @@
         }
     }
 
-    // 修复BUG9: 增量合并时叠加内容而非覆盖
     function mergeWorldbookDataIncremental(target, source) {
         normalizeWorldbookData(source);
         for (const category in source) {
@@ -647,17 +645,14 @@
                 if (typeof sourceEntry !== 'object' || sourceEntry === null) continue;
                 if (target[category][entryName]) {
                     const targetEntry = target[category][entryName];
-                    // 关键词合并去重
                     if (Array.isArray(sourceEntry['关键词']) && Array.isArray(targetEntry['关键词'])) {
                         targetEntry['关键词'] = [...new Set([...targetEntry['关键词'], ...sourceEntry['关键词']])];
                     } else if (Array.isArray(sourceEntry['关键词'])) {
                         targetEntry['关键词'] = sourceEntry['关键词'];
                     }
-                    // 内容叠加而非覆盖
                     if (sourceEntry['内容']) {
                         const existingContent = targetEntry['内容'] || '';
                         const newContent = sourceEntry['内容'];
-                        // 检查是否有实质性新内容
                         if (newContent && !existingContent.includes(newContent.substring(0, 50))) {
                             targetEntry['内容'] = existingContent + '\n\n---\n\n' + newContent;
                         }
@@ -710,8 +705,8 @@
         return changedEntries;
     }
 
-    // ========== 修复BUG2: 后处理添加记忆编号后缀 ==========
-    function postProcessResultWithMemoryIndex(result, memoryIndex) {
+    // ========== 修复BUG1: 后处理添加章节编号后缀 ==========
+    function postProcessResultWithChapterIndex(result, chapterIndex) {
         if (!result || typeof result !== 'object') return result;
 
         const processed = {};
@@ -722,12 +717,13 @@
             }
             processed[category] = {};
             for (const entryName in result[category]) {
-                // 为剧情大纲类条目添加记忆编号后缀
                 let newEntryName = entryName;
                 if (category === '剧情大纲' || category === '剧情节点') {
-                    // 检查是否已有后缀
-                    if (!entryName.includes('-记忆')) {
-                        newEntryName = `${entryName}-记忆${memoryIndex + 1}`;
+                    // 替换任何"第X章"为"第{chapterIndex}章"
+                    newEntryName = entryName.replace(/第[一二三四五六七八九十百千万\d]+章/g, `第${chapterIndex}章`);
+                    // 如果没有章节标记，添加后缀
+                    if (!newEntryName.includes(`第${chapterIndex}章`) && !newEntryName.includes('-第')) {
+                        newEntryName = `${newEntryName}-第${chapterIndex}章`;
                     }
                 }
                 processed[category][newEntryName] = result[category][entryName];
@@ -941,11 +937,9 @@
     function getPreviousMemoryContext(index) {
         if (index <= 0) return '';
 
-        // 查找上一个已处理的记忆
         for (let i = index - 1; i >= 0; i--) {
             const prevMemory = memoryQueue[i];
             if (prevMemory && prevMemory.processed && prevMemory.result && !prevMemory.failed) {
-                // 提取剧情大纲相关内容作为上下文
                 const plotContext = [];
                 const result = prevMemory.result;
 
@@ -961,7 +955,7 @@
                 }
 
                 if (plotContext.length > 0) {
-                    return `\n\n【上一个记忆(记忆${i + 1})的剧情进展】：\n${plotContext.join('\n')}\n\n请在此基础上继续分析后续剧情，不要重复输出已有的章节。`;
+                    return `\n\n【上一章节(第${i + 1}章)的剧情进展】：\n${plotContext.join('\n')}\n\n请在此基础上继续分析后续剧情，不要重复输出已有的章节。`;
                 }
                 break;
             }
@@ -969,40 +963,54 @@
         return '';
     }
 
+    // ========== 修复BUG1: 生成章节强制标记提示词 ==========
+    function getChapterForcePrompt(chapterIndex) {
+        return `
+【强制章节标记 - 开始】
+强制无视内容中的任何章节信息！本轮全文章节统一为：第${chapterIndex}章
+无论原文中出现"第一章"、"第二章"等任何章节标记，你输出时都必须将其替换为"第${chapterIndex}章"。
+【强制章节标记 - 结束】
+`;
+    }
+
     // ========== 并行处理 ==========
     async function processMemoryChunkIndependent(index, retryCount = 0, customPromptSuffix = '') {
         const memory = memoryQueue[index];
         const maxRetries = 3;
         const taskId = index + 1;
+        const chapterIndex = index + 1; // 章节编号 = 记忆索引 + 1
 
         if (!isRerolling && isProcessingStopped) throw new Error('ABORTED');
 
         memory.processing = true;
         updateMemoryQueueUI();
 
-        // 修复BUG2&3: 构建提示词时加入记忆编号强制标记和上下文
-        let prompt = getLanguagePrefix() + getSystemPrompt();
+        // 修复BUG1: 在提示词前后都加入强制章节标记
+        const chapterForcePrompt = getChapterForcePrompt(chapterIndex);
 
-        // 添加上一个记忆的处理结果作为上下文（修复BUG3）
+        let prompt = chapterForcePrompt; // 开头强制标记
+        prompt += getLanguagePrefix() + getSystemPrompt();
+
+        // 添加上一个记忆的处理结果作为上下文
         const prevContext = getPreviousMemoryContext(index);
         if (prevContext) {
             prompt += prevContext;
         }
 
-        // 强制标记当前记忆编号（修复BUG2）
-        prompt += `\n\n【重要】当前正在处理的是"记忆${index + 1}"的内容。如果需要输出剧情大纲或剧情节点，请在条目名称中标注"记忆${index + 1}"，例如"第X章-记忆${index + 1}"。`;
-
         if (index > 0 && memoryQueue[index - 1].content) {
             prompt += `\n\n前文结尾（供参考）：\n---\n${memoryQueue[index - 1].content.slice(-800)}\n---\n`;
         }
-        prompt += `\n\n当前需要分析的内容（记忆${index + 1}）：\n---\n${memory.content}\n---\n\n请提取角色、地点、组织等信息，直接输出JSON。`;
 
-        // 添加自定义提示词后缀（用于重Roll）
+        prompt += `\n\n当前需要分析的内容（第${chapterIndex}章）：\n---\n${memory.content}\n---\n`;
+        prompt += `\n请提取角色、地点、组织等信息，直接输出JSON。`;
+        prompt += `\n\n【重要提醒】如果输出剧情大纲或剧情节点，条目名称必须包含"第${chapterIndex}章"！`;
+        prompt += chapterForcePrompt; // 结尾再次强制标记
+
         if (customPromptSuffix) {
             prompt += `\n\n${customPromptSuffix}`;
         }
 
-        updateStreamContent(`\n🔄 [记忆${taskId}] 开始处理: ${memory.title}\n`);
+        updateStreamContent(`\n🔄 [第${chapterIndex}章] 开始处理: ${memory.title}\n`);
 
         try {
             const response = await callAPI(prompt, taskId);
@@ -1016,23 +1024,23 @@
 
             let memoryUpdate = parseAIResponse(response);
 
-            // 修复BUG2: 后处理添加记忆编号后缀
-            memoryUpdate = postProcessResultWithMemoryIndex(memoryUpdate, index);
+            // 修复BUG1: 后处理强制替换章节编号
+            memoryUpdate = postProcessResultWithChapterIndex(memoryUpdate, chapterIndex);
 
-            updateStreamContent(`✅ [记忆${taskId}] 处理完成\n`);
+            updateStreamContent(`✅ [第${chapterIndex}章] 处理完成\n`);
             return memoryUpdate;
 
         } catch (error) {
             memory.processing = false;
             if (error.message === 'ABORTED') throw error;
 
-            updateStreamContent(`❌ [记忆${taskId}] 错误: ${error.message}\n`);
+            updateStreamContent(`❌ [第${chapterIndex}章] 错误: ${error.message}\n`);
 
             if (isTokenLimitError(error.message)) throw new Error(`TOKEN_LIMIT:${index}`);
 
             if (retryCount < maxRetries && !isProcessingStopped) {
                 const delay = Math.min(1000 * Math.pow(2, retryCount), 10000);
-                updateStreamContent(`🔄 [记忆${taskId}] ${delay/1000}秒后重试...\n`);
+                updateStreamContent(`🔄 [第${chapterIndex}章] ${delay/1000}秒后重试...\n`);
                 await new Promise(resolve => setTimeout(resolve, delay));
                 return processMemoryChunkIndependent(index, retryCount + 1, customPromptSuffix);
             }
@@ -1118,28 +1126,29 @@
         const memory = memoryQueue[index];
         const progress = ((index + 1) / memoryQueue.length) * 100;
         const maxRetries = 3;
+        const chapterIndex = index + 1;
 
-        updateProgress(progress, `正在处理: ${memory.title} (${index + 1}/${memoryQueue.length})${retryCount > 0 ? ` (重试 ${retryCount})` : ''}`);
+        updateProgress(progress, `正在处理: ${memory.title} (第${chapterIndex}章)${retryCount > 0 ? ` (重试 ${retryCount})` : ''}`);
 
         memory.processing = true;
         updateMemoryQueueUI();
 
-        let prompt = getLanguagePrefix() + getSystemPrompt();
+        // 修复BUG1: 在提示词前后都加入强制章节标记
+        const chapterForcePrompt = getChapterForcePrompt(chapterIndex);
 
-        // 修复BUG3: 分卷模式下发送上一个记忆的处理结果
+        let prompt = chapterForcePrompt;
+        prompt += getLanguagePrefix() + getSystemPrompt();
+
         const prevContext = getPreviousMemoryContext(index);
         if (prevContext) {
             prompt += prevContext;
         }
 
-        // 强制标记当前记忆编号
-        prompt += `\n\n【重要】当前正在处理的是"记忆${index + 1}"的内容。`;
-
         if (index > 0) {
             prompt += `\n\n上次阅读结尾：\n---\n${memoryQueue[index - 1].content.slice(-500)}\n---\n`;
-            prompt += `\n当前记忆：\n${JSON.stringify(generatedWorldbook, null, 2)}\n`;
+            prompt += `\n当前世界书：\n${JSON.stringify(generatedWorldbook, null, 2)}\n`;
         }
-        prompt += `\n现在阅读的部分：\n---\n${memory.content}\n---\n`;
+        prompt += `\n现在阅读的部分（第${chapterIndex}章）：\n---\n${memory.content}\n---\n`;
 
         if (index === 0 || index === startFromIndex) {
             prompt += `\n请开始分析小说内容。`;
@@ -1148,7 +1157,9 @@
         } else {
             prompt += `\n请累积补充世界书。`;
         }
-        prompt += `\n\n直接输出JSON格式结果。`;
+        prompt += `\n\n【重要提醒】如果输出剧情大纲或剧情节点，条目名称必须包含"第${chapterIndex}章"！`;
+        prompt += `\n直接输出JSON格式结果。`;
+        prompt += chapterForcePrompt;
 
         try {
             const response = await callAPI(prompt);
@@ -1174,9 +1185,7 @@
             }
 
             let memoryUpdate = parseAIResponse(response);
-
-            // 后处理添加记忆编号后缀
-            memoryUpdate = postProcessResultWithMemoryIndex(memoryUpdate, index);
+            memoryUpdate = postProcessResultWithChapterIndex(memoryUpdate, chapterIndex);
 
             await mergeWorldbookDataWithHistory(generatedWorldbook, memoryUpdate, index, memory.title);
             await MemoryHistoryDB.saveRollResult(index, memoryUpdate);
@@ -1234,16 +1243,30 @@
         memoryQueue.forEach(m => { if (m.processing) m.processing = false; });
         updateMemoryQueueUI();
         updateStreamContent(`\n⏸️ 已暂停\n`);
-        // 修复BUG5: 确保暂停按钮始终可用
         updateStopButtonVisibility(true);
     }
 
-    // 修复BUG5: 更新暂停按钮可见性
     function updateStopButtonVisibility(show) {
         const stopBtn = document.getElementById('ttw-stop-btn');
         if (stopBtn) {
-            stopBtn.style.display = show ? 'inline-block' : 'inline-block'; // 始终显示
+            stopBtn.style.display = 'inline-block';
             stopBtn.disabled = !show;
+        }
+    }
+
+    // ========== 应用默认世界书条目 ==========
+    function applyDefaultWorldbookEntries() {
+        if (!settings.defaultWorldbookEntries?.trim()) return false;
+
+        try {
+            const defaultEntries = JSON.parse(settings.defaultWorldbookEntries);
+            mergeWorldbookDataIncremental(generatedWorldbook, defaultEntries);
+            updateStreamContent(`\n📚 已添加默认世界书条目\n`);
+            return true;
+        } catch (e) {
+            console.error('解析默认世界书条目失败:', e);
+            updateStreamContent(`\n⚠️ 默认世界书条目格式错误，跳过\n`);
+            return false;
         }
     }
 
@@ -1252,7 +1275,6 @@
         showProgressSection(true);
         isProcessingStopped = false;
 
-        // 修复BUG5: 确保暂停按钮可用
         updateStopButtonVisibility(true);
 
         if (globalSemaphore) globalSemaphore.reset();
@@ -1263,10 +1285,16 @@
 
         const effectiveStartIndex = userSelectedStartIndex !== null ? userSelectedStartIndex : startFromIndex;
 
+        // 修复BUG2: 只有在从头开始且没有已处理记忆时才重置世界书
         if (effectiveStartIndex === 0) {
-            worldbookVolumes = [];
-            currentVolumeIndex = 0;
-            generatedWorldbook = { 地图环境: {}, 剧情节点: {}, 角色: {}, 知识书: {} };
+            const hasProcessedMemories = memoryQueue.some(m => m.processed && !m.failed && m.result);
+            if (!hasProcessedMemories) {
+                worldbookVolumes = [];
+                currentVolumeIndex = 0;
+                generatedWorldbook = { 地图环境: {}, 剧情节点: {}, 角色: {}, 知识书: {} };
+                // 修复BUG4: 立即应用默认世界书条目
+                applyDefaultWorldbookEntries();
+            }
         }
 
         userSelectedStartIndex = null;
@@ -1341,9 +1369,6 @@
                 worldbookVolumes.push({ volumeIndex: currentVolumeIndex, worldbook: JSON.parse(JSON.stringify(generatedWorldbook)), timestamp: Date.now() });
             }
 
-            // 修复BUG6: 添加默认世界书条目
-            applyDefaultWorldbookEntries();
-
             const failedCount = memoryQueue.filter(m => m.failed).length;
             if (failedCount > 0) {
                 updateProgress(100, `⚠️ 完成，但有 ${failedCount} 个失败`);
@@ -1366,20 +1391,6 @@
         }
     }
 
-    // 修复BUG6: 应用默认世界书条目
-    function applyDefaultWorldbookEntries() {
-        if (!settings.defaultWorldbookEntries?.trim()) return;
-
-        try {
-            const defaultEntries = JSON.parse(settings.defaultWorldbookEntries);
-            mergeWorldbookDataIncremental(generatedWorldbook, defaultEntries);
-            updateStreamContent(`\n📚 已添加默认世界书条目\n`);
-        } catch (e) {
-            console.error('解析默认世界书条目失败:', e);
-            updateStreamContent(`\n⚠️ 默认世界书条目格式错误，跳过\n`);
-        }
-    }
-
     function updateStartButtonState(isProcessing) {
         const startBtn = document.getElementById('ttw-start-btn');
         if (!startBtn) return;
@@ -1389,13 +1400,13 @@
         } else {
             startBtn.disabled = false;
             if (userSelectedStartIndex !== null) {
-                startBtn.textContent = `▶️ 从记忆${userSelectedStartIndex + 1}开始`;
+                startBtn.textContent = `▶️ 从第${userSelectedStartIndex + 1}章开始`;
                 startFromIndex = userSelectedStartIndex;
                 return;
             }
             const firstUnprocessed = memoryQueue.findIndex(m => !m.processed || m.failed);
             if (firstUnprocessed !== -1 && firstUnprocessed < memoryQueue.length) {
-                startBtn.textContent = `▶️ 继续转换 (从记忆${firstUnprocessed + 1})`;
+                startBtn.textContent = `▶️ 继续转换 (从第${firstUnprocessed + 1}章)`;
                 startFromIndex = firstUnprocessed;
             } else if (memoryQueue.length > 0 && memoryQueue.every(m => m.processed && !m.failed)) {
                 startBtn.textContent = '🚀 重新转换';
@@ -1410,29 +1421,31 @@
     // ========== 修复失败记忆 ==========
     async function repairSingleMemory(index) {
         const memory = memoryQueue[index];
-        let prompt = getLanguagePrefix() + `你是世界书生成专家。请提取关键信息。
+        const chapterIndex = index + 1;
+        const chapterForcePrompt = getChapterForcePrompt(chapterIndex);
+
+        let prompt = chapterForcePrompt;
+        prompt += getLanguagePrefix() + `你是世界书生成专家。请提取关键信息。
 
 输出JSON格式：
 {"角色": {...}, "地点": {...}, "组织": {...}}
 `;
 
-        // 添加上下文
         const prevContext = getPreviousMemoryContext(index);
         if (prevContext) {
             prompt += prevContext;
         }
 
-        prompt += `\n\n【重要】当前正在处理的是"记忆${index + 1}"的内容。`;
-
         if (Object.keys(generatedWorldbook).length > 0) {
-            prompt += `当前记忆：\n${JSON.stringify(generatedWorldbook, null, 2)}\n\n`;
+            prompt += `当前世界书：\n${JSON.stringify(generatedWorldbook, null, 2)}\n\n`;
         }
-        prompt += `阅读内容：\n---\n${memory.content}\n---\n\n请输出JSON。`;
+        prompt += `阅读内容（第${chapterIndex}章）：\n---\n${memory.content}\n---\n\n请输出JSON。`;
+        prompt += chapterForcePrompt;
 
         const response = await callAPI(prompt);
         let memoryUpdate = parseAIResponse(response);
-        memoryUpdate = postProcessResultWithMemoryIndex(memoryUpdate, index);
-        await mergeWorldbookDataWithHistory(generatedWorldbook, memoryUpdate, index, `记忆-修复-${memory.title}`);
+        memoryUpdate = postProcessResultWithChapterIndex(memoryUpdate, chapterIndex);
+        await mergeWorldbookDataWithHistory(generatedWorldbook, memoryUpdate, index, `修复-${memory.title}`);
         await MemoryHistoryDB.saveRollResult(index, memoryUpdate);
         memory.result = memoryUpdate;
     }
@@ -1512,7 +1525,7 @@
         updateMemoryQueueUI();
     }
 
-    // ========== 修复BUG4: 重Roll功能增强 ==========
+    // ========== 重Roll功能 ==========
     async function rerollMemory(index, customPrompt = '') {
         const memory = memoryQueue[index];
         if (!memory) return;
@@ -1520,16 +1533,14 @@
         isRerolling = true;
         isProcessingStopped = false;
 
-        // 修复BUG5: 重Roll时保持暂停按钮可用
         updateStopButtonVisibility(true);
 
-        updateStreamContent(`\n🎲 开始重Roll: ${memory.title}\n`);
+        updateStreamContent(`\n🎲 开始重Roll: ${memory.title} (第${index + 1}章)\n`);
 
         try {
             memory.processing = true;
             updateMemoryQueueUI();
 
-            // 修复BUG4: 传入自定义提示词
             const result = await processMemoryChunkIndependent(index, 0, customPrompt);
 
             memory.processing = false;
@@ -1557,7 +1568,6 @@
         }
     }
 
-    // 修复BUG4: 重Roll历史选择器增加自定义提示词输入
     async function showRollHistorySelector(index) {
         const memory = memoryQueue[index];
         if (!memory) return;
@@ -1594,7 +1604,7 @@
         modal.innerHTML = `
             <div class="ttw-modal" style="max-width:900px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">🎲 ${memory.title} - Roll历史</span>
+                    <span class="ttw-modal-title">🎲 ${memory.title} (第${index + 1}章) - Roll历史</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body">
@@ -1934,7 +1944,6 @@
                         generatedWorldbook[dup.category][newName] = dup.imported;
                         updateStreamContent(`   ✅ 添加为: ${newName}\n`);
                     } else if (mergeMode === 'append') {
-                        // 修复BUG9: 内容叠加模式
                         const existing = generatedWorldbook[dup.category][dup.name];
                         const keywords = [...new Set([...(existing['关键词'] || []), ...(dup.imported['关键词'] || [])])];
                         const content = (existing['内容'] || '') + '\n\n---\n\n' + (dup.imported['内容'] || '');
@@ -1952,7 +1961,6 @@
         updateProgress(100, '合并完成！');
         updateStreamContent(`\n${'='.repeat(50)}\n✅ 合并完成！\n`);
 
-        // 修复BUG7: 合并完成后更新UI显示
         showResultSection(true);
         updateWorldbookPreview();
         alert('世界书合并完成！');
@@ -2093,7 +2101,7 @@
 
     async function exportTaskState() {
         const state = {
-            version: '2.5.0',
+            version: '2.5.1',
             timestamp: Date.now(),
             memoryQueue,
             generatedWorldbook,
@@ -2137,7 +2145,7 @@
                 if (state.parallelConfig) parallelConfig = { ...parallelConfig, ...state.parallelConfig };
                 if (state.categoryLightSettings) categoryLightSettings = { ...categoryLightSettings, ...state.categoryLightSettings };
 
-                // 修复BUG12: 从已处理记忆重建世界书
+                // 如果世界书为空，从已处理记忆重建
                 if (Object.keys(generatedWorldbook).length === 0) {
                     rebuildWorldbookFromMemories();
                 }
@@ -2151,7 +2159,6 @@
                 updateStartButtonState(false);
                 updateSettingsUI();
 
-                // 显示结果区域
                 if (Object.keys(generatedWorldbook).length > 0) {
                     showResultSection(true);
                     updateWorldbookPreview();
@@ -2167,7 +2174,6 @@
         input.click();
     }
 
-    // 修复BUG12: 从已处理记忆重建世界书
     function rebuildWorldbookFromMemories() {
         generatedWorldbook = { 地图环境: {}, 剧情节点: {}, 角色: {}, 知识书: {} };
         for (const memory of memoryQueue) {
@@ -2175,17 +2181,20 @@
                 mergeWorldbookDataIncremental(generatedWorldbook, memory.result);
             }
         }
+        // 修复BUG4: 重建后也要应用默认世界书
+        applyDefaultWorldbookEntries();
         updateStreamContent(`\n📚 从已处理记忆重建了世界书\n`);
     }
 
-    // 修复BUG10: 设置导出功能
+    // 修复BUG3: 设置导出包含defaultWorldbookEntries
     function exportSettings() {
         const exportData = {
-            version: '2.5.0',
+            version: '2.5.1',
             type: 'settings',
             timestamp: Date.now(),
             settings: {
                 ...settings,
+                defaultWorldbookEntries: settings.defaultWorldbookEntries || '',
                 parallelEnabled: parallelConfig.enabled,
                 parallelConcurrency: parallelConfig.concurrency,
                 parallelMode: parallelConfig.mode
@@ -2204,7 +2213,6 @@
         alert('设置已导出！');
     }
 
-    // 修复BUG10: 设置导入功能
     function importSettings() {
         const input = document.createElement('input');
         input.type = 'file';
@@ -2272,7 +2280,7 @@
         helpModal.innerHTML = `
             <div class="ttw-modal" style="max-width:650px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">❓ TXT转世界书 v2.5.0 帮助</span>
+                    <span class="ttw-modal-title">❓ TXT转世界书 v2.5.1 帮助</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
@@ -2292,19 +2300,11 @@
                         </ul>
                     </div>
                     <div style="margin-bottom:16px;">
-                        <h4 style="color:#3498db;margin:0 0 10px;">💡 蓝灯/绿灯说明</h4>
+                        <h4 style="color:#3498db;margin:0 0 10px;">💡 章节标记说明</h4>
                         <p style="color:#ccc;line-height:1.6;margin:0;">
-                            <strong style="color:#3498db;">🔵 蓝灯(常驻)</strong>：条目始终激活，constant=true<br>
-                            <strong style="color:#27ae60;">🟢 绿灯(触发)</strong>：关键词匹配时激活，selective=true
+                            每个记忆块会被强制标记为对应的章节号（记忆1=第1章，记忆2=第2章...），<br>
+                            AI输出的剧情大纲/剧情节点会自动添加章节标记，避免章节混乱。
                         </p>
-                    </div>
-                    <div>
-                        <h4 style="color:#9b59b6;margin:0 0 10px;">💡 使用技巧</h4>
-                        <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                            <li>点击记忆块可<strong>查看/编辑/复制</strong></li>
-                            <li>在世界书预览中点击分类旁的<strong>灯图标</strong>切换状态</li>
-                            <li>重Roll时可输入<strong>自定义提示词</strong>引导AI</li>
-                        </ul>
                     </div>
                 </div>
                 <div class="ttw-modal-footer">
@@ -2330,7 +2330,7 @@
         memoryQueue.forEach((memory, index) => {
             const status = memory.processed ? (memory.failed ? '❗' : '✅') : '⏳';
             const currentSelected = userSelectedStartIndex !== null ? userSelectedStartIndex : startFromIndex;
-            optionsHtml += `<option value="${index}" ${index === currentSelected ? 'selected' : ''}>${status} ${memory.title} (${memory.content.length.toLocaleString()}字)</option>`;
+            optionsHtml += `<option value="${index}" ${index === currentSelected ? 'selected' : ''}>${status} 第${index + 1}章 - ${memory.title} (${memory.content.length.toLocaleString()}字)</option>`;
         });
 
         const selectorModal = document.createElement('div');
@@ -2344,7 +2344,7 @@
                 </div>
                 <div class="ttw-modal-body">
                     <div style="margin-bottom:16px;">
-                        <label style="display:block;margin-bottom:8px;font-size:13px;">从哪个记忆块开始：</label>
+                        <label style="display:block;margin-bottom:8px;font-size:13px;">从哪一章开始：</label>
                         <select id="ttw-start-from-select" class="ttw-select">${optionsHtml}</select>
                     </div>
                     <div style="padding:12px;background:rgba(230,126,34,0.1);border-radius:6px;font-size:12px;color:#f39c12;">⚠️ 从中间开始时，之前的世界书数据不会自动加载。</div>
@@ -2364,7 +2364,7 @@
             userSelectedStartIndex = selectedIndex;
             startFromIndex = selectedIndex;
             const startBtn = document.getElementById('ttw-start-btn');
-            if (startBtn) startBtn.textContent = `▶️ 从记忆${selectedIndex + 1}开始`;
+            if (startBtn) startBtn.textContent = `▶️ 从第${selectedIndex + 1}章开始`;
             selectorModal.remove();
         });
         selectorModal.addEventListener('click', (e) => { if (e.target === selectorModal) selectorModal.remove(); });
@@ -2397,7 +2397,7 @@
         contentModal.innerHTML = `
             <div class="ttw-modal" style="max-width:900px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📄 ${memory.title}</span>
+                    <span class="ttw-modal-title">📄 ${memory.title} (第${index + 1}章)</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body" style="max-height:75vh;overflow-y:auto;">
@@ -2417,8 +2417,8 @@
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
                             <h4 style="color:#3498db;margin:0;">📝 原文内容 <span style="font-size:12px;font-weight:normal;color:#888;">(可编辑)</span></h4>
                             <div style="display:flex;gap:8px;">
-                                <button id="ttw-append-to-prev" class="ttw-btn ttw-btn-small" ${index === 0 ? 'disabled style="opacity:0.5;"' : ''} title="追加到上一个记忆末尾，并删除当前记忆">⬆️ 合并到上一个</button>
-                                <button id="ttw-append-to-next" class="ttw-btn ttw-btn-small" ${index === memoryQueue.length - 1 ? 'disabled style="opacity:0.5;"' : ''} title="追加到下一个记忆开头，并删除当前记忆">⬇️ 合并到下一个</button>
+                                <button id="ttw-append-to-prev" class="ttw-btn ttw-btn-small" ${index === 0 ? 'disabled style="opacity:0.5;"' : ''} title="追加到上一章末尾，并删除当前章">⬆️ 合并到上一章</button>
+                                <button id="ttw-append-to-next" class="ttw-btn ttw-btn-small" ${index === memoryQueue.length - 1 ? 'disabled style="opacity:0.5;"' : ''} title="追加到下一章开头，并删除当前章">⬇️ 合并到下一章</button>
                             </div>
                         </div>
                         <textarea id="ttw-memory-content-editor" class="ttw-textarea">${memory.content.replace(/</g, '<').replace(/>/g, '>')}</textarea>
@@ -2476,7 +2476,7 @@
         contentModal.querySelector('#ttw-append-to-prev').addEventListener('click', () => {
             if (index === 0) return;
             const prevMemory = memoryQueue[index - 1];
-            if (confirm(`将当前内容合并到 "${prevMemory.title}" 的末尾？\n\n⚠️ 合并后当前记忆将被删除！`)) {
+            if (confirm(`将当前内容合并到 "${prevMemory.title}" 的末尾？\n\n⚠️ 合并后当前章将被删除！`)) {
                 prevMemory.content += '\n\n' + editor.value;
                 prevMemory.processed = false;
                 prevMemory.failed = false;
@@ -2492,14 +2492,14 @@
                 updateMemoryQueueUI();
                 updateStartButtonState(false);
                 contentModal.remove();
-                alert(`已合并到 "${prevMemory.title}"，当前记忆已删除`);
+                alert(`已合并到 "${prevMemory.title}"，当前章已删除`);
             }
         });
 
         contentModal.querySelector('#ttw-append-to-next').addEventListener('click', () => {
             if (index === memoryQueue.length - 1) return;
             const nextMemory = memoryQueue[index + 1];
-            if (confirm(`将当前内容合并到 "${nextMemory.title}" 的开头？\n\n⚠️ 合并后当前记忆将被删除！`)) {
+            if (confirm(`将当前内容合并到 "${nextMemory.title}" 的开头？\n\n⚠️ 合并后当前章将被删除！`)) {
                 nextMemory.content = editor.value + '\n\n' + nextMemory.content;
                 nextMemory.processed = false;
                 nextMemory.failed = false;
@@ -2515,7 +2515,7 @@
                 updateMemoryQueueUI();
                 updateStartButtonState(false);
                 contentModal.remove();
-                alert(`已合并到 "${nextMemory.title}"，当前记忆已删除`);
+                alert(`已合并到 "${nextMemory.title}"，当前章已删除`);
             }
         });
     }
@@ -2534,7 +2534,7 @@
             const entryCount = memory.result ? Object.keys(memory.result).reduce((sum, cat) => sum + (typeof memory.result[cat] === 'object' ? Object.keys(memory.result[cat]).length : 0), 0) : 0;
             listHtml += `
                 <div class="ttw-processed-item" data-index="${realIndex}" style="padding:10px 12px;background:rgba(0,0,0,0.2);border-radius:6px;margin-bottom:8px;cursor:pointer;border-left:3px solid #27ae60;">
-                    <div style="font-weight:bold;color:#27ae60;margin-bottom:4px;">✅ ${memory.title}</div>
+                    <div style="font-weight:bold;color:#27ae60;margin-bottom:4px;">✅ 第${realIndex + 1}章 - ${memory.title}</div>
                     <div style="font-size:11px;color:#888;">${entryCount} 个条目 | ${memory.content.length.toLocaleString()} 字</div>
                 </div>
             `;
@@ -2553,7 +2553,7 @@
                     <div style="display:flex;gap:15px;height:450px;">
                         <div style="width:250px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:8px;padding:10px;">${listHtml}</div>
                         <div id="ttw-result-detail" style="flex:1;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:8px;padding:15px;">
-                            <div style="text-align:center;color:#888;padding:40px;">👈 点击左侧记忆查看结果</div>
+                            <div style="text-align:center;color:#888;padding:40px;">👈 点击左侧章节查看结果</div>
                         </div>
                     </div>
                 </div>
@@ -2578,7 +2578,7 @@
                 if (memory && memory.result) {
                     detailDiv.innerHTML = `
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                            <h4 style="color:#27ae60;margin:0;">${memory.title}</h4>
+                            <h4 style="color:#27ae60;margin:0;">第${index + 1}章 - ${memory.title}</h4>
                             <button class="ttw-btn ttw-btn-small" id="ttw-copy-result">📋 复制</button>
                         </div>
                         <pre style="white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.5;">${JSON.stringify(memory.result, null, 2)}</pre>
@@ -2607,7 +2607,7 @@
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v2.5.0</span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v2.5.1</span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -2644,7 +2644,7 @@
                                 </div>
                                 <div style="margin-top:10px;">
                                     <select id="ttw-parallel-mode" class="ttw-select">
-                                        <option value="independent">🚀 独立模式 - 最快，每个记忆独立提取后合并</option>
+                                        <option value="independent">🚀 独立模式 - 最快，每章独立提取后合并</option>
                                         <option value="batch">📦 分批模式 - 批次间累积上下文，更连贯</option>
                                     </select>
                                 </div>
@@ -2677,7 +2677,7 @@
                             </div>
                             <div id="ttw-volume-indicator" class="ttw-volume-indicator"></div>
 
-                            <!-- 修复BUG6: 默认世界书条目配置 -->
+                            <!-- 默认世界书条目配置 -->
                             <div class="ttw-prompt-section" style="margin-top:16px;border:1px solid var(--SmartThemeBorderColor,#444);border-radius:8px;overflow:hidden;">
                                 <div class="ttw-prompt-header ttw-prompt-header-green" data-target="ttw-default-worldbook-content">
                                     <div style="display:flex;align-items:center;gap:8px;">
@@ -2687,8 +2687,11 @@
                                     <span class="ttw-collapse-icon">▶</span>
                                 </div>
                                 <div id="ttw-default-worldbook-content" class="ttw-prompt-content">
-                                    <div class="ttw-setting-hint" style="margin-bottom:10px;">每次转换完成后自动添加的世界书条目（JSON格式）</div>
+                                    <div class="ttw-setting-hint" style="margin-bottom:10px;">每次转换完成后自动添加的世界书条目（JSON格式），会在开始转换时立即应用</div>
                                     <textarea id="ttw-default-worldbook" rows="6" placeholder='例如：{"角色":{"系统提示":{"关键词":["系统"],"内容":"这是一个默认条目"}}}' class="ttw-textarea-small"></textarea>
+                                    <div style="margin-top:8px;">
+                                        <button class="ttw-btn ttw-btn-small" id="ttw-apply-default-worldbook">🔄 立即应用</button>
+                                    </div>
                                 </div>
                             </div>
 
@@ -2755,7 +2758,7 @@
                         <div class="ttw-section-header">
                             <span>📄 文件上传</span>
                             <div style="display:flex;gap:8px;">
-                                <button id="ttw-import-json" class="ttw-btn-small" title="导入已有世界书JSON进行合并">📥 合并导入的世界书</button>
+                                <button id="ttw-import-json" class="ttw-btn-small" title="导入已有世界书JSON进行合并">📥 合并世界书</button>
                                 <button id="ttw-import-task" class="ttw-btn-small">📥 导入任务</button>
                                 <button id="ttw-export-task" class="ttw-btn-small">📤 导出任务</button>
                             </div>
@@ -2776,14 +2779,14 @@
                     <!-- 记忆队列 -->
                     <div class="ttw-section" id="ttw-queue-section" style="display:none;">
                         <div class="ttw-section-header">
-                            <span>📋 记忆队列</span>
+                            <span>📋 章节队列</span>
                             <div style="display:flex;gap:8px;margin-left:auto;">
                                 <button id="ttw-view-processed" class="ttw-btn-small">📊 已处理</button>
                                 <button id="ttw-select-start" class="ttw-btn-small">📍 选择起始</button>
                             </div>
                         </div>
                         <div class="ttw-section-content">
-                            <div class="ttw-setting-hint" style="margin-bottom:8px;">💡 点击记忆可<strong>查看/编辑/复制</strong>，支持<strong>🎲重Roll</strong></div>
+                            <div class="ttw-setting-hint" style="margin-bottom:8px;">💡 点击章节可<strong>查看/编辑/复制</strong>，支持<strong>🎲重Roll</strong></div>
                             <div id="ttw-memory-queue" class="ttw-memory-queue"></div>
                         </div>
                     </div>
@@ -2846,7 +2849,7 @@
             document.getElementById('ttw-file-info').style.display = 'flex';
             document.getElementById('ttw-file-name').textContent = currentFile ? currentFile.name : '已加载的文件';
             const totalChars = memoryQueue.reduce((sum, m) => sum + m.content.length, 0);
-            document.getElementById('ttw-file-size').textContent = `(${(totalChars / 1024).toFixed(1)} KB, ${memoryQueue.length}块)`;
+            document.getElementById('ttw-file-size').textContent = `(${(totalChars / 1024).toFixed(1)} KB, ${memoryQueue.length}章)`;
 
             showQueueSection(true);
             updateMemoryQueueUI();
@@ -2885,36 +2888,23 @@
             .ttw-collapse-icon{font-size:10px;transition:transform 0.2s;}
             .ttw-section.collapsed .ttw-collapse-icon{transform:rotate(-90deg);}
             .ttw-section.collapsed .ttw-section-content{display:none;}
-
-            .ttw-input,.ttw-select,.ttw-textarea,.ttw-textarea-small,.ttw-input-small{
-                background:rgba(0,0,0,0.3);
-                border:1px solid var(--SmartThemeBorderColor,#555);
-                border-radius:6px;
-                color:#fff;
-                font-size:13px;
-                box-sizing:border-box;
-            }
+            .ttw-input,.ttw-select,.ttw-textarea,.ttw-textarea-small,.ttw-input-small{background:rgba(0,0,0,0.3);border:1px solid var(--SmartThemeBorderColor,#555);border-radius:6px;color:#fff;font-size:13px;box-sizing:border-box;}
             .ttw-input{width:100%;padding:10px 12px;}
             .ttw-input-small{width:60px;padding:6px 8px;text-align:center;}
             .ttw-select{width:100%;padding:8px 10px;}
             .ttw-textarea{width:100%;min-height:250px;padding:12px;line-height:1.6;resize:vertical;font-family:inherit;}
             .ttw-textarea-small{width:100%;min-height:80px;padding:10px;font-family:monospace;font-size:12px;line-height:1.5;resize:vertical;}
             .ttw-input:focus,.ttw-select:focus,.ttw-textarea:focus,.ttw-textarea-small:focus{outline:none;border-color:#e67e22;}
-
             .ttw-label{display:block;margin-bottom:6px;font-size:12px;opacity:0.9;}
             .ttw-setting-hint{font-size:11px;color:#888;margin-top:4px;}
-
             .ttw-setting-card{margin-bottom:16px;padding:12px;border-radius:8px;}
             .ttw-setting-card-green{background:rgba(39,174,96,0.1);border:1px solid rgba(39,174,96,0.3);}
             .ttw-setting-card-blue{background:rgba(52,152,219,0.15);border:1px solid rgba(52,152,219,0.3);}
-
             .ttw-checkbox-label{display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;}
             .ttw-checkbox-label input[type="checkbox"]{width:18px;height:18px;accent-color:#e67e22;flex-shrink:0;}
             .ttw-checkbox-with-hint{padding:8px 12px;background:rgba(0,0,0,0.15);border-radius:6px;}
             .ttw-checkbox-purple{background:rgba(155,89,182,0.15);border:1px solid rgba(155,89,182,0.3);}
-
             .ttw-volume-indicator{display:none;margin-top:12px;padding:8px 12px;background:rgba(155,89,182,0.2);border-radius:6px;font-size:12px;color:#bb86fc;}
-
             .ttw-prompt-config{margin-top:16px;border:1px solid var(--SmartThemeBorderColor,#444);border-radius:8px;overflow:hidden;}
             .ttw-prompt-config-header{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:rgba(230,126,34,0.15);border-bottom:1px solid var(--SmartThemeBorderColor,#444);font-weight:500;flex-wrap:wrap;gap:8px;}
             .ttw-prompt-section{border-bottom:1px solid var(--SmartThemeBorderColor,#333);}
@@ -2925,31 +2915,24 @@
             .ttw-prompt-header-purple{background:rgba(155,89,182,0.1);}
             .ttw-prompt-header-green{background:rgba(46,204,113,0.1);}
             .ttw-prompt-content{display:none;padding:12px 14px;background:rgba(0,0,0,0.15);}
-
             .ttw-badge{font-size:10px;padding:2px 6px;border-radius:10px;font-weight:500;}
             .ttw-badge-blue{background:rgba(52,152,219,0.3);color:#5dade2;}
             .ttw-badge-gray{background:rgba(149,165,166,0.3);color:#bdc3c7;}
-
             .ttw-upload-area{border:2px dashed var(--SmartThemeBorderColor,#555);border-radius:8px;padding:40px 20px;text-align:center;cursor:pointer;transition:all 0.2s;}
             .ttw-upload-area:hover{border-color:#e67e22;background:rgba(230,126,34,0.1);}
             .ttw-file-info{display:none;align-items:center;gap:12px;padding:12px;background:rgba(0,0,0,0.3);border-radius:6px;margin-top:12px;}
-
             .ttw-memory-queue{max-height:200px;overflow-y:auto;}
             .ttw-memory-item{padding:8px 12px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:6px;font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer;transition:background 0.2s;}
             .ttw-memory-item:hover{background:rgba(0,0,0,0.4);}
-
             .ttw-progress-bar{width:100%;height:8px;background:rgba(0,0,0,0.3);border-radius:4px;overflow:hidden;margin-bottom:12px;}
             .ttw-progress-fill{height:100%;background:linear-gradient(90deg,#e67e22,#f39c12);border-radius:4px;transition:width 0.3s;width:0%;}
             .ttw-progress-text{font-size:13px;text-align:center;margin-bottom:12px;}
             .ttw-progress-controls{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;}
-
             .ttw-stream-container{display:none;margin-top:12px;border:1px solid var(--SmartThemeBorderColor,#444);border-radius:6px;overflow:hidden;}
             .ttw-stream-header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:rgba(0,0,0,0.3);font-size:12px;}
             .ttw-stream-content{max-height:200px;overflow-y:auto;padding:12px;background:rgba(0,0,0,0.2);font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all;margin:0;font-family:monospace;}
-
             .ttw-result-preview{max-height:300px;overflow-y:auto;background:rgba(0,0,0,0.3);border-radius:6px;padding:12px;margin-bottom:12px;font-size:12px;}
             .ttw-result-actions{display:flex;flex-wrap:wrap;gap:10px;}
-
             .ttw-btn{padding:10px 16px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:6px;background:rgba(255,255,255,0.1);color:#fff;font-size:13px;cursor:pointer;transition:all 0.2s;}
             .ttw-btn:hover{background:rgba(255,255,255,0.2);}
             .ttw-btn:disabled{opacity:0.5;cursor:not-allowed;}
@@ -2959,11 +2942,8 @@
             .ttw-btn-warning{background:rgba(255,107,53,0.5);border-color:#ff6b35;}
             .ttw-btn-small{padding:6px 12px;font-size:12px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:4px;background:rgba(255,255,255,0.1);color:#fff;cursor:pointer;transition:all 0.2s;}
             .ttw-btn-small:hover{background:rgba(255,255,255,0.2);}
-
             .ttw-merge-option{display:flex;align-items:center;gap:8px;padding:10px;background:rgba(0,0,0,0.2);border-radius:6px;cursor:pointer;}
             .ttw-merge-option input{width:18px;height:18px;}
-
-            /* 修复BUG1: Roll历史和修改历史手机端布局优化 */
             .ttw-roll-history-container{display:flex;gap:10px;height:400px;}
             .ttw-roll-history-left{width:100px;min-width:100px;max-width:100px;display:flex;flex-direction:column;gap:8px;overflow:hidden;}
             .ttw-roll-history-right{flex:1;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:8px;padding:12px;}
@@ -2980,14 +2960,11 @@
             .ttw-roll-detail-header h4{color:#e67e22;margin:0 0 6px 0;font-size:14px;}
             .ttw-roll-detail-time{font-size:11px;color:#888;margin-bottom:8px;}
             .ttw-roll-detail-content{white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.5;max-height:280px;overflow-y:auto;background:rgba(0,0,0,0.2);padding:10px;border-radius:6px;}
-
             .ttw-light-toggle{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;cursor:pointer;font-size:14px;transition:all 0.2s;border:none;margin-left:8px;}
             .ttw-light-toggle.blue{background:rgba(52,152,219,0.3);color:#3498db;}
             .ttw-light-toggle.blue:hover{background:rgba(52,152,219,0.5);}
             .ttw-light-toggle.green{background:rgba(39,174,96,0.3);color:#27ae60;}
             .ttw-light-toggle.green:hover{background:rgba(39,174,96,0.5);}
-
-            /* 修复BUG1: 修改历史也采用同样的紧凑布局 */
             .ttw-history-container{display:flex;gap:10px;height:400px;}
             .ttw-history-left{width:100px;min-width:100px;max-width:100px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;}
             .ttw-history-right{flex:1;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:8px;padding:12px;}
@@ -2996,8 +2973,6 @@
             .ttw-history-item-title{font-size:10px;font-weight:bold;color:#e67e22;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
             .ttw-history-item-time{font-size:9px;color:#888;}
             .ttw-history-item-info{font-size:9px;color:#aaa;}
-
-            /* 手机端适配 */
             @media (max-width: 768px) {
                 .ttw-roll-history-container,.ttw-history-container{flex-direction:column;height:auto;}
                 .ttw-roll-history-left,.ttw-history-left{width:100%;max-width:100%;flex-direction:row;flex-wrap:wrap;height:auto;max-height:120px;}
@@ -3044,11 +3019,24 @@
             });
         }
 
+        // 修复BUG4: 立即应用默认世界书按钮
+        document.getElementById('ttw-apply-default-worldbook')?.addEventListener('click', () => {
+            saveCurrentSettings();
+            const applied = applyDefaultWorldbookEntries();
+            if (applied) {
+                showResultSection(true);
+                updateWorldbookPreview();
+                alert('默认世界书条目已应用！');
+            } else {
+                alert('没有有效的默认世界书条目或格式错误');
+            }
+        });
+
         document.querySelectorAll('.ttw-prompt-header[data-target]').forEach(header => {
             header.addEventListener('click', (e) => {
                 if (e.target.type === 'checkbox') return;
                 const targetId = header.getAttribute('data-target');
-                if (targetId === 'ttw-default-worldbook-content') return; // 已单独处理
+                if (targetId === 'ttw-default-worldbook-content') return;
                 const content = document.getElementById(targetId);
                 const icon = header.querySelector('.ttw-collapse-icon');
                 if (content.style.display === 'none' || !content.style.display) { content.style.display = 'block'; icon.textContent = '▼'; }
@@ -3074,7 +3062,6 @@
         document.getElementById('ttw-import-task').addEventListener('click', importTaskState);
         document.getElementById('ttw-export-task').addEventListener('click', exportTaskState);
 
-        // 修复BUG10: 设置导入导出按钮
         document.getElementById('ttw-export-settings').addEventListener('click', exportSettings);
         document.getElementById('ttw-import-settings').addEventListener('click', importSettings);
 
@@ -3106,6 +3093,7 @@
         if (e.key === 'Escape' && modalContainer) { e.stopPropagation(); e.preventDefault(); closeModal(); }
     }
 
+    // 修复BUG3: 保存设置时包含defaultWorldbookEntries
     function saveCurrentSettings() {
         settings.chunkSize = parseInt(document.getElementById('ttw-chunk-size').value) || 15000;
         settings.apiTimeout = (parseInt(document.getElementById('ttw-api-timeout').value) || 120) * 1000;
@@ -3122,6 +3110,7 @@
         settings.parallelConcurrency = parallelConfig.concurrency;
         settings.parallelMode = parallelConfig.mode;
         settings.categoryLightSettings = { ...categoryLightSettings };
+        // 修复BUG3: 确保保存默认世界书条目
         settings.defaultWorldbookEntries = document.getElementById('ttw-default-worldbook')?.value || '';
         try { localStorage.setItem('txtToWorldbookSettings', JSON.stringify(settings)); } catch (e) {}
     }
@@ -3152,6 +3141,7 @@
         document.getElementById('ttw-parallel-enabled').checked = parallelConfig.enabled;
         document.getElementById('ttw-parallel-concurrency').value = parallelConfig.concurrency;
         document.getElementById('ttw-parallel-mode').value = parallelConfig.mode;
+        // 修复BUG3: 加载默认世界书条目
         if (document.getElementById('ttw-default-worldbook')) {
             document.getElementById('ttw-default-worldbook').value = settings.defaultWorldbookEntries || '';
         }
@@ -3161,7 +3151,8 @@
 
     function showPromptPreview() {
         const prompt = getSystemPrompt();
-        alert(`当前提示词预览:\n\n使用酒馆预设: ${settings.useTavernPreset ? '是' : '否'}\n并行模式: ${parallelConfig.enabled ? parallelConfig.mode : '关闭'}\n\n${prompt.substring(0, 2000)}${prompt.length > 2000 ? '...' : ''}`);
+        const chapterForce = getChapterForcePrompt(1);
+        alert(`当前提示词预览:\n\n使用酒馆预设: ${settings.useTavernPreset ? '是' : '否'}\n并行模式: ${parallelConfig.enabled ? parallelConfig.mode : '关闭'}\n\n【章节强制标记示例】\n${chapterForce}\n\n【系统提示词】\n${prompt.substring(0, 1500)}${prompt.length > 1500 ? '...' : ''}`);
     }
 
     async function checkAndRestoreState() {
@@ -3176,7 +3167,6 @@
                     currentVolumeIndex = savedState.currentVolumeIndex || 0;
                     currentFileHash = savedState.fileHash;
 
-                    // 修复BUG12: 如果世界书为空，从已处理记忆重建
                     if (Object.keys(generatedWorldbook).length === 0) {
                         rebuildWorldbookFromMemories();
                     }
@@ -3199,7 +3189,7 @@
                     document.getElementById('ttw-file-info').style.display = 'flex';
                     document.getElementById('ttw-file-name').textContent = '已恢复的任务';
                     const totalChars = memoryQueue.reduce((sum, m) => sum + m.content.length, 0);
-                    document.getElementById('ttw-file-size').textContent = `(${(totalChars / 1024).toFixed(1)} KB, ${memoryQueue.length}块)`;
+                    document.getElementById('ttw-file-size').textContent = `(${(totalChars / 1024).toFixed(1)} KB, ${memoryQueue.length}章)`;
                 } else {
                     await MemoryHistoryDB.clearState();
                 }
@@ -3235,16 +3225,24 @@
             document.getElementById('ttw-start-btn').disabled = false;
             startFromIndex = 0;
             userSelectedStartIndex = null;
+
+            // 修复BUG2: 新文件导入时重置世界书并应用默认条目
+            generatedWorldbook = { 地图环境: {}, 剧情节点: {}, 角色: {}, 知识书: {} };
+            applyDefaultWorldbookEntries();
+            if (Object.keys(generatedWorldbook).length > 0) {
+                showResultSection(true);
+                updateWorldbookPreview();
+            }
+
             updateStartButtonState(false);
         } catch (error) {
             alert('文件处理失败: ' + error.message);
         }
     }
 
-    // 修复BUG11: 改进分割逻辑，避免过小的块
     function splitContentIntoMemory(content) {
         const chunkSize = settings.chunkSize;
-        const minChunkSize = Math.max(chunkSize * 0.3, 5000); // 最小块至少是设定的30%或5000字
+        const minChunkSize = Math.max(chunkSize * 0.3, 5000);
         memoryQueue = [];
         const chapterRegex = /第[一二三四五六七八九十百千万0-9]+[章节卷集回]/g;
         const matches = [...content.matchAll(chapterRegex)];
@@ -3257,23 +3255,19 @@
                 chapters.push({ title: matches[i][0], content: content.slice(startIndex, endIndex) });
             }
 
-            // 先合并过小的章节
             const mergedChapters = [];
             let pendingChapter = null;
 
             for (const chapter of chapters) {
                 if (pendingChapter) {
-                    // 如果待合并章节加上当前章节不超过上限，就合并
                     if (pendingChapter.content.length + chapter.content.length <= chunkSize) {
                         pendingChapter.content += chapter.content;
                         pendingChapter.title += '+' + chapter.title;
                     } else {
-                        // 如果待合并章节够大了，保存它
                         if (pendingChapter.content.length >= minChunkSize) {
                             mergedChapters.push(pendingChapter);
                             pendingChapter = chapter;
                         } else {
-                            // 强制合并
                             pendingChapter.content += chapter.content;
                             pendingChapter.title += '+' + chapter.title;
                         }
@@ -3293,14 +3287,12 @@
                 const chapter = mergedChapters[i];
 
                 if (chapter.content.length > chunkSize) {
-                    // 如果当前有累积内容，先保存
                     if (currentChunk.length > 0) {
                         memoryQueue.push({ title: `记忆${chunkIndex}`, content: currentChunk, processed: false, failed: false, processing: false });
                         currentChunk = '';
                         chunkIndex++;
                     }
 
-                    // 分割大章节
                     let remaining = chapter.content;
                     while (remaining.length > 0) {
                         let endPos = Math.min(chunkSize, remaining.length);
@@ -3319,7 +3311,6 @@
                     continue;
                 }
 
-                // 检查是否可以合并
                 if (currentChunk.length + chapter.content.length > chunkSize && currentChunk.length > 0) {
                     memoryQueue.push({ title: `记忆${chunkIndex}`, content: currentChunk, processed: false, failed: false, processing: false });
                     currentChunk = '';
@@ -3329,10 +3320,9 @@
             }
 
             if (currentChunk.length > 0) {
-                // 如果最后一块太小，尝试合并到上一块
                 if (currentChunk.length < minChunkSize && memoryQueue.length > 0) {
                     const lastMemory = memoryQueue[memoryQueue.length - 1];
-                    if (lastMemory.content.length + currentChunk.length <= chunkSize * 1.2) { // 允许稍微超出
+                    if (lastMemory.content.length + currentChunk.length <= chunkSize * 1.2) {
                         lastMemory.content += currentChunk;
                     } else {
                         memoryQueue.push({ title: `记忆${chunkIndex}`, content: currentChunk, processed: false, failed: false, processing: false });
@@ -3342,7 +3332,6 @@
                 }
             }
         } else {
-            // 无章节标记，按字数分割
             let i = 0, chunkIndex = 1;
             while (i < content.length) {
                 let endIndex = Math.min(i + chunkSize, content.length);
@@ -3360,7 +3349,6 @@
             }
         }
 
-        // 最终检查：合并所有过小的块
         for (let i = memoryQueue.length - 1; i > 0; i--) {
             if (memoryQueue[i].content.length < minChunkSize) {
                 const prevMemory = memoryQueue[i - 1];
@@ -3371,7 +3359,6 @@
             }
         }
 
-        // 重新编号
         memoryQueue.forEach((memory, index) => { memory.title = `记忆${index + 1}`; });
     }
 
@@ -3430,7 +3417,7 @@
             if (memory.processing) statusIcon = '🔄';
             else if (memory.processed && !memory.failed) statusIcon = '✅';
             else if (memory.failed) statusIcon = '❗';
-            item.innerHTML = `<span>${statusIcon}</span><span style="flex:1;">${memory.title}</span><small>(${memory.content.length.toLocaleString()}字)</small>${memory.failed && memory.failedError ? `<small style="color:#e74c3c;margin-left:8px;" title="${memory.failedError}">错误</small>` : ''}`;
+            item.innerHTML = `<span>${statusIcon}</span><span style="flex:1;">第${index + 1}章 - ${memory.title}</span><small>(${memory.content.length.toLocaleString()}字)</small>${memory.failed && memory.failedError ? `<small style="color:#e74c3c;margin-left:8px;" title="${memory.failedError}">错误</small>` : ''}`;
             item.addEventListener('click', () => showMemoryContentModal(index));
             container.appendChild(item);
         });
@@ -3543,7 +3530,6 @@
         viewModal.addEventListener('click', (e) => { if (e.target === viewModal) viewModal.remove(); });
     }
 
-    // 修复BUG1: 修改历史视图布局优化
     async function showHistoryView() {
         const existingModal = document.getElementById('ttw-history-modal');
         if (existingModal) existingModal.remove();
@@ -3560,7 +3546,7 @@
             sortedList.forEach((history) => {
                 const time = new Date(history.timestamp).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
                 const changeCount = history.changedEntries?.length || 0;
-                const shortTitle = (history.memoryTitle || `记忆${history.memoryIndex + 1}`).substring(0, 8);
+                const shortTitle = (history.memoryTitle || `第${history.memoryIndex + 1}章`).substring(0, 8);
                 listHtml += `
                     <div class="ttw-history-item" data-history-id="${history.id}">
                         <div class="ttw-history-item-title" title="${history.memoryTitle}">${shortTitle}</div>
@@ -3646,9 +3632,7 @@
         } catch (error) { alert('回退失败: ' + error.message); }
     }
 
-    // 修复BUG8: 关闭时停止所有处理
     function closeModal() {
-        // 停止所有正在进行的处理
         isProcessingStopped = true;
         isRerolling = false;
         if (globalSemaphore) globalSemaphore.abort();
@@ -3680,8 +3664,9 @@
         importAndMerge: importAndMergeWorldbook,
         getCategoryLightSettings: () => categoryLightSettings,
         setCategoryLight: setCategoryLightState,
-        rebuildWorldbook: rebuildWorldbookFromMemories
+        rebuildWorldbook: rebuildWorldbookFromMemories,
+        applyDefaultWorldbook: applyDefaultWorldbookEntries
     };
 
-    console.log('📚 TxtToWorldbook v2.5.0 已加载');
+    console.log('📚 TxtToWorldbook v2.5.1 已加载');
 })();
