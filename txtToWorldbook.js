@@ -4,7 +4,7 @@
  * 修复: 移动端UI优化、按类别勾选条目、别名识别发送内容
  */
 
-(function() {
+(function () {
     'use strict';
 
     // ========== 全局状态 ==========
@@ -521,7 +521,7 @@
         let hash = 0;
         const len = content.length;
         if (len === 0) return 'hash-empty';
-        const sample = len < 100000 ? content : content.slice(0, 1000) + content.slice(Math.floor(len/2), Math.floor(len/2) + 1000) + content.slice(-1000);
+        const sample = len < 100000 ? content : content.slice(0, 1000) + content.slice(Math.floor(len / 2), Math.floor(len / 2) + 1000) + content.slice(-1000);
         for (let i = 0; i < sample.length; i++) {
             hash = ((hash << 5) - hash) + sample.charCodeAt(i);
             hash = hash & hash;
@@ -594,7 +594,7 @@
 
     function saveCategoryLightSettings() {
         settings.categoryLightSettings = { ...categoryLightSettings };
-        try { localStorage.setItem('txtToWorldbookSettings', JSON.stringify(settings)); } catch (e) {}
+        try { localStorage.setItem('txtToWorldbookSettings', JSON.stringify(settings)); } catch (e) { }
     }
 
     function loadCategoryLightSettings() {
@@ -616,7 +616,7 @@
 
             const context = SillyTavern.getContext();
             const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error(`API请求超时 (${timeout/1000}秒)`)), timeout);
+                setTimeout(() => reject(new Error(`API请求超时 (${timeout / 1000}秒)`)), timeout);
             });
 
             let apiPromise;
@@ -817,7 +817,7 @@
         } catch (error) {
             clearTimeout(timeoutId);
             if (error.name === 'AbortError') {
-                throw new Error(`API请求超时 (${timeout/1000}秒)`);
+                throw new Error(`API请求超时 (${timeout / 1000}秒)`);
             }
             throw error;
         }
@@ -1403,7 +1403,7 @@
 
             if (retryCount < maxRetries && !isProcessingStopped) {
                 const delay = Math.min(1000 * Math.pow(2, retryCount), 10000);
-                updateStreamContent(`🔄 [第${chapterIndex}章] ${delay/1000}秒后重试...\n`);
+                updateStreamContent(`🔄 [第${chapterIndex}章] ${delay / 1000}秒后重试...\n`);
                 await new Promise(resolve => setTimeout(resolve, delay));
                 return processMemoryChunkIndependent(index, retryCount + 1, customPromptSuffix);
             }
@@ -1585,7 +1585,7 @@
 
             if (retryCount < maxRetries) {
                 const retryDelay = Math.min(1000 * Math.pow(2, retryCount), 10000);
-                updateProgress(progress, `处理失败，${retryDelay/1000}秒后重试`);
+                updateProgress(progress, `处理失败，${retryDelay / 1000}秒后重试`);
                 await new Promise(r => setTimeout(r, retryDelay));
                 return await processMemoryChunk(index, retryCount + 1);
             }
@@ -2070,12 +2070,16 @@
                     memory.result = roll.result;
                     memory.processed = true;
                     memory.failed = false;
-                    await mergeWorldbookDataWithHistory(generatedWorldbook, roll.result, index, `${memory.title}-选用Roll#${rollIndex + 1}`);
+
+                    // 重建整个世界书
+                    rebuildWorldbookFromMemories();
+
                     updateMemoryQueueUI();
                     updateWorldbookPreview();
                     modal.remove();
                     alert(`已使用 Roll #${rollIndex + 1}`);
                 });
+
             });
         });
     }
@@ -4574,7 +4578,7 @@ ${pairsWithContent}
             settings.customApiModel = modelInput?.value || 'gemini-2.5-flash';
         }
 
-        try { localStorage.setItem('txtToWorldbookSettings', JSON.stringify(settings)); } catch (e) {}
+        try { localStorage.setItem('txtToWorldbookSettings', JSON.stringify(settings)); } catch (e) { }
     }
 
     function loadSavedSettings() {
@@ -4588,7 +4592,7 @@ ${pairsWithContent}
                 parallelConfig.concurrency = settings.parallelConcurrency || 3;
                 parallelConfig.mode = settings.parallelMode || 'independent';
             }
-        } catch (e) {}
+        } catch (e) { }
 
         updateSettingsUI();
     }
@@ -5004,7 +5008,7 @@ ${pairsWithContent}
         const existingModal = document.getElementById('ttw-history-modal');
         if (existingModal) existingModal.remove();
         let historyList = [];
-        try { await MemoryHistoryDB.cleanDuplicateHistory(); historyList = await MemoryHistoryDB.getAllHistory(); } catch (e) {}
+        try { await MemoryHistoryDB.cleanDuplicateHistory(); historyList = await MemoryHistoryDB.getAllHistory(); } catch (e) { }
 
         const historyModal = document.createElement('div');
         historyModal.id = 'ttw-history-modal';
