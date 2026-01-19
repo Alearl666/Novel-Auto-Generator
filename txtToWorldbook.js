@@ -1,6 +1,6 @@
 /**
- * TXT转世界书独立模块 v2.5.1
- * 修复: 提示词章节标记、导入重生成世界书消失、设置保存默认世界书、默认世界书即时显示
+ * TXT转世界书独立模块 v2.5.2
+ * 修复: 清除文件时清空历史、合并世界书重复检测、ST格式转换
  */
 
 (function() {
@@ -303,6 +303,17 @@
             });
         },
 
+        async clearAllRolls() {
+            const db = await this.openDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([this.rollStoreName], 'readwrite');
+                const store = transaction.objectStore(this.rollStoreName);
+                const request = store.clear();
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+            });
+        },
+
         async saveFileHash(hash) {
             const db = await this.openDB();
             return new Promise((resolve, reject) => {
@@ -321,6 +332,17 @@
                 const store = transaction.objectStore(this.metaStoreName);
                 const request = store.get('currentFileHash');
                 request.onsuccess = () => resolve(request.result?.value || null);
+                request.onerror = () => reject(request.error);
+            });
+        },
+
+        async clearFileHash() {
+            const db = await this.openDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([this.metaStoreName], 'readwrite');
+                const store = transaction.objectStore(this.metaStoreName);
+                const request = store.delete('currentFileHash');
+                request.onsuccess = () => resolve();
                 request.onerror = () => reject(request.error);
             });
         },
@@ -705,7 +727,7 @@
         return changedEntries;
     }
 
-    // ========== 修复BUG1: 后处理添加章节编号后缀 ==========
+    // ========== 后处理添加章节编号后缀 ==========
     function postProcessResultWithChapterIndex(result, chapterIndex) {
         if (!result || typeof result !== 'object') return result;
 
@@ -719,9 +741,7 @@
             for (const entryName in result[category]) {
                 let newEntryName = entryName;
                 if (category === '剧情大纲' || category === '剧情节点') {
-                    // 替换任何"第X章"为"第{chapterIndex}章"
                     newEntryName = entryName.replace(/第[一二三四五六七八九十百千万\d]+章/g, `第${chapterIndex}章`);
-                    // 如果没有章节标记，添加后缀
                     if (!newEntryName.includes(`第${chapterIndex}章`) && !newEntryName.includes('-第')) {
                         newEntryName = `${newEntryName}-第${chapterIndex}章`;
                     }
@@ -963,7 +983,7 @@
         return '';
     }
 
-    // ========== 修复BUG1: 生成章节强制标记提示词 ==========
+    // ========== 生成章节强制标记提示词 ==========
     function getChapterForcePrompt(chapterIndex) {
         return `
 【强制章节标记 - 开始】
@@ -978,20 +998,18 @@
         const memory = memoryQueue[index];
         const maxRetries = 3;
         const taskId = index + 1;
-        const chapterIndex = index + 1; // 章节编号 = 记忆索引 + 1
+        const chapterIndex = index + 1;
 
         if (!isRerolling && isProcessingStopped) throw new Error('ABORTED');
 
         memory.processing = true;
         updateMemoryQueueUI();
 
-        // 修复BUG1: 在提示词前后都加入强制章节标记
         const chapterForcePrompt = getChapterForcePrompt(chapterIndex);
 
-        let prompt = chapterForcePrompt; // 开头强制标记
+        let prompt = chapterForcePrompt;
         prompt += getLanguagePrefix() + getSystemPrompt();
 
-        // 添加上一个记忆的处理结果作为上下文
         const prevContext = getPreviousMemoryContext(index);
         if (prevContext) {
             prompt += prevContext;
@@ -1004,7 +1022,7 @@
         prompt += `\n\n当前需要分析的内容（第${chapterIndex}章）：\n---\n${memory.content}\n---\n`;
         prompt += `\n请提取角色、地点、组织等信息，直接输出JSON。`;
         prompt += `\n\n【重要提醒】如果输出剧情大纲或剧情节点，条目名称必须包含"第${chapterIndex}章"！`;
-        prompt += chapterForcePrompt; // 结尾再次强制标记
+        prompt += chapterForcePrompt;
 
         if (customPromptSuffix) {
             prompt += `\n\n${customPromptSuffix}`;
@@ -1024,7 +1042,6 @@
 
             let memoryUpdate = parseAIResponse(response);
 
-            // 修复BUG1: 后处理强制替换章节编号
             memoryUpdate = postProcessResultWithChapterIndex(memoryUpdate, chapterIndex);
 
             updateStreamContent(`✅ [第${chapterIndex}章] 处理完成\n`);
@@ -1133,7 +1150,6 @@
         memory.processing = true;
         updateMemoryQueueUI();
 
-        // 修复BUG1: 在提示词前后都加入强制章节标记
         const chapterForcePrompt = getChapterForcePrompt(chapterIndex);
 
         let prompt = chapterForcePrompt;
@@ -1285,14 +1301,12 @@
 
         const effectiveStartIndex = userSelectedStartIndex !== null ? userSelectedStartIndex : startFromIndex;
 
-        // 修复BUG2: 只有在从头开始且没有已处理记忆时才重置世界书
         if (effectiveStartIndex === 0) {
             const hasProcessedMemories = memoryQueue.some(m => m.processed && !m.failed && m.result);
             if (!hasProcessedMemories) {
                 worldbookVolumes = [];
                 currentVolumeIndex = 0;
                 generatedWorldbook = { 地图环境: {}, 剧情节点: {}, 角色: {}, 知识书: {} };
-                // 修复BUG4: 立即应用默认世界书条目
                 applyDefaultWorldbookEntries();
             }
         }
@@ -1727,7 +1741,7 @@
 
                 let worldbookToMerge = {};
 
-                if (importedData.entries && Array.isArray(importedData.entries)) {
+                if (importedData.entries) {
                     worldbookToMerge = convertSTFormatToInternal(importedData);
                 } else if (importedData.merged) {
                     worldbookToMerge = importedData.merged;
@@ -1746,18 +1760,51 @@
         input.click();
     }
 
+    // ========== 修复：SillyTavern格式转换 ==========
     function convertSTFormatToInternal(stData) {
         const result = {};
         if (!stData.entries) return result;
-        for (const entry of stData.entries) {
+
+        // SillyTavern格式entries可能是对象或数组
+        const entriesArray = Array.isArray(stData.entries)
+            ? stData.entries
+            : Object.values(stData.entries);
+
+        const processedEntries = new Set(); // 用于去重
+
+        for (const entry of entriesArray) {
+            if (!entry || typeof entry !== 'object') continue;
+
             const group = entry.group || '未分类';
-            const name = entry.comment?.replace(/^[^-]+ - /, '') || `条目${entry.uid}`;
+
+            // 用正确的方式提取条目名
+            let name;
+            if (entry.comment) {
+                // comment格式: "分类 - 条目名"，只取最后一个 - 后面的部分
+                const parts = entry.comment.split(' - ');
+                name = parts.length > 1 ? parts.slice(1).join(' - ').trim() : entry.comment.trim();
+            } else {
+                name = `条目${entry.uid || Math.random().toString(36).substr(2, 9)}`;
+            }
+
+            // 创建唯一标识用于去重
+            const entryKey = `${group}|||${name}`;
+
+            if (processedEntries.has(entryKey)) {
+                console.warn(`转换时发现重复条目，跳过: [${group}] ${name}`);
+                continue;
+            }
+            processedEntries.add(entryKey);
+
             if (!result[group]) result[group] = {};
+
             result[group][name] = {
-                '关键词': entry.key || [],
+                '关键词': Array.isArray(entry.key) ? entry.key : (entry.key ? [entry.key] : []),
                 '内容': entry.content || ''
             };
         }
+
+        console.log(`ST格式转换完成: ${processedEntries.size} 个条目`);
         return result;
     }
 
@@ -2101,7 +2148,7 @@
 
     async function exportTaskState() {
         const state = {
-            version: '2.5.1',
+            version: '2.5.2',
             timestamp: Date.now(),
             memoryQueue,
             generatedWorldbook,
@@ -2145,7 +2192,6 @@
                 if (state.parallelConfig) parallelConfig = { ...parallelConfig, ...state.parallelConfig };
                 if (state.categoryLightSettings) categoryLightSettings = { ...categoryLightSettings, ...state.categoryLightSettings };
 
-                // 如果世界书为空，从已处理记忆重建
                 if (Object.keys(generatedWorldbook).length === 0) {
                     rebuildWorldbookFromMemories();
                 }
@@ -2181,76 +2227,72 @@
                 mergeWorldbookDataIncremental(generatedWorldbook, memory.result);
             }
         }
-        // 修复BUG4: 重建后也要应用默认世界书
         applyDefaultWorldbookEntries();
         updateStreamContent(`\n📚 从已处理记忆重建了世界书\n`);
     }
 
-    // 修复BUG3: 设置导出包含defaultWorldbookEntries
-   function exportSettings() {
-    // 修复：导出前先保存当前UI的值到settings对象
-    saveCurrentSettings();
+    function exportSettings() {
+        saveCurrentSettings();
 
-    const exportData = {
-        version: '2.5.2',
-        type: 'settings',
-        timestamp: Date.now(),
-        settings: {
-            ...settings,
-            defaultWorldbookEntries: settings.defaultWorldbookEntries || '',
-            customWorldbookPrompt: settings.customWorldbookPrompt || '',
-            customPlotPrompt: settings.customPlotPrompt || '',
-            customStylePrompt: settings.customStylePrompt || '',
-            customMergePrompt: settings.customMergePrompt || '',
-            customRerollPrompt: settings.customRerollPrompt || '',
-            parallelEnabled: parallelConfig.enabled,
-            parallelConcurrency: parallelConfig.concurrency,
-            parallelMode: parallelConfig.mode
-        },
-        categoryLightSettings
-    };
-    const timeString = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[:/\s]/g, '').replace(/,/g, '-');
-    const fileName = `TxtToWorldbook-配置-${timeString}.json`;
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    a.click();
-    URL.revokeObjectURL(url);
-    alert('配置已导出！');
-}
+        const exportData = {
+            version: '2.5.2',
+            type: 'settings',
+            timestamp: Date.now(),
+            settings: {
+                ...settings,
+                defaultWorldbookEntries: settings.defaultWorldbookEntries || '',
+                customWorldbookPrompt: settings.customWorldbookPrompt || '',
+                customPlotPrompt: settings.customPlotPrompt || '',
+                customStylePrompt: settings.customStylePrompt || '',
+                customMergePrompt: settings.customMergePrompt || '',
+                customRerollPrompt: settings.customRerollPrompt || '',
+                parallelEnabled: parallelConfig.enabled,
+                parallelConcurrency: parallelConfig.concurrency,
+                parallelMode: parallelConfig.mode
+            },
+            categoryLightSettings
+        };
+        const timeString = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[:/\s]/g, '').replace(/,/g, '-');
+        const fileName = `TxtToWorldbook-配置-${timeString}.json`;
+        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        a.click();
+        URL.revokeObjectURL(url);
+        alert('配置已导出！');
+    }
 
     function importSettings() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json';
-    input.onchange = async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        try {
-            const content = await file.text();
-            const data = JSON.parse(content);
-            if (data.type !== 'settings') throw new Error('不是有效的配置文件');
-            if (data.settings) {
-                settings = { ...defaultSettings, ...data.settings };
-                parallelConfig.enabled = data.settings.parallelEnabled !== undefined ? data.settings.parallelEnabled : true;
-                parallelConfig.concurrency = data.settings.parallelConcurrency || 3;
-                parallelConfig.mode = data.settings.parallelMode || 'independent';
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+        input.onchange = async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            try {
+                const content = await file.text();
+                const data = JSON.parse(content);
+                if (data.type !== 'settings') throw new Error('不是有效的配置文件');
+                if (data.settings) {
+                    settings = { ...defaultSettings, ...data.settings };
+                    parallelConfig.enabled = data.settings.parallelEnabled !== undefined ? data.settings.parallelEnabled : true;
+                    parallelConfig.concurrency = data.settings.parallelConcurrency || 3;
+                    parallelConfig.mode = data.settings.parallelMode || 'independent';
+                }
+                if (data.categoryLightSettings) {
+                    categoryLightSettings = { ...categoryLightSettings, ...data.categoryLightSettings };
+                }
+                saveCurrentSettings();
+                updateSettingsUI();
+                alert('配置导入成功！');
+            } catch (error) {
+                alert('导入失败: ' + error.message);
             }
-            if (data.categoryLightSettings) {
-                categoryLightSettings = { ...categoryLightSettings, ...data.categoryLightSettings };
-            }
-            saveCurrentSettings();
-            updateSettingsUI();
-            alert('配置导入成功！');
-        } catch (error) {
-            alert('导入失败: ' + error.message);
-        }
-    };
-    input.click();
-}
-
+        };
+        input.click();
+    }
 
     function updateSettingsUI() {
         const elements = {
@@ -2289,7 +2331,7 @@
         helpModal.innerHTML = `
             <div class="ttw-modal" style="max-width:650px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">❓ TXT转世界书 v2.5.1 帮助</span>
+                    <span class="ttw-modal-title">❓ TXT转世界书 v2.5.2 帮助</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
@@ -2616,7 +2658,7 @@
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v2.5.1</span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v2.5.2</span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -3017,7 +3059,6 @@
         document.getElementById('ttw-parallel-mode').addEventListener('change', (e) => { parallelConfig.mode = e.target.value; saveCurrentSettings(); });
         document.getElementById('ttw-volume-mode').addEventListener('change', (e) => { useVolumeMode = e.target.checked; const indicator = document.getElementById('ttw-volume-indicator'); if (indicator) indicator.style.display = useVolumeMode ? 'block' : 'none'; });
 
-        // 默认世界书折叠
         const defaultWbHeader = document.querySelector('[data-target="ttw-default-worldbook-content"]');
         if (defaultWbHeader) {
             defaultWbHeader.addEventListener('click', () => {
@@ -3028,7 +3069,6 @@
             });
         }
 
-        // 修复BUG4: 立即应用默认世界书按钮
         document.getElementById('ttw-apply-default-worldbook')?.addEventListener('click', () => {
             saveCurrentSettings();
             const applied = applyDefaultWorldbookEntries();
@@ -3102,7 +3142,6 @@
         if (e.key === 'Escape' && modalContainer) { e.stopPropagation(); e.preventDefault(); closeModal(); }
     }
 
-    // 修复BUG3: 保存设置时包含defaultWorldbookEntries
     function saveCurrentSettings() {
         settings.chunkSize = parseInt(document.getElementById('ttw-chunk-size').value) || 15000;
         settings.apiTimeout = (parseInt(document.getElementById('ttw-api-timeout').value) || 120) * 1000;
@@ -3119,7 +3158,6 @@
         settings.parallelConcurrency = parallelConfig.concurrency;
         settings.parallelMode = parallelConfig.mode;
         settings.categoryLightSettings = { ...categoryLightSettings };
-        // 修复BUG3: 确保保存默认世界书条目
         settings.defaultWorldbookEntries = document.getElementById('ttw-default-worldbook')?.value || '';
         try { localStorage.setItem('txtToWorldbookSettings', JSON.stringify(settings)); } catch (e) {}
     }
@@ -3150,7 +3188,6 @@
         document.getElementById('ttw-parallel-enabled').checked = parallelConfig.enabled;
         document.getElementById('ttw-parallel-concurrency').value = parallelConfig.concurrency;
         document.getElementById('ttw-parallel-mode').value = parallelConfig.mode;
-        // 修复BUG3: 加载默认世界书条目
         if (document.getElementById('ttw-default-worldbook')) {
             document.getElementById('ttw-default-worldbook').value = settings.defaultWorldbookEntries || '';
         }
@@ -3219,6 +3256,7 @@
                 const historyList = await MemoryHistoryDB.getAllHistory();
                 if (historyList.length > 0 && confirm(`检测到新文件，是否清空旧历史？\n当前有 ${historyList.length} 条记录。`)) {
                     await MemoryHistoryDB.clearAllHistory();
+                    await MemoryHistoryDB.clearAllRolls();
                     await MemoryHistoryDB.clearState();
                 }
             }
@@ -3235,7 +3273,6 @@
             startFromIndex = 0;
             userSelectedStartIndex = null;
 
-            // 修复BUG2: 新文件导入时重置世界书并应用默认条目
             generatedWorldbook = { 地图环境: {}, 剧情节点: {}, 角色: {}, 知识书: {} };
             applyDefaultWorldbookEntries();
             if (Object.keys(generatedWorldbook).length > 0) {
@@ -3371,7 +3408,8 @@
         memoryQueue.forEach((memory, index) => { memory.title = `记忆${index + 1}`; });
     }
 
-    function clearFile() {
+    // ========== 修复：清除文件时清空所有历史 ==========
+    async function clearFile() {
         currentFile = null;
         memoryQueue = [];
         generatedWorldbook = {};
@@ -3379,6 +3417,19 @@
         currentVolumeIndex = 0;
         startFromIndex = 0;
         userSelectedStartIndex = null;
+        currentFileHash = null;
+
+        // 清空IndexedDB中的所有历史记录
+        try {
+            await MemoryHistoryDB.clearAllHistory();
+            await MemoryHistoryDB.clearAllRolls();
+            await MemoryHistoryDB.clearState();
+            await MemoryHistoryDB.clearFileHash();
+            console.log('已清空所有历史记录');
+        } catch (e) {
+            console.error('清空历史失败:', e);
+        }
+
         document.getElementById('ttw-upload-area').style.display = 'block';
         document.getElementById('ttw-file-info').style.display = 'none';
         document.getElementById('ttw-file-input').value = '';
@@ -3677,5 +3728,5 @@
         applyDefaultWorldbook: applyDefaultWorldbookEntries
     };
 
-    console.log('📚 TxtToWorldbook v2.5.1 已加载');
+    console.log('📚 TxtToWorldbook v2.5.2 已加载');
 })();
