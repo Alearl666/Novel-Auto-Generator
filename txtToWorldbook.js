@@ -1,43 +1,4 @@
-Master说的是"已处理"按钮点进去的弹窗(`showProcessedResults`函数创建的modal)里面的左侧列表项太大了，不是外面章节队列的`.ttw-memory-item`。
 
-我之前改错了地方！Master要的是`showProcessedResults`函数里的`.ttw-processed-item`的样式，不是`.ttw-memory-item`。
-
-让我找到问题所在：
-
-1. `showProcessedResults`函数中创建的列表项使用的是内联样式：
-```javascript
-listHtml += `
-    <div class="ttw-processed-item" data-index="${realIndex}" style="padding:10px 12px;background:rgba(0,0,0,0.2);border-radius:6px;margin-bottom:8px;cursor:pointer;border-left:3px solid #27ae60;">
-        <div style="font-weight:bold;color:#27ae60;margin-bottom:4px;">✅ 第${realIndex + 1}章 - ${memory.title}</div>
-        <div style="font-size:11px;color:#888;">${entryCount} 个条目 | ${memory.content.length.toLocaleString()} 字</div>
-    </div>
-`;
-```
-
-这个`padding:10px 12px`和字号在手机上太大了。
-
-需要：
-1. 把`.ttw-memory-item`的样式改回原来的（我之前错改了）
-2. 把`showProcessedResults`里的`.ttw-processed-item`内联样式改小
-
-参考roll历史的样式：`.ttw-roll-item{padding:6px 8px;...}`，字号大概9-11px。
-
-所以修改：
-1. CSS里`.ttw-memory-item`改回`padding:8px 12px;font-size:13px;`
-2. `showProcessedResults`函数里的内联样式改小：`padding:6px 8px`，字号改小
-
-还要加移动端媒体查询针对`.ttw-processed-item`。
-
-让我只改BUG，其他代码不动。
-</thinking>
-
-明白了Master！你说的是点击「📊 已处理」按钮弹出的那个窗口里面的左侧列表太大，不是外面的章节队列。
-
-我之前改错地方了，现在改正：
-1. 把外面的`.ttw-memory-item`改回原来的大小
-2. 把`showProcessedResults`函数里的`.ttw-processed-item`内联样式改小
-
-```javascript
 /**
  * TXT转世界书独立模块 v2.7.1
  * 修复: 移动端UI优化、按类别勾选条目、别名识别发送内容
