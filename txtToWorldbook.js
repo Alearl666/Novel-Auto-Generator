@@ -2187,61 +2187,70 @@
     }
 
     // 修复BUG3: 设置导出包含defaultWorldbookEntries
-    function exportSettings() {
-        const exportData = {
-            version: '2.5.1',
-            type: 'settings',
-            timestamp: Date.now(),
-            settings: {
-                ...settings,
-                defaultWorldbookEntries: settings.defaultWorldbookEntries || '',
-                parallelEnabled: parallelConfig.enabled,
-                parallelConcurrency: parallelConfig.concurrency,
-                parallelMode: parallelConfig.mode
-            },
-            categoryLightSettings
-        };
-        const timeString = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[:/\s]/g, '').replace(/,/g, '-');
-        const fileName = `TxtToWorldbook-设置-${timeString}.json`;
-        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = fileName;
-        a.click();
-        URL.revokeObjectURL(url);
-        alert('设置已导出！');
-    }
+   function exportSettings() {
+    // 修复：导出前先保存当前UI的值到settings对象
+    saveCurrentSettings();
+
+    const exportData = {
+        version: '2.5.2',
+        type: 'settings',
+        timestamp: Date.now(),
+        settings: {
+            ...settings,
+            defaultWorldbookEntries: settings.defaultWorldbookEntries || '',
+            customWorldbookPrompt: settings.customWorldbookPrompt || '',
+            customPlotPrompt: settings.customPlotPrompt || '',
+            customStylePrompt: settings.customStylePrompt || '',
+            customMergePrompt: settings.customMergePrompt || '',
+            customRerollPrompt: settings.customRerollPrompt || '',
+            parallelEnabled: parallelConfig.enabled,
+            parallelConcurrency: parallelConfig.concurrency,
+            parallelMode: parallelConfig.mode
+        },
+        categoryLightSettings
+    };
+    const timeString = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[:/\s]/g, '').replace(/,/g, '-');
+    const fileName = `TxtToWorldbook-配置-${timeString}.json`;
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    URL.revokeObjectURL(url);
+    alert('配置已导出！');
+}
 
     function importSettings() {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.json';
-        input.onchange = async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            try {
-                const content = await file.text();
-                const data = JSON.parse(content);
-                if (data.type !== 'settings') throw new Error('不是有效的设置文件');
-                if (data.settings) {
-                    settings = { ...defaultSettings, ...data.settings };
-                    parallelConfig.enabled = data.settings.parallelEnabled !== undefined ? data.settings.parallelEnabled : true;
-                    parallelConfig.concurrency = data.settings.parallelConcurrency || 3;
-                    parallelConfig.mode = data.settings.parallelMode || 'independent';
-                }
-                if (data.categoryLightSettings) {
-                    categoryLightSettings = { ...categoryLightSettings, ...data.categoryLightSettings };
-                }
-                saveCurrentSettings();
-                updateSettingsUI();
-                alert('设置导入成功！');
-            } catch (error) {
-                alert('导入失败: ' + error.message);
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        try {
+            const content = await file.text();
+            const data = JSON.parse(content);
+            if (data.type !== 'settings') throw new Error('不是有效的配置文件');
+            if (data.settings) {
+                settings = { ...defaultSettings, ...data.settings };
+                parallelConfig.enabled = data.settings.parallelEnabled !== undefined ? data.settings.parallelEnabled : true;
+                parallelConfig.concurrency = data.settings.parallelConcurrency || 3;
+                parallelConfig.mode = data.settings.parallelMode || 'independent';
             }
-        };
-        input.click();
-    }
+            if (data.categoryLightSettings) {
+                categoryLightSettings = { ...categoryLightSettings, ...data.categoryLightSettings };
+            }
+            saveCurrentSettings();
+            updateSettingsUI();
+            alert('配置导入成功！');
+        } catch (error) {
+            alert('导入失败: ' + error.message);
+        }
+    };
+    input.click();
+}
+
 
     function updateSettingsUI() {
         const elements = {
@@ -2699,8 +2708,8 @@
                                 <div class="ttw-prompt-config-header">
                                     <span>📝 提示词配置</span>
                                     <div style="display:flex;gap:8px;">
-                                        <button id="ttw-export-settings" class="ttw-btn ttw-btn-small">📤 导出设置</button>
-                                        <button id="ttw-import-settings" class="ttw-btn ttw-btn-small">📥 导入设置</button>
+                                       <button id="ttw-export-settings" class="ttw-btn ttw-btn-small">📤 导出配置</button>
+                                       <button id="ttw-import-settings" class="ttw-btn ttw-btn-small">📥 导入配置</button>
                                         <button id="ttw-preview-prompt" class="ttw-btn ttw-btn-small">👁️ 预览</button>
                                     </div>
                                 </div>
