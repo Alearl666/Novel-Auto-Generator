@@ -1,24 +1,4 @@
-Master想要做的是：
-1. 添加一个勾选项：「强制记忆为章节」
-2. 只有勾选这个选项时，才在发送记忆前后加 `getChapterForcePrompt(chapterIndex)` 这个提示词
-3. 其他代码不要动
 
-让我找找代码里哪些地方用到了 `chapterForcePrompt`：
-
-1. `processMemoryChunkIndependent` 函数 - 并行处理时
-2. `processMemoryChunk` 函数 - 串行处理时
-3. `repairSingleMemory` 函数 - 修复失败记忆时
-
-需要做的修改：
-1. 在 `defaultSettings` 里加一个 `forceChapterMarker: true` (默认开启保持原有行为)
-2. 在设置UI里加一个勾选框
-3. 修改上面三个函数，只在 `settings.forceChapterMarker` 为 true 时才加提示词
-4. 在 `saveCurrentSettings` 和 `loadSavedSettings` / `updateSettingsUI` 里处理这个设置
-
-开工！
-</thinking>
-
-```javascript
 /**
  * TXT转世界书独立模块 v2.6.1
  * 新增: 「强制记忆为章节」勾选项，控制是否添加章节强制标记提示词
