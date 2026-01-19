@@ -1,6 +1,6 @@
 
 /**
- * TXT转世界书独立模块 v2.7.1
+ * TXT转世界书独立模块 v2.7.2
  * 修复: 移动端UI优化、按类别勾选条目、别名识别发送内容
  */
 
@@ -5143,5 +5143,5 @@ ${pairsWithContent}
         showAliasMergeUI
     };
 
-    console.log('📚 TxtToWorldbook v2.7.1 已加载');
+    console.log('📚 TxtToWorldbook v2.7.2 已加载');
 })();
