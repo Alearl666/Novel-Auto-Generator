@@ -1,7 +1,7 @@
 
 /**
- * TXT转世界书独立模块 v2.7.0
- * 修复: 合并世界书并发、条目选择、数据持久化、ST格式解析、内容整理、别名识别
+ * TXT转世界书独立模块 v2.7.1
+ * 修复: 移动端UI优化、按类别勾选条目、别名识别发送内容
  */
 
 (function() {
@@ -2122,7 +2122,7 @@
         input.click();
     }
 
-    // 修复：ST格式转换
+    // ST格式转换
     function convertSTFormatToInternal(stData) {
         const result = {};
         if (!stData.entries) return result;
@@ -2138,7 +2138,6 @@
 
             const group = entry.group || '未分类';
 
-            // 修复：正确提取条目名称
             let name;
             if (entry.comment) {
                 const parts = entry.comment.split(' - ');
@@ -2156,7 +2155,6 @@
                 usedNames[group] = new Set();
             }
 
-            // 修复：确保名称唯一
             let finalName = name;
             let counter = 1;
             while (usedNames[group].has(finalName)) {
@@ -2175,14 +2173,13 @@
         return result;
     }
 
-    // 修复：查找真正的重复条目
+    // 查找真正的重复条目
     function findDuplicateEntries(existing, imported) {
         const duplicates = [];
         for (const category in imported) {
             if (!existing[category]) continue;
             for (const name in imported[category]) {
                 if (existing[category][name]) {
-                    // 修复：检查内容是否真的不同
                     const existingStr = JSON.stringify(existing[category][name]);
                     const importedStr = JSON.stringify(imported[category][name]);
                     if (existingStr !== importedStr) {
@@ -2193,7 +2190,6 @@
                             imported: imported[category][name]
                         });
                     }
-                    // 内容完全相同则跳过
                 }
             }
         }
@@ -2212,8 +2208,20 @@
         return newEntries;
     }
 
+    // 按分类分组条目
+    function groupEntriesByCategory(entries) {
+        const grouped = {};
+        for (const item of entries) {
+            if (!grouped[item.category]) {
+                grouped[item.category] = [];
+            }
+            grouped[item.category].push(item);
+        }
+        return grouped;
+    }
+
     function showMergeOptionsModal(importedWorldbook, fileName) {
-        // 修复：如果参数为空但有暂存数据，恢复它
+        // 如果参数为空但有暂存数据，恢复它
         if (!importedWorldbook && pendingImportData) {
             importedWorldbook = pendingImportData.worldbook;
             fileName = pendingImportData.fileName;
@@ -2230,11 +2238,15 @@
         const duplicates = findDuplicateEntries(generatedWorldbook, importedWorldbook);
         const newEntries = findNewEntries(generatedWorldbook, importedWorldbook);
 
+        // 按分类分组
+        const groupedNew = groupEntriesByCategory(newEntries);
+        const groupedDup = groupEntriesByCategory(duplicates);
+
         const modal = document.createElement('div');
         modal.id = 'ttw-merge-modal';
         modal.className = 'ttw-modal-container';
 
-        // 新增：条目选择列表
+        // 生成新条目列表（按分类）
         let newEntriesListHtml = '';
         if (newEntries.length > 0) {
             newEntriesListHtml = `
@@ -2243,19 +2255,35 @@
                         <span style="font-weight:bold;color:#27ae60;">📥 新条目 (${newEntries.length})</span>
                         <label style="font-size:12px;"><input type="checkbox" id="ttw-select-all-new" checked> 全选</label>
                     </div>
-                    <div style="max-height:150px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:8px;">
-                        ${newEntries.map((item, i) => `
-                            <label style="display:flex;align-items:center;gap:8px;padding:4px 8px;font-size:12px;cursor:pointer;border-radius:4px;background:rgba(39,174,96,0.1);margin-bottom:4px;">
-                                <input type="checkbox" class="ttw-new-entry-cb" data-index="${i}" checked>
-                                <span style="color:#27ae60;">[${item.category}]</span>
-                                <span>${item.name}</span>
-                            </label>
-                        `).join('')}
-                    </div>
-                </div>
+                    <div style="max-height:200px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:8px;">
             `;
+
+            for (const category in groupedNew) {
+                const items = groupedNew[category];
+                newEntriesListHtml += `
+                    <div class="ttw-merge-category-group" style="margin-bottom:10px;">
+                        <label style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:rgba(39,174,96,0.2);border-radius:4px;cursor:pointer;font-weight:bold;font-size:12px;">
+                            <input type="checkbox" class="ttw-new-category-cb" data-category="${category}" checked>
+                            <span style="color:#27ae60;">${category}</span>
+                            <span style="color:#888;font-weight:normal;">(${items.length})</span>
+                        </label>
+                        <div style="margin-left:16px;margin-top:4px;">
+                `;
+                items.forEach((item, localIdx) => {
+                    const globalIdx = newEntries.indexOf(item);
+                    newEntriesListHtml += `
+                        <label style="display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:11px;cursor:pointer;">
+                            <input type="checkbox" class="ttw-new-entry-cb" data-index="${globalIdx}" data-category="${category}" checked>
+                            <span>${item.name}</span>
+                        </label>
+                    `;
+                });
+                newEntriesListHtml += `</div></div>`;
+            }
+            newEntriesListHtml += `</div></div>`;
         }
 
+        // 生成重复条目列表（按分类）
         let dupEntriesListHtml = '';
         if (duplicates.length > 0) {
             dupEntriesListHtml = `
@@ -2264,17 +2292,32 @@
                         <span style="font-weight:bold;color:#e67e22;">🔀 重复条目 (${duplicates.length})</span>
                         <label style="font-size:12px;"><input type="checkbox" id="ttw-select-all-dup" checked> 全选</label>
                     </div>
-                    <div style="max-height:150px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:8px;">
-                        ${duplicates.map((dup, i) => `
-                            <label style="display:flex;align-items:center;gap:8px;padding:4px 8px;font-size:12px;cursor:pointer;border-radius:4px;background:rgba(230,126,34,0.1);margin-bottom:4px;">
-                                <input type="checkbox" class="ttw-dup-entry-cb" data-index="${i}" checked>
-                                <span style="color:#e67e22;">[${dup.category}]</span>
-                                <span>${dup.name}</span>
-                            </label>
-                        `).join('')}
-                    </div>
-                </div>
+                    <div style="max-height:200px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:8px;">
             `;
+
+            for (const category in groupedDup) {
+                const items = groupedDup[category];
+                dupEntriesListHtml += `
+                    <div class="ttw-merge-category-group" style="margin-bottom:10px;">
+                        <label style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:rgba(230,126,34,0.2);border-radius:4px;cursor:pointer;font-weight:bold;font-size:12px;">
+                            <input type="checkbox" class="ttw-dup-category-cb" data-category="${category}" checked>
+                            <span style="color:#e67e22;">${category}</span>
+                            <span style="color:#888;font-weight:normal;">(${items.length})</span>
+                        </label>
+                        <div style="margin-left:16px;margin-top:4px;">
+                `;
+                items.forEach((item, localIdx) => {
+                    const globalIdx = duplicates.indexOf(item);
+                    dupEntriesListHtml += `
+                        <label style="display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:11px;cursor:pointer;">
+                            <input type="checkbox" class="ttw-dup-entry-cb" data-index="${globalIdx}" data-category="${category}" checked>
+                            <span>${item.name}</span>
+                        </label>
+                    `;
+                });
+                dupEntriesListHtml += `</div></div>`;
+            }
+            dupEntriesListHtml += `</div></div>`;
         }
 
         modal.innerHTML = `
@@ -2366,6 +2409,7 @@
         if (selectAllNewCb) {
             selectAllNewCb.addEventListener('change', (e) => {
                 modal.querySelectorAll('.ttw-new-entry-cb').forEach(cb => cb.checked = e.target.checked);
+                modal.querySelectorAll('.ttw-new-category-cb').forEach(cb => cb.checked = e.target.checked);
             });
         }
 
@@ -2373,8 +2417,56 @@
         if (selectAllDupCb) {
             selectAllDupCb.addEventListener('change', (e) => {
                 modal.querySelectorAll('.ttw-dup-entry-cb').forEach(cb => cb.checked = e.target.checked);
+                modal.querySelectorAll('.ttw-dup-category-cb').forEach(cb => cb.checked = e.target.checked);
             });
         }
+
+        // 绑定分类全选联动 - 新条目
+        modal.querySelectorAll('.ttw-new-category-cb').forEach(cb => {
+            cb.addEventListener('change', (e) => {
+                const category = e.target.dataset.category;
+                modal.querySelectorAll(`.ttw-new-entry-cb[data-category="${category}"]`).forEach(entryCb => {
+                    entryCb.checked = e.target.checked;
+                });
+            });
+        });
+
+        // 绑定分类全选联动 - 重复条目
+        modal.querySelectorAll('.ttw-dup-category-cb').forEach(cb => {
+            cb.addEventListener('change', (e) => {
+                const category = e.target.dataset.category;
+                modal.querySelectorAll(`.ttw-dup-entry-cb[data-category="${category}"]`).forEach(entryCb => {
+                    entryCb.checked = e.target.checked;
+                });
+            });
+        });
+
+        // 条目勾选变化时更新分类复选框状态
+        modal.querySelectorAll('.ttw-new-entry-cb').forEach(cb => {
+            cb.addEventListener('change', () => {
+                const category = cb.dataset.category;
+                const allInCategory = modal.querySelectorAll(`.ttw-new-entry-cb[data-category="${category}"]`);
+                const checkedInCategory = modal.querySelectorAll(`.ttw-new-entry-cb[data-category="${category}"]:checked`);
+                const categoryCb = modal.querySelector(`.ttw-new-category-cb[data-category="${category}"]`);
+                if (categoryCb) {
+                    categoryCb.checked = checkedInCategory.length === allInCategory.length;
+                    categoryCb.indeterminate = checkedInCategory.length > 0 && checkedInCategory.length < allInCategory.length;
+                }
+            });
+        });
+
+        modal.querySelectorAll('.ttw-dup-entry-cb').forEach(cb => {
+            cb.addEventListener('change', () => {
+                const category = cb.dataset.category;
+                const allInCategory = modal.querySelectorAll(`.ttw-dup-entry-cb[data-category="${category}"]`);
+                const checkedInCategory = modal.querySelectorAll(`.ttw-dup-entry-cb[data-category="${category}"]:checked`);
+                const categoryCb = modal.querySelector(`.ttw-dup-category-cb[data-category="${category}"]`);
+                if (categoryCb) {
+                    categoryCb.checked = checkedInCategory.length === allInCategory.length;
+                    categoryCb.indeterminate = checkedInCategory.length > 0 && checkedInCategory.length < allInCategory.length;
+                }
+            });
+        });
 
         modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
         modal.querySelector('#ttw-cancel-merge').addEventListener('click', () => modal.remove());
@@ -2432,7 +2524,7 @@
             updateStreamContent(`\n🔀 处理 ${duplicates.length} 个重复条目...\n`);
 
             if (mergeMode === 'ai') {
-                // 新增：并发AI合并
+                // 并发AI合并
                 const semaphore = new Semaphore(concurrency);
                 let completed = 0;
                 let failed = 0;
@@ -2651,25 +2743,44 @@
         return shortA === shortB || nameA.includes(shortB) || nameB.includes(shortA);
     }
 
+    // 修复：发送内容摘要给AI判断
     async function verifyDuplicatesWithAI(suspectedGroups) {
         if (suspectedGroups.length === 0) return [];
 
-        const prompt = getLanguagePrefix() + `你是角色识别专家。请判断以下每组角色名是否指向同一个人物。
+        const characters = generatedWorldbook['角色'];
 
-## 疑似同人组
-${suspectedGroups.map((group, i) => `组${i + 1}: ${group.join(', ')}`).join('\n')}
+        // 构建带内容摘要的组信息
+        const groupsWithContent = suspectedGroups.map((group, i) => {
+            const entries = group.map(name => {
+                const entry = characters[name];
+                const keywords = entry?.['关键词']?.join(', ') || '无';
+                const content = (entry?.['内容'] || '').substring(0, 400); // 取前400字作为摘要
+                return `  - **${name}**\n    关键词: ${keywords}\n    内容摘要: ${content}${content.length >= 400 ? '...' : ''}`;
+            }).join('\n');
+            return `组${i + 1}:\n${entries}`;
+        }).join('\n\n');
+
+        const prompt = getLanguagePrefix() + `你是角色识别专家。请根据以下每组角色的关键词和内容摘要，判断它们是否为同一人物。
+
+## 疑似同人组（含关键词和内容摘要）
+${groupsWithContent}
+
+## 判断依据
+- 仔细阅读每个角色的关键词和内容摘要
+- 根据描述的性别、身份、背景、外貌等信息判断
+- 考虑：全名vs昵称、姓vs名、绰号等称呼变化
+- 如果内容描述明显指向同一个人，则判定为同一人
 
 ## 要求
-- 仔细分析每组，判断是否为同一人的不同称呼
-- 考虑：全名vs昵称、姓vs名、绰号等
-- 如果是同一人，选择最完整的名称作为mainName
+- 如果是同一人，选择最完整/最常用的名称作为mainName
+- 如果不是同一人，说明原因
 - 返回JSON格式
 
 ## 输出格式
 {
     "results": [
-        {"group": 1, "isSamePerson": true, "mainName": "最完整的名称"},
-        {"group": 2, "isSamePerson": false, "reason": "原因"}
+        {"group": 1, "isSamePerson": true, "mainName": "最完整的名称", "reason": "判断依据"},
+        {"group": 2, "isSamePerson": false, "reason": "不是同一人的原因"}
     ]
 }`;
 
@@ -2741,13 +2852,25 @@ ${suspectedGroups.map((group, i) => `组${i + 1}: ${group.join(', ')}`).join('\n
         modal.id = 'ttw-alias-modal';
         modal.className = 'ttw-modal-container';
 
-        let groupsHtml = suspected.map((group, i) => `
-            <label style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(155,89,182,0.1);border-radius:6px;margin-bottom:6px;cursor:pointer;">
-                <input type="checkbox" class="ttw-alias-group-cb" data-index="${i}" checked>
-                <span style="color:#9b59b6;font-weight:bold;">组${i + 1}:</span>
-                <span>${group.join(', ')}</span>
-            </label>
-        `).join('');
+        const characters = generatedWorldbook['角色'];
+        let groupsHtml = suspected.map((group, i) => {
+            // 显示每个角色的关键词预览
+            const groupInfo = group.map(name => {
+                const entry = characters[name];
+                const keywords = (entry?.['关键词'] || []).slice(0, 3).join(', ');
+                return `${name}${keywords ? ` [${keywords}]` : ''}`;
+            }).join(' / ');
+
+            return `
+                <label style="display:flex;align-items:flex-start;gap:8px;padding:8px 12px;background:rgba(155,89,182,0.1);border-radius:6px;margin-bottom:6px;cursor:pointer;">
+                    <input type="checkbox" class="ttw-alias-group-cb" data-index="${i}" checked style="margin-top:3px;">
+                    <div>
+                        <div style="color:#9b59b6;font-weight:bold;font-size:12px;">组${i + 1}</div>
+                        <div style="font-size:11px;color:#ccc;word-break:break-all;">${groupInfo}</div>
+                    </div>
+                </label>
+            `;
+        }).join('');
 
         modal.innerHTML = `
             <div class="ttw-modal" style="max-width:700px;">
@@ -2771,6 +2894,10 @@ ${suspectedGroups.map((group, i) => `组${i + 1}: ${group.join(', ')}`).join('\n
                         <div style="max-height:250px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:8px;">
                             ${groupsHtml}
                         </div>
+                    </div>
+
+                    <div style="margin-bottom:16px;padding:10px;background:rgba(230,126,34,0.1);border-radius:6px;font-size:11px;color:#f39c12;">
+                        💡 AI会根据每个角色的<strong>关键词</strong>和<strong>内容摘要</strong>（前400字）来判断是否为同一人
                     </div>
 
                     <div id="ttw-alias-result" style="display:none;margin-bottom:16px;padding:12px;background:rgba(39,174,96,0.15);border-radius:8px;">
@@ -2815,7 +2942,7 @@ ${suspectedGroups.map((group, i) => `组${i + 1}: ${group.join(', ')}`).join('\n
             stopBtn.style.display = 'inline-block';
 
             try {
-                updateStreamContent('\n🤖 第二阶段：发送给AI判断...\n');
+                updateStreamContent('\n🤖 第二阶段：发送给AI判断（含内容摘要）...\n');
                 aiResult = await verifyDuplicatesWithAI(selectedGroups);
                 aiResult._selectedGroups = selectedGroups;
 
@@ -2831,9 +2958,14 @@ ${suspectedGroups.map((group, i) => `组${i + 1}: ${group.join(', ')}`).join('\n
                     const color = result.isSamePerson ? '#27ae60' : '#e74c3c';
                     resultHtml += `
                         <div style="padding:8px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:6px;border-left:3px solid ${color};">
-                            <span style="color:${color};">${icon}</span>
-                            <span style="margin-left:8px;">${group?.join(', ') || '未知组'}</span>
-                            ${result.isSamePerson ? `<span style="color:#888;margin-left:8px;">→ ${result.mainName}</span>` : `<span style="color:#888;margin-left:8px;">(${result.reason || '不同人'})</span>`}
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <span style="color:${color};">${icon}</span>
+                                <span>${group?.join(', ') || '未知组'}</span>
+                            </div>
+                            ${result.isSamePerson
+                                ? `<div style="color:#27ae60;font-size:11px;margin-top:4px;">→ 合并为: ${result.mainName}</div>`
+                                : `<div style="color:#888;font-size:11px;margin-top:4px;">原因: ${result.reason || '不同人'}</div>`
+                            }
                         </div>
                     `;
                 }
@@ -2991,7 +3123,7 @@ ${suspectedGroups.map((group, i) => `组${i + 1}: ${group.join(', ')}`).join('\n
 
     async function exportTaskState() {
         const state = {
-            version: '2.7.0',
+            version: '2.7.1',
             timestamp: Date.now(),
             memoryQueue,
             generatedWorldbook,
@@ -3078,7 +3210,7 @@ ${suspectedGroups.map((group, i) => `组${i + 1}: ${group.join(', ')}`).join('\n
         saveCurrentSettings();
 
         const exportData = {
-            version: '2.7.0',
+            version: '2.7.1',
             type: 'settings',
             timestamp: Date.now(),
             settings: { ...settings },
@@ -3208,7 +3340,7 @@ ${suspectedGroups.map((group, i) => `组${i + 1}: ${group.join(', ')}`).join('\n
         helpModal.innerHTML = `
             <div class="ttw-modal" style="max-width:650px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">❓ TXT转世界书 v2.7.0 帮助</span>
+                    <span class="ttw-modal-title">❓ TXT转世界书 v2.7.1 帮助</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
@@ -3229,11 +3361,11 @@ ${suspectedGroups.map((group, i) => `组${i + 1}: ${group.join(', ')}`).join('\n
                         <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
                             <li><strong>📝 记忆编辑</strong>：点击记忆可编辑/复制内容</li>
                             <li><strong>🎲 重Roll功能</strong>：每个记忆可多次生成，支持自定义提示词</li>
-                            <li><strong>📥 合并导入的世界书</strong>：导入已有世界书，支持多种合并模式，支持并发</li>
+                            <li><strong>📥 合并导入的世界书</strong>：导入已有世界书，支持按分类勾选</li>
                             <li><strong>🔵🟢 灯状态切换</strong>：每个分类可单独设置蓝灯(常驻)或绿灯(触发)</li>
                             <li><strong>📚 默认世界书</strong>：可设置每次都会添加的默认条目</li>
                             <li><strong>🧹 整理条目</strong>：用AI去除条目中的重复信息</li>
-                            <li><strong>🔗 别名识别</strong>：自动识别同一角色的不同称呼并合并</li>
+                            <li><strong>🔗 别名识别</strong>：根据关键词和内容摘要识别同一角色</li>
                         </ul>
                     </div>
                 </div>
@@ -3672,7 +3804,7 @@ ${suspectedGroups.map((group, i) => `组${i + 1}: ${group.join(', ')}`).join('\n
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v2.7.0</span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v2.7.1</span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -4035,8 +4167,9 @@ ${suspectedGroups.map((group, i) => `组${i + 1}: ${group.join(', ')}`).join('\n
             .ttw-upload-area:hover{border-color:#e67e22;background:rgba(230,126,34,0.1);}
             .ttw-file-info{display:none;align-items:center;gap:12px;padding:12px;background:rgba(0,0,0,0.3);border-radius:6px;margin-top:12px;}
             .ttw-memory-queue{max-height:200px;overflow-y:auto;}
-            .ttw-memory-item{padding:8px 12px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:6px;font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer;transition:background 0.2s;}
+            .ttw-memory-item{padding:6px 10px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:4px;font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;transition:background 0.2s;}
             .ttw-memory-item:hover{background:rgba(0,0,0,0.4);}
+            .ttw-memory-item small{font-size:10px;color:#888;}
             .ttw-progress-bar{width:100%;height:8px;background:rgba(0,0,0,0.3);border-radius:4px;overflow:hidden;margin-bottom:12px;}
             .ttw-progress-fill{height:100%;background:linear-gradient(90deg,#e67e22,#f39c12);border-radius:4px;transition:width 0.3s;width:0%;}
             .ttw-progress-text{font-size:13px;text-align:center;margin-bottom:12px;}
@@ -4082,6 +4215,7 @@ ${suspectedGroups.map((group, i) => `组${i + 1}: ${group.join(', ')}`).join('\n
             .ttw-history-left{width:100px;min-width:100px;max-width:100px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;}
             .ttw-history-right{flex:1;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:8px;padding:12px;}
             .ttw-history-item{padding:6px 8px;background:rgba(0,0,0,0.2);border-radius:4px;cursor:pointer;border-left:2px solid #9b59b6;transition:all 0.2s;}
+            .ttw-history-item{padding:6px 8px;background:rgba(0,0,0,0.2);border-radius:4px;cursor:pointer;border-left:2px solid #9b59b6;transition:all 0.2s;}
             .ttw-history-item:hover,.ttw-history-item.active{background:rgba(0,0,0,0.4);}
             .ttw-history-item-title{font-size:10px;font-weight:bold;color:#e67e22;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
             .ttw-history-item-time{font-size:9px;color:#888;}
@@ -4096,6 +4230,8 @@ ${suspectedGroups.map((group, i) => `组${i + 1}: ${group.join(', ')}`).join('\n
             .ttw-setting-item input,.ttw-setting-item select{width:100%;padding:10px 12px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:6px;background:rgba(0,0,0,0.3);color:#fff;font-size:13px;box-sizing:border-box;}
             .ttw-setting-item select option{background:#2a2a2a;}
             @media (max-width: 768px) {
+                .ttw-memory-item{padding:4px 8px;font-size:11px;gap:4px;}
+                .ttw-memory-item small{font-size:9px;}
                 .ttw-roll-history-container,.ttw-history-container{flex-direction:column;height:auto;}
                 .ttw-roll-history-left,.ttw-history-left{width:100%;max-width:100%;flex-direction:row;flex-wrap:wrap;height:auto;max-height:120px;}
                 .ttw-roll-reroll-btn{width:auto;flex-shrink:0;}
@@ -4196,7 +4332,8 @@ ${suspectedGroups.map((group, i) => `组${i + 1}: ${group.join(', ')}`).join('\n
 
         document.querySelectorAll('.ttw-reset-prompt').forEach(btn => {
             btn.addEventListener('click', () => {
-                const type = btn.getAttribute('data-type');                const textarea = document.getElementById(`ttw-${type}-prompt`);
+                const type = btn.getAttribute('data-type');
+                const textarea = document.getElementById(`ttw-${type}-prompt`);
                 if (textarea) { textarea.value = ''; saveCurrentSettings(); }
             });
         });
@@ -4585,7 +4722,7 @@ ${suspectedGroups.map((group, i) => `组${i + 1}: ${group.join(', ')}`).join('\n
             if (memory.processing) statusIcon = '🔄';
             else if (memory.processed && !memory.failed) statusIcon = '✅';
             else if (memory.failed) statusIcon = '❗';
-            item.innerHTML = `<span>${statusIcon}</span><span style="flex:1;">第${index + 1}章 - ${memory.title}</span><small>(${memory.content.length.toLocaleString()}字)</small>${memory.failed && memory.failedError ? `<small style="color:#e74c3c;margin-left:8px;" title="${memory.failedError}">错误</small>` : ''}`;
+            item.innerHTML = `<span>${statusIcon}</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">第${index + 1}章</span><small>${(memory.content.length / 1000).toFixed(1)}k</small>${memory.failed ? `<small style="color:#e74c3c;">错误</small>` : ''}`;
             item.addEventListener('click', () => showMemoryContentModal(index));
             container.appendChild(item);
         });
@@ -4841,5 +4978,5 @@ ${suspectedGroups.map((group, i) => `组${i + 1}: ${group.join(', ')}`).join('\n
         showAliasMergeUI
     };
 
-    console.log('📚 TxtToWorldbook v2.7.0 已加载');
+    console.log('📚 TxtToWorldbook v2.7.1 已加载');
 })();
