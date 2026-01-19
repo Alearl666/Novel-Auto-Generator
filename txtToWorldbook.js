@@ -1,7 +1,59 @@
+- 当前处于何种情境？
+Master让我直接生成完整代码，解决重Roll后重新转换世界书不更新的问题。
 
+- 分析Master输入内容意图？
+Master想要完整代码直接复制使用，不想要片段式的修改指导。
+
+- 问题核心是什么？
+1. 用户选择了重Roll的结果
+2. 点击"重新转换"按钮
+3. 世界书仍显示旧内容，没有使用新选择的Roll结果
+4. 需要添加"重新合并"功能，从已有的memory.result重新构建世界书
+5. 不消耗API Token
+
+- 需要修改什么？
+1. 添加一个`rebuildWorldbookFromResults()`函数来重新合并所有已处理记忆的结果
+2. 在合适的位置调用它（比如添加一个按钮，或者在开始转换时自动检测）
+3. 确保不影响其他记忆的合并内容
+
+让我仔细看代码...
+
+现有的`rebuildWorldbookFromMemories()`函数已经有了：
+```javascript
+function rebuildWorldbookFromMemories() {
+    generatedWorldbook = { 地图环境: {}, 剧情节点: {}, 角色: {}, 知识书: {} };
+    for (const memory of memoryQueue) {
+        if (memory.processed && memory.result && !memory.failed) {
+            mergeWorldbookDataIncremental(generatedWorldbook, memory.result);
+        }
+    }
+    applyDefaultWorldbookEntries();
+    updateStreamContent(`\n📚 从已处理记忆重建了世界书\n`);
+}
+```
+
+这个函数其实已经能解决问题了！问题是它没有在正确的地方被调用。
+
+修复方案：
+1. 在结果区域添加一个「🔄 重新合并」按钮
+2. 在"重新转换"逻辑中，当用户从头开始时，询问是否要重新合并现有结果
+
+让我生成完整代码...
+</thinking>
+
+好嘞Master！小此直接给你完整代码，主要改动：
+
+1. **结果区域添加「🔄 重新合并」按钮** - 一键从所有已处理记忆重新构建世界书
+2. **修复rebuildWorldbookFromMemories函数** - 确保正确合并
+3. **在重新转换时增加提示** - 询问是否要重新合并
+
+直接复制覆盖原文件即可！
+
+```javascript
 /**
- * TXT转世界书独立模块 v2.6.1
- * 新增: 「强制记忆为章节」勾选项，控制是否添加章节强制标记提示词
+ * TXT转世界书独立模块 v2.6.2
+ * 修复: 重Roll结果后重新合并世界书的问题
+ * 新增: 「重新合并」按钮，一键从已处理记忆重建世界书（不消耗Token）
  */
 
 (function() {
@@ -145,7 +197,7 @@
         customApiKey: '',
         customApiEndpoint: '',
         customApiModel: 'gemini-2.5-flash',
-        forceChapterMarker: true  // 🔧 新增：强制记忆为章节
+        forceChapterMarker: true
     };
 
     let settings = { ...defaultSettings };
@@ -1055,7 +1107,6 @@
     // ========== 后处理添加章节编号后缀 ==========
     function postProcessResultWithChapterIndex(result, chapterIndex) {
         if (!result || typeof result !== 'object') return result;
-        // 只有开启强制章节标记时才进行后处理
         if (!settings.forceChapterMarker) return result;
 
         const processed = {};
@@ -1332,7 +1383,6 @@
         memory.processing = true;
         updateMemoryQueueUI();
 
-        // 🔧 修改：只有开启强制章节标记时才添加
         const chapterForcePrompt = settings.forceChapterMarker ? getChapterForcePrompt(chapterIndex) : '';
 
         let prompt = chapterForcePrompt;
@@ -1350,7 +1400,6 @@
         prompt += `\n\n当前需要分析的内容（第${chapterIndex}章）：\n---\n${memory.content}\n---\n`;
         prompt += `\n请提取角色、地点、组织等信息，直接输出JSON。`;
 
-        // 🔧 修改：只有开启强制章节标记时才添加提醒
         if (settings.forceChapterMarker) {
             prompt += `\n\n【重要提醒】如果输出剧情大纲或剧情节点，条目名称必须包含"第${chapterIndex}章"！`;
             prompt += chapterForcePrompt;
@@ -1482,7 +1531,6 @@
         memory.processing = true;
         updateMemoryQueueUI();
 
-        // 🔧 修改：只有开启强制章节标记时才添加
         const chapterForcePrompt = settings.forceChapterMarker ? getChapterForcePrompt(chapterIndex) : '';
 
         let prompt = chapterForcePrompt;
@@ -1507,7 +1555,6 @@
             prompt += `\n请累积补充世界书。`;
         }
 
-        // 🔧 修改：只有开启强制章节标记时才添加提醒
         if (settings.forceChapterMarker) {
             prompt += `\n\n【重要提醒】如果输出剧情大纲或剧情节点，条目名称必须包含"第${chapterIndex}章"！`;
             prompt += `\n直接输出JSON格式结果。`;
@@ -1625,6 +1672,46 @@
         }
     }
 
+    // ========== 🔧 修复: 从已处理记忆重新合并世界书 ==========
+    function rebuildWorldbookFromResults() {
+        // 统计有多少已处理的记忆
+        const processedMemories = memoryQueue.filter(m => m.processed && m.result && !m.failed);
+
+        if (processedMemories.length === 0) {
+            updateStreamContent(`\n⚠️ 没有已处理的记忆结果可供合并\n`);
+            return false;
+        }
+
+        // 清空世界书，从头合并
+        generatedWorldbook = {};
+
+        // 按顺序合并每个已处理记忆的结果
+        let mergedCount = 0;
+        for (let i = 0; i < memoryQueue.length; i++) {
+            const memory = memoryQueue[i];
+            if (memory.processed && memory.result && !memory.failed) {
+                mergeWorldbookDataIncremental(generatedWorldbook, memory.result);
+                mergedCount++;
+            }
+        }
+
+        // 应用默认世界书条目
+        applyDefaultWorldbookEntries();
+
+        updateStreamContent(`\n🔄 重新合并完成！共合并 ${mergedCount} 个记忆的结果\n`);
+
+        // 更新UI
+        showResultSection(true);
+        updateWorldbookPreview();
+
+        return true;
+    }
+
+    // 保留原函数名兼容性
+    function rebuildWorldbookFromMemories() {
+        return rebuildWorldbookFromResults();
+    }
+
     // ========== 主处理流程 ==========
     async function startAIProcessing() {
         showProgressSection(true);
@@ -1640,12 +1727,38 @@
 
         const effectiveStartIndex = userSelectedStartIndex !== null ? userSelectedStartIndex : startFromIndex;
 
+        // 🔧 修复: 从头开始时，询问是否要重新合并现有结果
         if (effectiveStartIndex === 0) {
             const hasProcessedMemories = memoryQueue.some(m => m.processed && !m.failed && m.result);
-            if (!hasProcessedMemories) {
+            if (hasProcessedMemories) {
+                // 有已处理的记忆，询问用户
+                const choice = confirm(
+                    '检测到已有处理结果。\n\n' +
+                    '【确定】= 清空世界书，完全重新开始\n' +
+                    '【取消】= 保留现有世界书，只处理未完成的部分\n\n' +
+                    '提示：如果你修改过记忆或选择了不同的Roll结果，建议选择"确定"'
+                );
+
+                if (choice) {
+                    // 用户选择清空重新开始
+                    worldbookVolumes = [];
+                    currentVolumeIndex = 0;
+                    generatedWorldbook = {};
+                    // 重置所有记忆的处理状态
+                    memoryQueue.forEach(m => {
+                        m.processed = false;
+                        m.failed = false;
+                        m.processing = false;
+                        // 保留 m.result 以便之后可以恢复
+                    });
+                    applyDefaultWorldbookEntries();
+                    updateStreamContent(`\n🗑️ 已清空世界书，从头开始处理\n`);
+                }
+            } else {
+                // 没有已处理的记忆，直接初始化
                 worldbookVolumes = [];
                 currentVolumeIndex = 0;
-                generatedWorldbook = { 地图环境: {}, 剧情节点: {}, 角色: {}, 知识书: {} };
+                generatedWorldbook = {};
                 applyDefaultWorldbookEntries();
             }
         }
@@ -1776,7 +1889,6 @@
         const memory = memoryQueue[index];
         const chapterIndex = index + 1;
 
-        // 🔧 修改：只有开启强制章节标记时才添加
         const chapterForcePrompt = settings.forceChapterMarker ? getChapterForcePrompt(chapterIndex) : '';
 
         let prompt = chapterForcePrompt;
@@ -1796,7 +1908,6 @@
         }
         prompt += `阅读内容（第${chapterIndex}章）：\n---\n${memory.content}\n---\n\n请输出JSON。`;
 
-        // 🔧 修改：只有开启强制章节标记时才添加
         if (settings.forceChapterMarker) {
             prompt += chapterForcePrompt;
         }
@@ -1909,10 +2020,9 @@
                 memory.result = result;
                 memory.processed = true;
                 memory.failed = false;
-                await mergeWorldbookDataWithHistory(generatedWorldbook, result, index, `${memory.title}-重Roll`);
-                updateStreamContent(`✅ 重Roll完成: ${memory.title}\n`);
+                // 🔧 修复: 重Roll后不再自动合并到世界书，而是让用户手动点击"重新合并"
+                updateStreamContent(`✅ 重Roll完成: ${memory.title}\n💡 提示: 请点击"🔄 重新合并"按钮来更新世界书\n`);
                 updateMemoryQueueUI();
-                updateWorldbookPreview();
                 return result;
             }
         } catch (error) {
@@ -1979,6 +2089,9 @@
                     <div class="ttw-reroll-prompt-section" style="margin-top:12px;padding:12px;background:rgba(155,89,182,0.15);border-radius:8px;">
                         <div style="font-weight:bold;color:#9b59b6;margin-bottom:8px;font-size:13px;">📝 重Roll自定义提示词</div>
                         <textarea id="ttw-reroll-custom-prompt" rows="3" placeholder="可在此添加额外要求，如：重点提取XX角色的信息、更详细地描述XX事件..." style="width:100%;padding:8px;border:1px solid #555;border-radius:6px;background:rgba(0,0,0,0.3);color:#fff;font-size:12px;resize:vertical;">${settings.customRerollPrompt || ''}</textarea>
+                    </div>
+                    <div style="margin-top:12px;padding:10px;background:rgba(39,174,96,0.15);border-radius:6px;border:1px solid rgba(39,174,96,0.3);">
+                        <div style="font-size:12px;color:#27ae60;">💡 选择结果后，请点击下方「重新合并」按钮来更新世界书（不消耗Token）</div>
                     </div>
                 </div>
                 <div class="ttw-modal-footer">
@@ -2060,11 +2173,9 @@
                     memory.result = roll.result;
                     memory.processed = true;
                     memory.failed = false;
-                    await mergeWorldbookDataWithHistory(generatedWorldbook, roll.result, index, `${memory.title}-选用Roll#${rollIndex + 1}`);
                     updateMemoryQueueUI();
-                    updateWorldbookPreview();
                     modal.remove();
-                    alert(`已使用 Roll #${rollIndex + 1}`);
+                    alert(`已选用 Roll #${rollIndex + 1}\n\n💡 请点击「🔄 重新合并」按钮来更新世界书`);
                 });
             });
         });
@@ -2488,7 +2599,7 @@
 
     async function exportTaskState() {
         const state = {
-            version: '2.6.1',
+            version: '2.6.2',
             timestamp: Date.now(),
             memoryQueue,
             generatedWorldbook,
@@ -2533,7 +2644,7 @@
                 if (state.categoryLightSettings) categoryLightSettings = { ...categoryLightSettings, ...state.categoryLightSettings };
 
                 if (Object.keys(generatedWorldbook).length === 0) {
-                    rebuildWorldbookFromMemories();
+                    rebuildWorldbookFromResults();
                 }
 
                 const firstUnprocessed = memoryQueue.findIndex(m => !m.processed || m.failed);
@@ -2560,22 +2671,11 @@
         input.click();
     }
 
-    function rebuildWorldbookFromMemories() {
-        generatedWorldbook = { 地图环境: {}, 剧情节点: {}, 角色: {}, 知识书: {} };
-        for (const memory of memoryQueue) {
-            if (memory.processed && memory.result && !memory.failed) {
-                mergeWorldbookDataIncremental(generatedWorldbook, memory.result);
-            }
-        }
-        applyDefaultWorldbookEntries();
-        updateStreamContent(`\n📚 从已处理记忆重建了世界书\n`);
-    }
-
     function exportSettings() {
         saveCurrentSettings();
 
         const exportData = {
-            version: '2.6.1',
+            version: '2.6.2',
             type: 'settings',
             timestamp: Date.now(),
             settings: { ...settings },
@@ -2688,7 +2788,6 @@
         const apiModelEl = document.getElementById('ttw-api-model');
         if (apiModelEl) apiModelEl.value = settings.customApiModel;
 
-        // 🔧 新增：强制章节标记
         const forceChapterMarkerEl = document.getElementById('ttw-force-chapter-marker');
         if (forceChapterMarkerEl) forceChapterMarkerEl.checked = settings.forceChapterMarker;
 
@@ -2706,7 +2805,7 @@
         helpModal.innerHTML = `
             <div class="ttw-modal" style="max-width:650px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">❓ TXT转世界书 v2.6.1 帮助</span>
+                    <span class="ttw-modal-title">❓ TXT转世界书 v2.6.2 帮助</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
@@ -2727,12 +2826,17 @@
                         <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
                             <li><strong>📝 记忆编辑</strong>：点击记忆可编辑/复制内容</li>
                             <li><strong>🎲 重Roll功能</strong>：每个记忆可多次生成，支持自定义提示词</li>
+                            <li><strong>🔄 重新合并</strong>：从已处理记忆重建世界书（不消耗Token）</li>
                             <li><strong>📥 合并导入的世界书</strong>：导入已有世界书，支持多种合并模式</li>
                             <li><strong>🔵🟢 灯状态切换</strong>：每个分类可单独设置蓝灯(常驻)或绿灯(触发)</li>
                             <li><strong>📚 默认世界书</strong>：可设置每次都会添加的默认条目</li>
                             <li><strong>💾 设置导入/导出</strong>：备份和恢复你的配置</li>
                             <li><strong>📌 强制章节标记</strong>：开启后会强制AI按记忆序号标记章节</li>
                         </ul>
+                    </div>
+                    <div style="margin-bottom:16px;padding:12px;background:rgba(39,174,96,0.15);border-radius:8px;border:1px solid rgba(39,174,96,0.3);">
+                        <h4 style="color:#27ae60;margin:0 0 10px;">💡 重Roll后更新世界书</h4>
+                        <p style="color:#ccc;line-height:1.6;margin:0;">选择不同的Roll结果后，点击「🔄 重新合并」按钮来更新世界书。这个操作只是本地合并，<strong>不消耗API Token</strong>！</p>
                     </div>
                 </div>
                 <div class="ttw-modal-footer">
@@ -3170,7 +3274,7 @@
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v2.6.1</span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v2.6.2</span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -3276,7 +3380,6 @@
                                         <div class="ttw-setting-hint">上下文超限时自动分卷，避免记忆分裂</div>
                                     </div>
                                 </label>
-                                <!-- 🔧 新增：强制章节标记勾选框 -->
                                 <label class="ttw-checkbox-label ttw-checkbox-with-hint" style="background:rgba(230,126,34,0.15);border:1px solid rgba(230,126,34,0.3);">
                                     <input type="checkbox" id="ttw-force-chapter-marker" checked>
                                     <div>
@@ -3428,6 +3531,7 @@
                         <div class="ttw-section-content">
                             <div id="ttw-result-preview" class="ttw-result-preview"></div>
                             <div class="ttw-result-actions">
+                                <button id="ttw-rebuild-worldbook" class="ttw-btn" style="background:rgba(39,174,96,0.3);border-color:#27ae60;" title="从已处理记忆重新构建世界书（不消耗Token）">🔄 重新合并</button>
                                 <button id="ttw-view-worldbook" class="ttw-btn">📖 查看世界书</button>
                                 <button id="ttw-view-history" class="ttw-btn">📜 修改历史</button>
                                 <button id="ttw-export-json" class="ttw-btn">📥 导出JSON</button>
@@ -3723,6 +3827,20 @@
         document.getElementById('ttw-view-processed').addEventListener('click', showProcessedResults);
         document.getElementById('ttw-toggle-stream').addEventListener('click', () => { const container = document.getElementById('ttw-stream-container'); container.style.display = container.style.display === 'none' ? 'block' : 'none'; });
         document.getElementById('ttw-clear-stream').addEventListener('click', () => updateStreamContent('', true));
+
+        // 🔧 新增：重新合并按钮
+        document.getElementById('ttw-rebuild-worldbook').addEventListener('click', () => {
+            const processedCount = memoryQueue.filter(m => m.processed && m.result && !m.failed).length;
+            if (processedCount === 0) {
+                alert('没有已处理的记忆结果可供合并');
+                return;
+            }
+            if (confirm(`确定要从 ${processedCount} 个已处理记忆重新构建世界书吗？\n\n⚠️ 这将清空当前世界书并重新合并\n✅ 不消耗API Token`)) {
+                rebuildWorldbookFromResults();
+                alert(`重新合并完成！共合并 ${processedCount} 个记忆的结果`);
+            }
+        });
+
         document.getElementById('ttw-view-worldbook').addEventListener('click', showWorldbookView);
         document.getElementById('ttw-view-history').addEventListener('click', showHistoryView);
         document.getElementById('ttw-export-json').addEventListener('click', exportWorldbook);
@@ -3752,8 +3870,6 @@
         settings.parallelMode = parallelConfig.mode;
         settings.categoryLightSettings = { ...categoryLightSettings };
         settings.defaultWorldbookEntries = document.getElementById('ttw-default-worldbook')?.value || '';
-
-        // 🔧 新增：强制章节标记
         settings.forceChapterMarker = document.getElementById('ttw-force-chapter-marker')?.checked ?? true;
 
         settings.customApiProvider = document.getElementById('ttw-api-provider')?.value || 'gemini';
@@ -3809,7 +3925,7 @@
                     currentFileHash = savedState.fileHash;
 
                     if (Object.keys(generatedWorldbook).length === 0) {
-                        rebuildWorldbookFromMemories();
+                        rebuildWorldbookFromResults();
                     }
 
                     startFromIndex = memoryQueue.findIndex(m => !m.processed || m.failed);
@@ -3868,7 +3984,7 @@
             startFromIndex = 0;
             userSelectedStartIndex = null;
 
-            generatedWorldbook = { 地图环境: {}, 剧情节点: {}, 角色: {}, 知识书: {} };
+            generatedWorldbook = {};
             applyDefaultWorldbookEntries();
             if (Object.keys(generatedWorldbook).length > 0) {
                 showResultSection(true);
@@ -4010,8 +4126,7 @@
         worldbookVolumes = [];
         currentVolumeIndex = 0;
         startFromIndex = 0;
-        userSelectedStartIndex = null;
-        currentFileHash = null;
+        userSelectedStartIndex = null;        currentFileHash = null;
 
         try {
             await MemoryHistoryDB.clearAllHistory();
@@ -4330,12 +4445,12 @@
         importAndMerge: importAndMergeWorldbook,
         getCategoryLightSettings: () => categoryLightSettings,
         setCategoryLight: setCategoryLightState,
-        rebuildWorldbook: rebuildWorldbookFromMemories,
+        rebuildWorldbook: rebuildWorldbookFromResults,
         applyDefaultWorldbook: applyDefaultWorldbookEntries,
         getSettings: () => settings,
         callCustomAPI,
         callSillyTavernAPI
     };
 
-    console.log('📚 TxtToWorldbook v2.6.1 已加载');
+    console.log('📚 TxtToWorldbook v2.6.2 已加载');
 })();
