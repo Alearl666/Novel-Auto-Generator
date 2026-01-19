@@ -1,6 +1,6 @@
 /**
- * TXT转世界书独立模块 v2.5.2
- * 修复: 清除文件时清空历史、合并世界书重复检测、ST格式转换
+ * TXT转世界书独立模块 v2.6.0
+ * 修复: 导入配置后UI不更新、新增自定义API支持
  */
 
 (function() {
@@ -135,11 +135,16 @@
         parallelEnabled: true,
         parallelConcurrency: 3,
         parallelMode: 'independent',
-        useTavernPreset: false,
+        useTavernApi: true,  // 🔧 新增：是否使用酒馆API
         customMergePrompt: '',
         categoryLightSettings: null,
         defaultWorldbookEntries: '',
-        customRerollPrompt: ''
+        customRerollPrompt: '',
+        // 🔧 新增：自定义API配置
+        customApiProvider: 'gemini',
+        customApiKey: '',
+        customApiEndpoint: '',
+        customApiModel: 'gemini-2.5-flash'
     };
 
     let settings = { ...defaultSettings };
@@ -484,11 +489,26 @@
 
     // ========== 工具函数 ==========
     async function calculateFileHash(content) {
-        const encoder = new TextEncoder();
-        const data = encoder.encode(content);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        if (window.crypto && window.crypto.subtle) {
+            try {
+                const encoder = new TextEncoder();
+                const data = encoder.encode(content);
+                const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+                const hashArray = Array.from(new Uint8Array(hashBuffer));
+                return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+            } catch (e) {
+                console.warn('Crypto API 失败，回退到简易哈希');
+            }
+        }
+        let hash = 0;
+        const len = content.length;
+        if (len === 0) return 'hash-empty';
+        const sample = len < 100000 ? content : content.slice(0, 1000) + content.slice(Math.floor(len/2), Math.floor(len/2) + 1000) + content.slice(-1000);
+        for (let i = 0; i < sample.length; i++) {
+            hash = ((hash << 5) - hash) + sample.charCodeAt(i);
+            hash = hash & hash;
+        }
+        return 'simple-' + Math.abs(hash).toString(16) + '-' + len;
     }
 
     function getLanguagePrefix() {
@@ -565,12 +585,11 @@
         }
     }
 
-    // ========== API调用 ==========
-    async function callSillyTavernAPI(prompt, useTavernPreset = false, taskId = null) {
+    // ========== API调用 - 酒馆API ==========
+    async function callSillyTavernAPI(prompt, taskId = null) {
         const timeout = settings.apiTimeout || 120000;
-
         const logPrefix = taskId !== null ? `[任务${taskId}]` : '';
-        updateStreamContent(`\n📤 ${logPrefix} 发送请求...\n`);
+        updateStreamContent(`\n📤 ${logPrefix} 发送请求到酒馆API...\n`);
 
         try {
             if (typeof SillyTavern === 'undefined' || !SillyTavern.getContext) {
@@ -578,27 +597,20 @@
             }
 
             const context = SillyTavern.getContext();
-
             const timeoutPromise = new Promise((_, reject) => {
                 setTimeout(() => reject(new Error(`API请求超时 (${timeout/1000}秒)`)), timeout);
             });
 
             let apiPromise;
-
-            if (useTavernPreset) {
-                if (typeof context.generateQuietPrompt === 'function') {
-                    apiPromise = context.generateQuietPrompt(prompt, false, false);
-                } else if (typeof context.generateRaw === 'function') {
-                    apiPromise = context.generateRaw(prompt, '', false);
-                } else {
-                    throw new Error('无法找到可用的生成函数');
-                }
-            } else {
+            if (typeof context.generateQuietPrompt === 'function') {
+                apiPromise = context.generateQuietPrompt(prompt, false, false);
+            } else if (typeof context.generateRaw === 'function') {
                 apiPromise = context.generateRaw(prompt, '', false);
+            } else {
+                throw new Error('无法找到可用的生成函数');
             }
 
             const result = await Promise.race([apiPromise, timeoutPromise]);
-
             updateStreamContent(`📥 ${logPrefix} 收到响应 (${result.length}字符)\n`);
             return result;
 
@@ -608,8 +620,321 @@
         }
     }
 
+    // ========== API调用 - 自定义API ==========
+    async function callCustomAPI(prompt, retryCount = 0) {
+        const maxRetries = 3;
+        const timeout = settings.apiTimeout || 120000;
+        let requestUrl, requestOptions;
+
+        const provider = settings.customApiProvider;
+        const apiKey = settings.customApiKey;
+        const endpoint = settings.customApiEndpoint;
+        const model = settings.customApiModel;
+
+        updateStreamContent(`\n📤 发送请求到自定义API (${provider})...\n`);
+
+        switch (provider) {
+            case 'deepseek':
+                if (!apiKey) throw new Error('DeepSeek API Key 未设置');
+                requestUrl = 'https://api.deepseek.com/chat/completions';
+                requestOptions = {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`
+                    },
+                    body: JSON.stringify({
+                        model: model || 'deepseek-chat',
+                        messages: [{ role: 'user', content: prompt }],
+                        temperature: 0.3,
+                        max_tokens: 8192
+                    }),
+                };
+                break;
+
+            case 'gemini':
+                if (!apiKey) throw new Error('Gemini API Key 未设置');
+                const geminiModel = model || 'gemini-2.5-flash';
+                requestUrl = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`;
+                requestOptions = {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: prompt }] }],
+                        generationConfig: { maxOutputTokens: 65536, temperature: 0.3 },
+                        safetySettings: [
+                            { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'OFF' },
+                            { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'OFF' },
+                            { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'OFF' },
+                            { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'OFF' }
+                        ]
+                    }),
+                };
+                break;
+
+            case 'gemini-proxy':
+                if (!endpoint) throw new Error('Gemini Proxy Endpoint 未设置');
+                if (!apiKey) throw new Error('Gemini Proxy API Key 未设置');
+
+                let proxyBaseUrl = endpoint;
+                if (!proxyBaseUrl.startsWith('http')) proxyBaseUrl = 'https://' + proxyBaseUrl;
+                if (proxyBaseUrl.endsWith('/')) proxyBaseUrl = proxyBaseUrl.slice(0, -1);
+
+                const geminiProxyModel = model || 'gemini-2.5-flash';
+                const useOpenAIFormat = proxyBaseUrl.endsWith('/v1');
+
+                if (useOpenAIFormat) {
+                    requestUrl = proxyBaseUrl + '/chat/completions';
+                    requestOptions = {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${apiKey}`
+                        },
+                        body: JSON.stringify({
+                            model: geminiProxyModel,
+                            messages: [{ role: 'user', content: prompt }],
+                            temperature: 0.3,
+                            max_tokens: 65536
+                        }),
+                    };
+                } else {
+                    const finalProxyUrl = `${proxyBaseUrl}/${geminiProxyModel}:generateContent`;
+                    requestUrl = finalProxyUrl.includes('?')
+                        ? `${finalProxyUrl}&key=${apiKey}`
+                        : `${finalProxyUrl}?key=${apiKey}`;
+                    requestOptions = {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            contents: [{ parts: [{ text: prompt }] }],
+                            generationConfig: { maxOutputTokens: 65536, temperature: 0.3 }
+                        }),
+                    };
+                }
+                break;
+
+            case 'openai-compatible':
+                let openaiEndpoint = endpoint || 'http://127.0.0.1:5000/v1/chat/completions';
+                const openaiModel = model || 'local-model';
+
+                if (!openaiEndpoint.includes('/chat/completions')) {
+                    if (openaiEndpoint.endsWith('/v1')) {
+                        openaiEndpoint += '/chat/completions';
+                    } else {
+                        openaiEndpoint = openaiEndpoint.replace(/\/$/, '') + '/chat/completions';
+                    }
+                }
+
+                if (!openaiEndpoint.startsWith('http')) {
+                    openaiEndpoint = 'http://' + openaiEndpoint;
+                }
+
+                requestUrl = openaiEndpoint;
+                const headers = { 'Content-Type': 'application/json' };
+                if (apiKey) {
+                    headers['Authorization'] = `Bearer ${apiKey}`;
+                }
+
+                requestOptions = {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        model: openaiModel,
+                        messages: [{ role: 'user', content: prompt }],
+                        temperature: 0.3,
+                        max_tokens: 64000
+                    }),
+                };
+                break;
+
+            default:
+                throw new Error(`不支持的API提供商: ${provider}`);
+        }
+
+        // 添加超时控制
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeout);
+        requestOptions.signal = controller.signal;
+
+        try {
+            const response = await fetch(requestUrl, requestOptions);
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.log('API错误响应:', errorText);
+
+                if (response.status === 429 || errorText.includes('resource_exhausted') || errorText.includes('rate limit')) {
+                    if (retryCount < maxRetries) {
+                        const delay = Math.pow(2, retryCount) * 1000;
+                        updateStreamContent(`⏳ 遇到限流，${delay}ms后重试...\n`);
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        return callCustomAPI(prompt, retryCount + 1);
+                    } else {
+                        throw new Error(`API限流：已达到最大重试次数`);
+                    }
+                }
+
+                throw new Error(`API请求失败: ${response.status} ${response.statusText}`);
+            }
+
+            const data = await response.json();
+            let result;
+
+            if (provider === 'gemini') {
+                result = data.candidates[0].content.parts[0].text;
+            } else if (provider === 'gemini-proxy') {
+                if (data.candidates) {
+                    result = data.candidates[0].content.parts[0].text;
+                } else if (data.choices) {
+                    result = data.choices[0].message.content;
+                }
+            } else {
+                result = data.choices[0].message.content;
+            }
+
+            updateStreamContent(`📥 收到响应 (${result.length}字符)\n`);
+            return result;
+
+        } catch (error) {
+            clearTimeout(timeoutId);
+            if (error.name === 'AbortError') {
+                throw new Error(`API请求超时 (${timeout/1000}秒)`);
+            }
+            throw error;
+        }
+    }
+
+    // ========== 拉取模型列表 ==========
+    async function fetchModelList() {
+        const endpoint = settings.customApiEndpoint || '';
+        if (!endpoint) {
+            throw new Error('请先设置 API Endpoint');
+        }
+
+        let modelsUrl = endpoint;
+        if (modelsUrl.endsWith('/chat/completions')) {
+            modelsUrl = modelsUrl.replace('/chat/completions', '/models');
+        } else if (modelsUrl.endsWith('/v1')) {
+            modelsUrl = modelsUrl + '/models';
+        } else if (!modelsUrl.endsWith('/models')) {
+            modelsUrl = modelsUrl.replace(/\/$/, '') + '/models';
+        }
+
+        if (!modelsUrl.startsWith('http')) {
+            modelsUrl = 'http://' + modelsUrl;
+        }
+
+        const headers = { 'Content-Type': 'application/json' };
+        if (settings.customApiKey) {
+            headers['Authorization'] = `Bearer ${settings.customApiKey}`;
+        }
+
+        console.log('📤 拉取模型列表:', modelsUrl);
+
+        const response = await fetch(modelsUrl, {
+            method: 'GET',
+            headers: headers
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`拉取模型列表失败: ${response.status} - ${errorText}`);
+        }
+
+        const data = await response.json();
+        console.log('📥 模型列表响应:', data);
+
+        let models = [];
+        if (data.data && Array.isArray(data.data)) {
+            models = data.data.map(m => m.id || m.name || m);
+        } else if (Array.isArray(data)) {
+            models = data.map(m => typeof m === 'string' ? m : (m.id || m.name || m));
+        } else if (data.models && Array.isArray(data.models)) {
+            models = data.models.map(m => typeof m === 'string' ? m : (m.id || m.name || m));
+        }
+
+        return models;
+    }
+
+    // ========== 快速测试 ==========
+    async function quickTestModel() {
+        const endpoint = settings.customApiEndpoint || '';
+        const model = settings.customApiModel || '';
+
+        if (!endpoint) {
+            throw new Error('请先设置 API Endpoint');
+        }
+        if (!model) {
+            throw new Error('请先设置模型名称');
+        }
+
+        let requestUrl = endpoint;
+        if (!requestUrl.includes('/chat/completions')) {
+            if (requestUrl.endsWith('/v1')) {
+                requestUrl += '/chat/completions';
+            } else {
+                requestUrl = requestUrl.replace(/\/$/, '') + '/chat/completions';
+            }
+        }
+
+        if (!requestUrl.startsWith('http')) {
+            requestUrl = 'http://' + requestUrl;
+        }
+
+        const headers = { 'Content-Type': 'application/json' };
+        if (settings.customApiKey) {
+            headers['Authorization'] = `Bearer ${settings.customApiKey}`;
+        }
+
+        console.log('📤 快速测试:', requestUrl, '模型:', model);
+
+        const startTime = Date.now();
+
+        const response = await fetch(requestUrl, {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify({
+                model: model,
+                messages: [{ role: 'user', content: 'Hi' }],
+                max_tokens: 50
+            })
+        });
+
+        const elapsed = Date.now() - startTime;
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`测试失败: ${response.status} - ${errorText}`);
+        }
+
+        const data = await response.json();
+        console.log('📥 测试响应:', data);
+
+        let responseText = '';
+        if (data.choices && data.choices[0]) {
+            responseText = data.choices[0].message?.content || data.choices[0].text || '';
+        }
+
+        if (!responseText || responseText.trim() === '') {
+            throw new Error('API返回了空响应，请检查模型配置');
+        }
+
+        return {
+            success: true,
+            elapsed: elapsed,
+            response: responseText.substring(0, 100)
+        };
+    }
+
+    // ========== 统一API调用入口 ==========
     async function callAPI(prompt, taskId = null) {
-        return await callSillyTavernAPI(prompt, settings.useTavernPreset, taskId);
+        if (settings.useTavernApi) {
+            return await callSillyTavernAPI(prompt, taskId);
+        } else {
+            return await callCustomAPI(prompt);
+        }
     }
 
     // ========== 世界书数据处理 ==========
@@ -1297,7 +1622,7 @@
         activeParallelTasks.clear();
 
         updateStreamContent('', true);
-        updateStreamContent(`🚀 开始处理...\n📊 处理模式: ${parallelConfig.enabled ? `并行 (${parallelConfig.concurrency}并发)` : '串行'}\n🔧 使用酒馆预设: ${settings.useTavernPreset ? '是' : '否'}\n${'='.repeat(50)}\n`);
+        updateStreamContent(`🚀 开始处理...\n📊 处理模式: ${parallelConfig.enabled ? `并行 (${parallelConfig.concurrency}并发)` : '串行'}\n🔧 API模式: ${settings.useTavernApi ? '酒馆API' : '自定义API (' + settings.customApiProvider + ')'}\n${'='.repeat(50)}\n`);
 
         const effectiveStartIndex = userSelectedStartIndex !== null ? userSelectedStartIndex : startFromIndex;
 
@@ -1760,34 +2085,29 @@
         input.click();
     }
 
-    // ========== 修复：SillyTavern格式转换 ==========
     function convertSTFormatToInternal(stData) {
         const result = {};
         if (!stData.entries) return result;
 
-        // SillyTavern格式entries可能是对象或数组
         const entriesArray = Array.isArray(stData.entries)
             ? stData.entries
             : Object.values(stData.entries);
 
-        const processedEntries = new Set(); // 用于去重
+        const processedEntries = new Set();
 
         for (const entry of entriesArray) {
             if (!entry || typeof entry !== 'object') continue;
 
             const group = entry.group || '未分类';
 
-            // 用正确的方式提取条目名
             let name;
             if (entry.comment) {
-                // comment格式: "分类 - 条目名"，只取最后一个 - 后面的部分
                 const parts = entry.comment.split(' - ');
                 name = parts.length > 1 ? parts.slice(1).join(' - ').trim() : entry.comment.trim();
             } else {
                 name = `条目${entry.uid || Math.random().toString(36).substr(2, 9)}`;
             }
 
-            // 创建唯一标识用于去重
             const entryKey = `${group}|||${name}`;
 
             if (processedEntries.has(entryKey)) {
@@ -2148,7 +2468,7 @@
 
     async function exportTaskState() {
         const state = {
-            version: '2.5.2',
+            version: '2.6.0',
             timestamp: Date.now(),
             memoryQueue,
             generatedWorldbook,
@@ -2235,22 +2555,12 @@
         saveCurrentSettings();
 
         const exportData = {
-            version: '2.5.2',
+            version: '2.6.0',
             type: 'settings',
             timestamp: Date.now(),
-            settings: {
-                ...settings,
-                defaultWorldbookEntries: settings.defaultWorldbookEntries || '',
-                customWorldbookPrompt: settings.customWorldbookPrompt || '',
-                customPlotPrompt: settings.customPlotPrompt || '',
-                customStylePrompt: settings.customStylePrompt || '',
-                customMergePrompt: settings.customMergePrompt || '',
-                customRerollPrompt: settings.customRerollPrompt || '',
-                parallelEnabled: parallelConfig.enabled,
-                parallelConcurrency: parallelConfig.concurrency,
-                parallelMode: parallelConfig.mode
-            },
-            categoryLightSettings
+            settings: { ...settings },
+            categoryLightSettings,
+            parallelConfig
         };
         const timeString = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[:/\s]/g, '').replace(/,/g, '-');
         const fileName = `TxtToWorldbook-配置-${timeString}.json`;
@@ -2275,17 +2585,22 @@
                 const content = await file.text();
                 const data = JSON.parse(content);
                 if (data.type !== 'settings') throw new Error('不是有效的配置文件');
+
+                // 🔧 修复：先更新 settings 对象，再更新 UI
                 if (data.settings) {
                     settings = { ...defaultSettings, ...data.settings };
-                    parallelConfig.enabled = data.settings.parallelEnabled !== undefined ? data.settings.parallelEnabled : true;
-                    parallelConfig.concurrency = data.settings.parallelConcurrency || 3;
-                    parallelConfig.mode = data.settings.parallelMode || 'independent';
+                }
+                if (data.parallelConfig) {
+                    parallelConfig = { ...parallelConfig, ...data.parallelConfig };
                 }
                 if (data.categoryLightSettings) {
                     categoryLightSettings = { ...categoryLightSettings, ...data.categoryLightSettings };
                 }
-                saveCurrentSettings();
+
+                // 🔧 修复：先更新 UI，再保存设置
                 updateSettingsUI();
+                // 不要在这里调用 saveCurrentSettings()，否则会把 UI 的空值覆盖回去
+
                 alert('配置导入成功！');
             } catch (error) {
                 alert('导入失败: ' + error.message);
@@ -2295,29 +2610,72 @@
     }
 
     function updateSettingsUI() {
-        const elements = {
-            'ttw-parallel-enabled': parallelConfig.enabled,
-            'ttw-parallel-concurrency': parallelConfig.concurrency,
-            'ttw-parallel-mode': parallelConfig.mode,
-            'ttw-use-tavern-preset': settings.useTavernPreset,
-            'ttw-chunk-size': settings.chunkSize,
-            'ttw-api-timeout': Math.round((settings.apiTimeout || 120000) / 1000),
-            'ttw-incremental-mode': incrementalOutputMode,
-            'ttw-volume-mode': useVolumeMode,
-            'ttw-enable-plot': settings.enablePlotOutline,
-            'ttw-enable-style': settings.enableLiteraryStyle,
-            'ttw-worldbook-prompt': settings.customWorldbookPrompt || '',
-            'ttw-plot-prompt': settings.customPlotPrompt || '',
-            'ttw-style-prompt': settings.customStylePrompt || '',
-            'ttw-default-worldbook': settings.defaultWorldbookEntries || ''
-        };
-        for (const [id, value] of Object.entries(elements)) {
-            const el = document.getElementById(id);
-            if (el) {
-                if (el.type === 'checkbox') el.checked = value;
-                else el.value = value;
-            }
+        // 基本设置
+        const chunkSizeEl = document.getElementById('ttw-chunk-size');
+        if (chunkSizeEl) chunkSizeEl.value = settings.chunkSize;
+
+        const apiTimeoutEl = document.getElementById('ttw-api-timeout');
+        if (apiTimeoutEl) apiTimeoutEl.value = Math.round((settings.apiTimeout || 120000) / 1000);
+
+        const incrementalModeEl = document.getElementById('ttw-incremental-mode');
+        if (incrementalModeEl) incrementalModeEl.checked = incrementalOutputMode;
+
+        const volumeModeEl = document.getElementById('ttw-volume-mode');
+        if (volumeModeEl) {
+            volumeModeEl.checked = useVolumeMode;
+            const indicator = document.getElementById('ttw-volume-indicator');
+            if (indicator) indicator.style.display = useVolumeMode ? 'block' : 'none';
         }
+
+        const enablePlotEl = document.getElementById('ttw-enable-plot');
+        if (enablePlotEl) enablePlotEl.checked = settings.enablePlotOutline;
+
+        const enableStyleEl = document.getElementById('ttw-enable-style');
+        if (enableStyleEl) enableStyleEl.checked = settings.enableLiteraryStyle;
+
+        // 提示词配置
+        const worldbookPromptEl = document.getElementById('ttw-worldbook-prompt');
+        if (worldbookPromptEl) worldbookPromptEl.value = settings.customWorldbookPrompt || '';
+
+        const plotPromptEl = document.getElementById('ttw-plot-prompt');
+        if (plotPromptEl) plotPromptEl.value = settings.customPlotPrompt || '';
+
+        const stylePromptEl = document.getElementById('ttw-style-prompt');
+        if (stylePromptEl) stylePromptEl.value = settings.customStylePrompt || '';
+
+        const defaultWorldbookEl = document.getElementById('ttw-default-worldbook');
+        if (defaultWorldbookEl) defaultWorldbookEl.value = settings.defaultWorldbookEntries || '';
+
+        // 并行处理设置
+        const parallelEnabledEl = document.getElementById('ttw-parallel-enabled');
+        if (parallelEnabledEl) parallelEnabledEl.checked = parallelConfig.enabled;
+
+        const parallelConcurrencyEl = document.getElementById('ttw-parallel-concurrency');
+        if (parallelConcurrencyEl) parallelConcurrencyEl.value = parallelConfig.concurrency;
+
+        const parallelModeEl = document.getElementById('ttw-parallel-mode');
+        if (parallelModeEl) parallelModeEl.value = parallelConfig.mode;
+
+        // API 设置
+        const useTavernApiEl = document.getElementById('ttw-use-tavern-api');
+        if (useTavernApiEl) {
+            useTavernApiEl.checked = settings.useTavernApi;
+            handleUseTavernApiChange();
+        }
+
+        const apiProviderEl = document.getElementById('ttw-api-provider');
+        if (apiProviderEl) apiProviderEl.value = settings.customApiProvider;
+
+        const apiKeyEl = document.getElementById('ttw-api-key');
+        if (apiKeyEl) apiKeyEl.value = settings.customApiKey;
+
+        const apiEndpointEl = document.getElementById('ttw-api-endpoint');
+        if (apiEndpointEl) apiEndpointEl.value = settings.customApiEndpoint;
+
+        const apiModelEl = document.getElementById('ttw-api-model');
+        if (apiModelEl) apiModelEl.value = settings.customApiModel;
+
+        handleProviderChange();
     }
 
     // ========== 帮助弹窗 ==========
@@ -2331,7 +2689,7 @@
         helpModal.innerHTML = `
             <div class="ttw-modal" style="max-width:650px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">❓ TXT转世界书 v2.5.2 帮助</span>
+                    <span class="ttw-modal-title">❓ TXT转世界书 v2.6.0 帮助</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
@@ -2340,7 +2698,15 @@
                         <p style="color:#ccc;line-height:1.6;margin:0;">将TXT小说转换为SillyTavern世界书格式，自动提取角色、地点、组织等信息。</p>
                     </div>
                     <div style="margin-bottom:16px;">
-                        <h4 style="color:#27ae60;margin:0 0 10px;">✨ 主要功能</h4>
+                        <h4 style="color:#27ae60;margin:0 0 10px;">🔧 API 模式</h4>
+                        <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
+                            <li><strong>使用酒馆API</strong>：勾选后使用酒馆当前连接的AI</li>
+                            <li><strong>自定义API</strong>：不勾选时，可配置独立的API</li>
+                            <li>支持：Gemini / DeepSeek / OpenAI兼容 / Gemini代理</li>
+                        </ul>
+                    </div>
+                    <div style="margin-bottom:16px;">
+                        <h4 style="color:#3498db;margin:0 0 10px;">✨ 主要功能</h4>
                         <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
                             <li><strong>📝 记忆编辑</strong>：点击记忆可编辑/复制内容</li>
                             <li><strong>🎲 重Roll功能</strong>：每个记忆可多次生成，支持自定义提示词</li>
@@ -2349,13 +2715,6 @@
                             <li><strong>📚 默认世界书</strong>：可设置每次都会添加的默认条目</li>
                             <li><strong>💾 设置导入/导出</strong>：备份和恢复你的配置</li>
                         </ul>
-                    </div>
-                    <div style="margin-bottom:16px;">
-                        <h4 style="color:#3498db;margin:0 0 10px;">💡 章节标记说明</h4>
-                        <p style="color:#ccc;line-height:1.6;margin:0;">
-                            每个记忆块会被强制标记为对应的章节号（记忆1=第1章，记忆2=第2章...），<br>
-                            AI输出的剧情大纲/剧情节点会自动添加章节标记，避免章节混乱。
-                        </p>
                     </div>
                 </div>
                 <div class="ttw-modal-footer">
@@ -2472,7 +2831,7 @@
                                 <button id="ttw-append-to-next" class="ttw-btn ttw-btn-small" ${index === memoryQueue.length - 1 ? 'disabled style="opacity:0.5;"' : ''} title="追加到下一章开头，并删除当前章">⬇️ 合并到下一章</button>
                             </div>
                         </div>
-                        <textarea id="ttw-memory-content-editor" class="ttw-textarea">${memory.content.replace(/</g, '<').replace(/>/g, '>')}</textarea>
+                        <textarea id="ttw-memory-content-editor" class="ttw-textarea">${memory.content.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</textarea>
                     </div>
                     ${resultHtml}
                 </div>
@@ -2649,6 +3008,143 @@
     // ========== UI ==========
     let modalContainer = null;
 
+    // 🔧 新增：处理「使用酒馆API」复选框变化
+    function handleUseTavernApiChange() {
+        const useTavernApi = document.getElementById('ttw-use-tavern-api')?.checked ?? true;
+        const customApiSection = document.getElementById('ttw-custom-api-section');
+        if (customApiSection) {
+            customApiSection.style.display = useTavernApi ? 'none' : 'block';
+        }
+        settings.useTavernApi = useTavernApi;
+    }
+
+    // 🔧 新增：处理 API 提供商变化
+    function handleProviderChange() {
+        const provider = document.getElementById('ttw-api-provider')?.value || 'gemini';
+        const endpointContainer = document.getElementById('ttw-endpoint-container');
+        const modelActionsContainer = document.getElementById('ttw-model-actions');
+        const modelSelectContainer = document.getElementById('ttw-model-select-container');
+        const modelInputContainer = document.getElementById('ttw-model-input-container');
+
+        if (provider === 'gemini-proxy' || provider === 'openai-compatible') {
+            if (endpointContainer) endpointContainer.style.display = 'block';
+        } else {
+            if (endpointContainer) endpointContainer.style.display = 'none';
+        }
+
+        if (provider === 'openai-compatible') {
+            if (modelActionsContainer) modelActionsContainer.style.display = 'flex';
+            if (modelInputContainer) modelInputContainer.style.display = 'block';
+            if (modelSelectContainer) modelSelectContainer.style.display = 'none';
+        } else {
+            if (modelActionsContainer) modelActionsContainer.style.display = 'none';
+            if (modelSelectContainer) modelSelectContainer.style.display = 'none';
+            if (modelInputContainer) modelInputContainer.style.display = 'block';
+        }
+
+        updateModelStatus('', '');
+    }
+
+    function updateModelStatus(text, type) {
+        const statusEl = document.getElementById('ttw-model-status');
+        if (!statusEl) return;
+        statusEl.textContent = text;
+        statusEl.className = 'ttw-model-status';
+        if (type) {
+            statusEl.classList.add(type);
+        }
+    }
+
+    async function handleFetchModels() {
+        const fetchBtn = document.getElementById('ttw-fetch-models');
+        const modelSelect = document.getElementById('ttw-model-select');
+        const modelSelectContainer = document.getElementById('ttw-model-select-container');
+        const modelInputContainer = document.getElementById('ttw-model-input-container');
+
+        saveCurrentSettings();
+
+        if (fetchBtn) {
+            fetchBtn.disabled = true;
+            fetchBtn.textContent = '⏳ 拉取中...';
+        }
+        updateModelStatus('正在拉取模型列表...', 'loading');
+
+        try {
+            const models = await fetchModelList();
+
+            if (models.length === 0) {
+                updateModelStatus('❌ 未拉取到模型', 'error');
+                if (modelInputContainer) modelInputContainer.style.display = 'block';
+                if (modelSelectContainer) modelSelectContainer.style.display = 'none';
+                return;
+            }
+
+            if (modelSelect) {
+                modelSelect.innerHTML = '<option value="">-- 请选择模型 --</option>';
+                models.forEach(model => {
+                    const option = document.createElement('option');
+                    option.value = model;
+                    option.textContent = model;
+                    modelSelect.appendChild(option);
+                });
+            }
+
+            if (modelInputContainer) modelInputContainer.style.display = 'none';
+            if (modelSelectContainer) modelSelectContainer.style.display = 'block';
+
+            const currentModel = document.getElementById('ttw-api-model')?.value;
+            if (models.includes(currentModel)) {
+                if (modelSelect) modelSelect.value = currentModel;
+            } else if (models.length > 0) {
+                if (modelSelect) modelSelect.value = models[0];
+                const modelInput = document.getElementById('ttw-api-model');
+                if (modelInput) modelInput.value = models[0];
+                saveCurrentSettings();
+            }
+
+            updateModelStatus(`✅ 找到 ${models.length} 个模型`, 'success');
+
+        } catch (error) {
+            console.error('拉取模型列表失败:', error);
+            updateModelStatus(`❌ ${error.message}`, 'error');
+            if (modelInputContainer) modelInputContainer.style.display = 'block';
+            if (modelSelectContainer) modelSelectContainer.style.display = 'none';
+        } finally {
+            if (fetchBtn) {
+                fetchBtn.disabled = false;
+                fetchBtn.textContent = '🔄 拉取模型';
+            }
+        }
+    }
+
+    async function handleQuickTest() {
+        const testBtn = document.getElementById('ttw-quick-test');
+
+        saveCurrentSettings();
+
+        if (testBtn) {
+            testBtn.disabled = true;
+            testBtn.textContent = '⏳ 测试中...';
+        }
+        updateModelStatus('正在测试连接...', 'loading');
+
+        try {
+            const result = await quickTestModel();
+            updateModelStatus(`✅ 测试成功 (${result.elapsed}ms)`, 'success');
+            if (result.response) {
+                console.log('快速测试响应:', result.response);
+            }
+        } catch (error) {
+            console.error('快速测试失败:', error);
+            updateModelStatus(`❌ ${error.message}`, 'error');
+        } finally {
+            if (testBtn) {
+                testBtn.disabled = false;
+                testBtn.textContent = '⚡ 快速测试';
+            }
+        }
+    }
+
     function createModal() {
         if (modalContainer) modalContainer.remove();
 
@@ -2658,7 +3154,7 @@
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v2.5.2</span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v2.6.0</span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -2672,15 +3168,54 @@
                             <span class="ttw-collapse-icon">▼</span>
                         </div>
                         <div class="ttw-section-content" id="ttw-settings-content">
+                            <!-- API 模式选择 -->
                             <div class="ttw-setting-card ttw-setting-card-green">
                                 <label class="ttw-checkbox-label">
-                                    <input type="checkbox" id="ttw-use-tavern-preset">
+                                    <input type="checkbox" id="ttw-use-tavern-api" checked>
                                     <div>
-                                        <span style="font-weight:bold;color:#27ae60;">🍺 使用酒馆对话补全预设</span>
-                                        <div class="ttw-setting-hint">勾选后使用酒馆当前预设</div>
+                                        <span style="font-weight:bold;color:#27ae60;">🍺 使用酒馆API</span>
+                                        <div class="ttw-setting-hint">勾选后使用酒馆当前连接的AI，不勾选则使用下方自定义API</div>
                                     </div>
                                 </label>
                             </div>
+
+                            <!-- 自定义API配置区域 -->
+                            <div id="ttw-custom-api-section" style="display:none;margin-bottom:16px;padding:12px;border:1px solid rgba(52,152,219,0.3);border-radius:8px;background:rgba(52,152,219,0.1);">
+                                <div style="font-weight:bold;color:#3498db;margin-bottom:12px;">🔧 自定义API配置</div>
+                                <div class="ttw-setting-item">
+                                    <label>API提供商</label>
+                                    <select id="ttw-api-provider">
+                                        <option value="gemini">Gemini</option>
+                                        <option value="gemini-proxy">Gemini代理</option>
+                                        <option value="deepseek">DeepSeek</option>
+                                        <option value="openai-compatible">OpenAI兼容</option>
+                                    </select>
+                                </div>
+                                <div class="ttw-setting-item">
+                                    <label>API Key <span style="opacity:0.6;font-size:11px;">(本地模型可留空)</span></label>
+                                    <input type="password" id="ttw-api-key" placeholder="输入API Key">
+                                </div>
+                                <div class="ttw-setting-item" id="ttw-endpoint-container" style="display:none;">
+                                    <label>API Endpoint</label>
+                                    <input type="text" id="ttw-api-endpoint" placeholder="https://... 或 http://127.0.0.1:5000/v1">
+                                </div>
+                                <div class="ttw-setting-item" id="ttw-model-input-container">
+                                    <label>模型</label>
+                                    <input type="text" id="ttw-api-model" value="gemini-2.5-flash" placeholder="模型名称">
+                                </div>
+                                <div class="ttw-setting-item" id="ttw-model-select-container" style="display:none;">
+                                    <label>模型</label>
+                                    <select id="ttw-model-select">
+                                        <option value="">-- 请先拉取模型列表 --</option>
+                                    </select>
+                                </div>
+                                <div class="ttw-model-actions" id="ttw-model-actions" style="display:none;">
+                                    <button id="ttw-fetch-models" class="ttw-btn ttw-btn-small">🔄 拉取模型</button>
+                                    <button id="ttw-quick-test" class="ttw-btn ttw-btn-small">⚡ 快速测试</button>
+                                    <span id="ttw-model-status" class="ttw-model-status"></span>
+                                </div>
+                            </div>
+
                             <div class="ttw-setting-card ttw-setting-card-blue">
                                 <div style="font-weight:bold;color:#3498db;margin-bottom:10px;">🚀 并行处理</div>
                                 <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
@@ -3024,6 +3559,15 @@
             .ttw-history-item-title{font-size:10px;font-weight:bold;color:#e67e22;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
             .ttw-history-item-time{font-size:9px;color:#888;}
             .ttw-history-item-info{font-size:9px;color:#aaa;}
+            .ttw-model-actions{display:flex;gap:10px;align-items:center;margin-top:12px;padding:10px;background:rgba(52,152,219,0.1);border:1px solid rgba(52,152,219,0.3);border-radius:6px;}
+            .ttw-model-status{font-size:12px;margin-left:auto;}
+            .ttw-model-status.success{color:#27ae60;}
+            .ttw-model-status.error{color:#e74c3c;}
+            .ttw-model-status.loading{color:#f39c12;}
+            .ttw-setting-item{margin-bottom:12px;}
+            .ttw-setting-item>label{display:block;margin-bottom:6px;font-size:12px;opacity:0.9;}
+            .ttw-setting-item input,.ttw-setting-item select{width:100%;padding:10px 12px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:6px;background:rgba(0,0,0,0.3);color:#fff;font-size:13px;box-sizing:border-box;}
+            .ttw-setting-item select option{background:#2a2a2a;}
             @media (max-width: 768px) {
                 .ttw-roll-history-container,.ttw-history-container{flex-direction:column;height:auto;}
                 .ttw-roll-history-left,.ttw-history-left{width:100%;max-width:100%;flex-direction:row;flex-wrap:wrap;height:auto;max-height:120px;}
@@ -3046,11 +3590,43 @@
         modalContainer.addEventListener('click', (e) => { if (e.target === modalContainer) closeModal(); });
         document.addEventListener('keydown', handleEscKey, true);
 
+        // 使用酒馆API复选框
+        document.getElementById('ttw-use-tavern-api').addEventListener('change', () => {
+            handleUseTavernApiChange();
+            saveCurrentSettings();
+        });
+
+        // API 提供商变化
+        document.getElementById('ttw-api-provider').addEventListener('change', () => {
+            handleProviderChange();
+            saveCurrentSettings();
+        });
+
+        // API 设置变化
+        ['ttw-api-key', 'ttw-api-endpoint', 'ttw-api-model'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.addEventListener('change', saveCurrentSettings);
+        });
+
+        // 模型选择变化
+        document.getElementById('ttw-model-select').addEventListener('change', (e) => {
+            if (e.target.value) {
+                document.getElementById('ttw-api-model').value = e.target.value;
+                saveCurrentSettings();
+            }
+        });
+
+        // 拉取模型按钮
+        document.getElementById('ttw-fetch-models').addEventListener('click', handleFetchModels);
+
+        // 快速测试按钮
+        document.getElementById('ttw-quick-test').addEventListener('click', handleQuickTest);
+
         ['ttw-chunk-size', 'ttw-api-timeout'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.addEventListener('change', saveCurrentSettings);
         });
-        ['ttw-incremental-mode', 'ttw-volume-mode', 'ttw-enable-plot', 'ttw-enable-style', 'ttw-use-tavern-preset'].forEach(id => {
+        ['ttw-incremental-mode', 'ttw-volume-mode', 'ttw-enable-plot', 'ttw-enable-style'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.addEventListener('change', saveCurrentSettings);
         });
@@ -3143,22 +3719,39 @@
     }
 
     function saveCurrentSettings() {
-        settings.chunkSize = parseInt(document.getElementById('ttw-chunk-size').value) || 15000;
-        settings.apiTimeout = (parseInt(document.getElementById('ttw-api-timeout').value) || 120) * 1000;
-        incrementalOutputMode = document.getElementById('ttw-incremental-mode').checked;
-        useVolumeMode = document.getElementById('ttw-volume-mode').checked;
+        settings.chunkSize = parseInt(document.getElementById('ttw-chunk-size')?.value) || 15000;
+        settings.apiTimeout = (parseInt(document.getElementById('ttw-api-timeout')?.value) || 120) * 1000;
+        incrementalOutputMode = document.getElementById('ttw-incremental-mode')?.checked ?? true;
+        useVolumeMode = document.getElementById('ttw-volume-mode')?.checked ?? false;
         settings.useVolumeMode = useVolumeMode;
-        settings.enablePlotOutline = document.getElementById('ttw-enable-plot').checked;
-        settings.enableLiteraryStyle = document.getElementById('ttw-enable-style').checked;
-        settings.customWorldbookPrompt = document.getElementById('ttw-worldbook-prompt').value;
-        settings.customPlotPrompt = document.getElementById('ttw-plot-prompt').value;
-        settings.customStylePrompt = document.getElementById('ttw-style-prompt').value;
-        settings.useTavernPreset = document.getElementById('ttw-use-tavern-preset').checked;
+        settings.enablePlotOutline = document.getElementById('ttw-enable-plot')?.checked ?? false;
+        settings.enableLiteraryStyle = document.getElementById('ttw-enable-style')?.checked ?? false;
+        settings.customWorldbookPrompt = document.getElementById('ttw-worldbook-prompt')?.value || '';
+        settings.customPlotPrompt = document.getElementById('ttw-plot-prompt')?.value || '';
+        settings.customStylePrompt = document.getElementById('ttw-style-prompt')?.value || '';
+        settings.useTavernApi = document.getElementById('ttw-use-tavern-api')?.checked ?? true;
         settings.parallelEnabled = parallelConfig.enabled;
         settings.parallelConcurrency = parallelConfig.concurrency;
         settings.parallelMode = parallelConfig.mode;
         settings.categoryLightSettings = { ...categoryLightSettings };
         settings.defaultWorldbookEntries = document.getElementById('ttw-default-worldbook')?.value || '';
+
+        // 自定义API设置
+        settings.customApiProvider = document.getElementById('ttw-api-provider')?.value || 'gemini';
+        settings.customApiKey = document.getElementById('ttw-api-key')?.value || '';
+        settings.customApiEndpoint = document.getElementById('ttw-api-endpoint')?.value || '';
+
+        // 优先从下拉框获取模型值（如果可见），否则从输入框获取
+        const modelSelectContainer = document.getElementById('ttw-model-select-container');
+        const modelSelect = document.getElementById('ttw-model-select');
+        const modelInput = document.getElementById('ttw-api-model');
+        if (modelSelectContainer && modelSelectContainer.style.display !== 'none' && modelSelect?.value) {
+            settings.customApiModel = modelSelect.value;
+            if (modelInput) modelInput.value = modelSelect.value;
+        } else {
+            settings.customApiModel = modelInput?.value || 'gemini-2.5-flash';
+        }
+
         try { localStorage.setItem('txtToWorldbookSettings', JSON.stringify(settings)); } catch (e) {}
     }
 
@@ -3175,30 +3768,15 @@
             }
         } catch (e) {}
 
-        document.getElementById('ttw-chunk-size').value = settings.chunkSize;
-        document.getElementById('ttw-api-timeout').value = Math.round((settings.apiTimeout || 120000) / 1000);
-        document.getElementById('ttw-incremental-mode').checked = incrementalOutputMode;
-        document.getElementById('ttw-volume-mode').checked = useVolumeMode;
-        document.getElementById('ttw-enable-plot').checked = settings.enablePlotOutline;
-        document.getElementById('ttw-enable-style').checked = settings.enableLiteraryStyle;
-        document.getElementById('ttw-worldbook-prompt').value = settings.customWorldbookPrompt || '';
-        document.getElementById('ttw-plot-prompt').value = settings.customPlotPrompt || '';
-        document.getElementById('ttw-style-prompt').value = settings.customStylePrompt || '';
-        document.getElementById('ttw-use-tavern-preset').checked = settings.useTavernPreset || false;
-        document.getElementById('ttw-parallel-enabled').checked = parallelConfig.enabled;
-        document.getElementById('ttw-parallel-concurrency').value = parallelConfig.concurrency;
-        document.getElementById('ttw-parallel-mode').value = parallelConfig.mode;
-        if (document.getElementById('ttw-default-worldbook')) {
-            document.getElementById('ttw-default-worldbook').value = settings.defaultWorldbookEntries || '';
-        }
-        const indicator = document.getElementById('ttw-volume-indicator');
-        if (indicator) indicator.style.display = useVolumeMode ? 'block' : 'none';
+        // 更新 UI
+        updateSettingsUI();
     }
 
     function showPromptPreview() {
         const prompt = getSystemPrompt();
         const chapterForce = getChapterForcePrompt(1);
-        alert(`当前提示词预览:\n\n使用酒馆预设: ${settings.useTavernPreset ? '是' : '否'}\n并行模式: ${parallelConfig.enabled ? parallelConfig.mode : '关闭'}\n\n【章节强制标记示例】\n${chapterForce}\n\n【系统提示词】\n${prompt.substring(0, 1500)}${prompt.length > 1500 ? '...' : ''}`);
+        const apiMode = settings.useTavernApi ? '酒馆API' : `自定义API (${settings.customApiProvider})`;
+        alert(`当前提示词预览:\n\nAPI模式: ${apiMode}\n并行模式: ${parallelConfig.enabled ? parallelConfig.mode : '关闭'}\n\n【章节强制标记示例】\n${chapterForce}\n\n【系统提示词】\n${prompt.substring(0, 1500)}${prompt.length > 1500 ? '...' : ''}`);
     }
 
     async function checkAndRestoreState() {
@@ -3408,7 +3986,6 @@
         memoryQueue.forEach((memory, index) => { memory.title = `记忆${index + 1}`; });
     }
 
-    // ========== 修复：清除文件时清空所有历史 ==========
     async function clearFile() {
         currentFile = null;
         memoryQueue = [];
@@ -3419,7 +3996,6 @@
         userSelectedStartIndex = null;
         currentFileHash = null;
 
-        // 清空IndexedDB中的所有历史记录
         try {
             await MemoryHistoryDB.clearAllHistory();
             await MemoryHistoryDB.clearAllRolls();
@@ -3443,6 +4019,20 @@
     async function startConversion() {
         saveCurrentSettings();
         if (memoryQueue.length === 0) { alert('请先上传文件'); return; }
+
+        // 检查 API 配置
+        if (!settings.useTavernApi) {
+            const provider = settings.customApiProvider;
+            if ((provider === 'gemini' || provider === 'deepseek' || provider === 'gemini-proxy') && !settings.customApiKey) {
+                alert('请先设置 API Key');
+                return;
+            }
+            if ((provider === 'gemini-proxy' || provider === 'openai-compatible') && !settings.customApiEndpoint) {
+                alert('请先设置 API Endpoint');
+                return;
+            }
+        }
+
         await startAIProcessing();
     }
 
@@ -3725,8 +4315,11 @@
         getCategoryLightSettings: () => categoryLightSettings,
         setCategoryLight: setCategoryLightState,
         rebuildWorldbook: rebuildWorldbookFromMemories,
-        applyDefaultWorldbook: applyDefaultWorldbookEntries
+        applyDefaultWorldbook: applyDefaultWorldbookEntries,
+        getSettings: () => settings,
+        callCustomAPI,
+        callSillyTavernAPI
     };
 
-    console.log('📚 TxtToWorldbook v2.5.2 已加载');
+    console.log('📚 TxtToWorldbook v2.6.0 已加载');
 })();
