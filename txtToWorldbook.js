@@ -1,6 +1,27 @@
+Master想要做的是：
+1. 添加一个勾选项：「强制记忆为章节」
+2. 只有勾选这个选项时，才在发送记忆前后加 `getChapterForcePrompt(chapterIndex)` 这个提示词
+3. 其他代码不要动
+
+让我找找代码里哪些地方用到了 `chapterForcePrompt`：
+
+1. `processMemoryChunkIndependent` 函数 - 并行处理时
+2. `processMemoryChunk` 函数 - 串行处理时
+3. `repairSingleMemory` 函数 - 修复失败记忆时
+
+需要做的修改：
+1. 在 `defaultSettings` 里加一个 `forceChapterMarker: true` (默认开启保持原有行为)
+2. 在设置UI里加一个勾选框
+3. 修改上面三个函数，只在 `settings.forceChapterMarker` 为 true 时才加提示词
+4. 在 `saveCurrentSettings` 和 `loadSavedSettings` / `updateSettingsUI` 里处理这个设置
+
+开工！
+</thinking>
+
+```javascript
 /**
- * TXT转世界书独立模块 v2.6.0
- * 修复: 导入配置后UI不更新、新增自定义API支持
+ * TXT转世界书独立模块 v2.6.1
+ * 新增: 「强制记忆为章节」勾选项，控制是否添加章节强制标记提示词
  */
 
 (function() {
@@ -135,16 +156,16 @@
         parallelEnabled: true,
         parallelConcurrency: 3,
         parallelMode: 'independent',
-        useTavernApi: true,  // 🔧 新增：是否使用酒馆API
+        useTavernApi: true,
         customMergePrompt: '',
         categoryLightSettings: null,
         defaultWorldbookEntries: '',
         customRerollPrompt: '',
-        // 🔧 新增：自定义API配置
         customApiProvider: 'gemini',
         customApiKey: '',
         customApiEndpoint: '',
-        customApiModel: 'gemini-2.5-flash'
+        customApiModel: 'gemini-2.5-flash',
+        forceChapterMarker: true  // 🔧 新增：强制记忆为章节
     };
 
     let settings = { ...defaultSettings };
@@ -752,7 +773,6 @@
                 throw new Error(`不支持的API提供商: ${provider}`);
         }
 
-        // 添加超时控制
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeout);
         requestOptions.signal = controller.signal;
@@ -1055,6 +1075,8 @@
     // ========== 后处理添加章节编号后缀 ==========
     function postProcessResultWithChapterIndex(result, chapterIndex) {
         if (!result || typeof result !== 'object') return result;
+        // 只有开启强制章节标记时才进行后处理
+        if (!settings.forceChapterMarker) return result;
 
         const processed = {};
         for (const category in result) {
@@ -1330,7 +1352,8 @@
         memory.processing = true;
         updateMemoryQueueUI();
 
-        const chapterForcePrompt = getChapterForcePrompt(chapterIndex);
+        // 🔧 修改：只有开启强制章节标记时才添加
+        const chapterForcePrompt = settings.forceChapterMarker ? getChapterForcePrompt(chapterIndex) : '';
 
         let prompt = chapterForcePrompt;
         prompt += getLanguagePrefix() + getSystemPrompt();
@@ -1346,8 +1369,12 @@
 
         prompt += `\n\n当前需要分析的内容（第${chapterIndex}章）：\n---\n${memory.content}\n---\n`;
         prompt += `\n请提取角色、地点、组织等信息，直接输出JSON。`;
-        prompt += `\n\n【重要提醒】如果输出剧情大纲或剧情节点，条目名称必须包含"第${chapterIndex}章"！`;
-        prompt += chapterForcePrompt;
+
+        // 🔧 修改：只有开启强制章节标记时才添加提醒
+        if (settings.forceChapterMarker) {
+            prompt += `\n\n【重要提醒】如果输出剧情大纲或剧情节点，条目名称必须包含"第${chapterIndex}章"！`;
+            prompt += chapterForcePrompt;
+        }
 
         if (customPromptSuffix) {
             prompt += `\n\n${customPromptSuffix}`;
@@ -1475,7 +1502,8 @@
         memory.processing = true;
         updateMemoryQueueUI();
 
-        const chapterForcePrompt = getChapterForcePrompt(chapterIndex);
+        // 🔧 修改：只有开启强制章节标记时才添加
+        const chapterForcePrompt = settings.forceChapterMarker ? getChapterForcePrompt(chapterIndex) : '';
 
         let prompt = chapterForcePrompt;
         prompt += getLanguagePrefix() + getSystemPrompt();
@@ -1498,9 +1526,15 @@
         } else {
             prompt += `\n请累积补充世界书。`;
         }
-        prompt += `\n\n【重要提醒】如果输出剧情大纲或剧情节点，条目名称必须包含"第${chapterIndex}章"！`;
-        prompt += `\n直接输出JSON格式结果。`;
-        prompt += chapterForcePrompt;
+
+        // 🔧 修改：只有开启强制章节标记时才添加提醒
+        if (settings.forceChapterMarker) {
+            prompt += `\n\n【重要提醒】如果输出剧情大纲或剧情节点，条目名称必须包含"第${chapterIndex}章"！`;
+            prompt += `\n直接输出JSON格式结果。`;
+            prompt += chapterForcePrompt;
+        } else {
+            prompt += `\n直接输出JSON格式结果。`;
+        }
 
         try {
             const response = await callAPI(prompt);
@@ -1622,7 +1656,7 @@
         activeParallelTasks.clear();
 
         updateStreamContent('', true);
-        updateStreamContent(`🚀 开始处理...\n📊 处理模式: ${parallelConfig.enabled ? `并行 (${parallelConfig.concurrency}并发)` : '串行'}\n🔧 API模式: ${settings.useTavernApi ? '酒馆API' : '自定义API (' + settings.customApiProvider + ')'}\n${'='.repeat(50)}\n`);
+        updateStreamContent(`🚀 开始处理...\n📊 处理模式: ${parallelConfig.enabled ? `并行 (${parallelConfig.concurrency}并发)` : '串行'}\n🔧 API模式: ${settings.useTavernApi ? '酒馆API' : '自定义API (' + settings.customApiProvider + ')'}\n📌 强制章节标记: ${settings.forceChapterMarker ? '开启' : '关闭'}\n${'='.repeat(50)}\n`);
 
         const effectiveStartIndex = userSelectedStartIndex !== null ? userSelectedStartIndex : startFromIndex;
 
@@ -1761,7 +1795,9 @@
     async function repairSingleMemory(index) {
         const memory = memoryQueue[index];
         const chapterIndex = index + 1;
-        const chapterForcePrompt = getChapterForcePrompt(chapterIndex);
+
+        // 🔧 修改：只有开启强制章节标记时才添加
+        const chapterForcePrompt = settings.forceChapterMarker ? getChapterForcePrompt(chapterIndex) : '';
 
         let prompt = chapterForcePrompt;
         prompt += getLanguagePrefix() + `你是世界书生成专家。请提取关键信息。
@@ -1779,7 +1815,11 @@
             prompt += `当前世界书：\n${JSON.stringify(generatedWorldbook, null, 2)}\n\n`;
         }
         prompt += `阅读内容（第${chapterIndex}章）：\n---\n${memory.content}\n---\n\n请输出JSON。`;
-        prompt += chapterForcePrompt;
+
+        // 🔧 修改：只有开启强制章节标记时才添加
+        if (settings.forceChapterMarker) {
+            prompt += chapterForcePrompt;
+        }
 
         const response = await callAPI(prompt);
         let memoryUpdate = parseAIResponse(response);
@@ -2468,7 +2508,7 @@
 
     async function exportTaskState() {
         const state = {
-            version: '2.6.0',
+            version: '2.6.1',
             timestamp: Date.now(),
             memoryQueue,
             generatedWorldbook,
@@ -2555,7 +2595,7 @@
         saveCurrentSettings();
 
         const exportData = {
-            version: '2.6.0',
+            version: '2.6.1',
             type: 'settings',
             timestamp: Date.now(),
             settings: { ...settings },
@@ -2586,7 +2626,6 @@
                 const data = JSON.parse(content);
                 if (data.type !== 'settings') throw new Error('不是有效的配置文件');
 
-                // 🔧 修复：先更新 settings 对象，再更新 UI
                 if (data.settings) {
                     settings = { ...defaultSettings, ...data.settings };
                 }
@@ -2597,9 +2636,7 @@
                     categoryLightSettings = { ...categoryLightSettings, ...data.categoryLightSettings };
                 }
 
-                // 🔧 修复：先更新 UI，再保存设置
                 updateSettingsUI();
-                // 不要在这里调用 saveCurrentSettings()，否则会把 UI 的空值覆盖回去
 
                 alert('配置导入成功！');
             } catch (error) {
@@ -2610,7 +2647,6 @@
     }
 
     function updateSettingsUI() {
-        // 基本设置
         const chunkSizeEl = document.getElementById('ttw-chunk-size');
         if (chunkSizeEl) chunkSizeEl.value = settings.chunkSize;
 
@@ -2633,7 +2669,6 @@
         const enableStyleEl = document.getElementById('ttw-enable-style');
         if (enableStyleEl) enableStyleEl.checked = settings.enableLiteraryStyle;
 
-        // 提示词配置
         const worldbookPromptEl = document.getElementById('ttw-worldbook-prompt');
         if (worldbookPromptEl) worldbookPromptEl.value = settings.customWorldbookPrompt || '';
 
@@ -2646,7 +2681,6 @@
         const defaultWorldbookEl = document.getElementById('ttw-default-worldbook');
         if (defaultWorldbookEl) defaultWorldbookEl.value = settings.defaultWorldbookEntries || '';
 
-        // 并行处理设置
         const parallelEnabledEl = document.getElementById('ttw-parallel-enabled');
         if (parallelEnabledEl) parallelEnabledEl.checked = parallelConfig.enabled;
 
@@ -2656,7 +2690,6 @@
         const parallelModeEl = document.getElementById('ttw-parallel-mode');
         if (parallelModeEl) parallelModeEl.value = parallelConfig.mode;
 
-        // API 设置
         const useTavernApiEl = document.getElementById('ttw-use-tavern-api');
         if (useTavernApiEl) {
             useTavernApiEl.checked = settings.useTavernApi;
@@ -2675,6 +2708,10 @@
         const apiModelEl = document.getElementById('ttw-api-model');
         if (apiModelEl) apiModelEl.value = settings.customApiModel;
 
+        // 🔧 新增：强制章节标记
+        const forceChapterMarkerEl = document.getElementById('ttw-force-chapter-marker');
+        if (forceChapterMarkerEl) forceChapterMarkerEl.checked = settings.forceChapterMarker;
+
         handleProviderChange();
     }
 
@@ -2689,7 +2726,7 @@
         helpModal.innerHTML = `
             <div class="ttw-modal" style="max-width:650px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">❓ TXT转世界书 v2.6.0 帮助</span>
+                    <span class="ttw-modal-title">❓ TXT转世界书 v2.6.1 帮助</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
@@ -2714,6 +2751,7 @@
                             <li><strong>🔵🟢 灯状态切换</strong>：每个分类可单独设置蓝灯(常驻)或绿灯(触发)</li>
                             <li><strong>📚 默认世界书</strong>：可设置每次都会添加的默认条目</li>
                             <li><strong>💾 设置导入/导出</strong>：备份和恢复你的配置</li>
+                            <li><strong>📌 强制章节标记</strong>：开启后会强制AI按记忆序号标记章节</li>
                         </ul>
                     </div>
                 </div>
@@ -3008,7 +3046,6 @@
     // ========== UI ==========
     let modalContainer = null;
 
-    // 🔧 新增：处理「使用酒馆API」复选框变化
     function handleUseTavernApiChange() {
         const useTavernApi = document.getElementById('ttw-use-tavern-api')?.checked ?? true;
         const customApiSection = document.getElementById('ttw-custom-api-section');
@@ -3018,7 +3055,6 @@
         settings.useTavernApi = useTavernApi;
     }
 
-    // 🔧 新增：处理 API 提供商变化
     function handleProviderChange() {
         const provider = document.getElementById('ttw-api-provider')?.value || 'gemini';
         const endpointContainer = document.getElementById('ttw-endpoint-container');
@@ -3154,7 +3190,7 @@
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v2.6.0</span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v2.6.1</span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -3258,6 +3294,14 @@
                                     <div>
                                         <span>📦 分卷模式</span>
                                         <div class="ttw-setting-hint">上下文超限时自动分卷，避免记忆分裂</div>
+                                    </div>
+                                </label>
+                                <!-- 🔧 新增：强制章节标记勾选框 -->
+                                <label class="ttw-checkbox-label ttw-checkbox-with-hint" style="background:rgba(230,126,34,0.15);border:1px solid rgba(230,126,34,0.3);">
+                                    <input type="checkbox" id="ttw-force-chapter-marker" checked>
+                                    <div>
+                                        <span style="color:#e67e22;">📌 强制记忆为章节</span>
+                                        <div class="ttw-setting-hint">开启后会在提示词中强制AI将每个记忆块视为对应章节（如记忆1=第1章），关闭后AI将根据原文章节信息处理</div>
                                     </div>
                                 </label>
                             </div>
@@ -3590,25 +3634,21 @@
         modalContainer.addEventListener('click', (e) => { if (e.target === modalContainer) closeModal(); });
         document.addEventListener('keydown', handleEscKey, true);
 
-        // 使用酒馆API复选框
         document.getElementById('ttw-use-tavern-api').addEventListener('change', () => {
             handleUseTavernApiChange();
             saveCurrentSettings();
         });
 
-        // API 提供商变化
         document.getElementById('ttw-api-provider').addEventListener('change', () => {
             handleProviderChange();
             saveCurrentSettings();
         });
 
-        // API 设置变化
         ['ttw-api-key', 'ttw-api-endpoint', 'ttw-api-model'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.addEventListener('change', saveCurrentSettings);
         });
 
-        // 模型选择变化
         document.getElementById('ttw-model-select').addEventListener('change', (e) => {
             if (e.target.value) {
                 document.getElementById('ttw-api-model').value = e.target.value;
@@ -3616,17 +3656,14 @@
             }
         });
 
-        // 拉取模型按钮
         document.getElementById('ttw-fetch-models').addEventListener('click', handleFetchModels);
-
-        // 快速测试按钮
         document.getElementById('ttw-quick-test').addEventListener('click', handleQuickTest);
 
         ['ttw-chunk-size', 'ttw-api-timeout'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.addEventListener('change', saveCurrentSettings);
         });
-        ['ttw-incremental-mode', 'ttw-volume-mode', 'ttw-enable-plot', 'ttw-enable-style'].forEach(id => {
+        ['ttw-incremental-mode', 'ttw-volume-mode', 'ttw-enable-plot', 'ttw-enable-style', 'ttw-force-chapter-marker'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.addEventListener('change', saveCurrentSettings);
         });
@@ -3736,12 +3773,13 @@
         settings.categoryLightSettings = { ...categoryLightSettings };
         settings.defaultWorldbookEntries = document.getElementById('ttw-default-worldbook')?.value || '';
 
-        // 自定义API设置
+        // 🔧 新增：强制章节标记
+        settings.forceChapterMarker = document.getElementById('ttw-force-chapter-marker')?.checked ?? true;
+
         settings.customApiProvider = document.getElementById('ttw-api-provider')?.value || 'gemini';
         settings.customApiKey = document.getElementById('ttw-api-key')?.value || '';
         settings.customApiEndpoint = document.getElementById('ttw-api-endpoint')?.value || '';
 
-        // 优先从下拉框获取模型值（如果可见），否则从输入框获取
         const modelSelectContainer = document.getElementById('ttw-model-select-container');
         const modelSelect = document.getElementById('ttw-model-select');
         const modelInput = document.getElementById('ttw-api-model');
@@ -3768,15 +3806,14 @@
             }
         } catch (e) {}
 
-        // 更新 UI
         updateSettingsUI();
     }
 
     function showPromptPreview() {
         const prompt = getSystemPrompt();
-        const chapterForce = getChapterForcePrompt(1);
+        const chapterForce = settings.forceChapterMarker ? getChapterForcePrompt(1) : '(已关闭)';
         const apiMode = settings.useTavernApi ? '酒馆API' : `自定义API (${settings.customApiProvider})`;
-        alert(`当前提示词预览:\n\nAPI模式: ${apiMode}\n并行模式: ${parallelConfig.enabled ? parallelConfig.mode : '关闭'}\n\n【章节强制标记示例】\n${chapterForce}\n\n【系统提示词】\n${prompt.substring(0, 1500)}${prompt.length > 1500 ? '...' : ''}`);
+        alert(`当前提示词预览:\n\nAPI模式: ${apiMode}\n并行模式: ${parallelConfig.enabled ? parallelConfig.mode : '关闭'}\n强制章节标记: ${settings.forceChapterMarker ? '开启' : '关闭'}\n\n【章节强制标记示例】\n${chapterForce}\n\n【系统提示词】\n${prompt.substring(0, 1500)}${prompt.length > 1500 ? '...' : ''}`);
     }
 
     async function checkAndRestoreState() {
@@ -4020,7 +4057,6 @@
         saveCurrentSettings();
         if (memoryQueue.length === 0) { alert('请先上传文件'); return; }
 
-        // 检查 API 配置
         if (!settings.useTavernApi) {
             const provider = settings.customApiProvider;
             if ((provider === 'gemini' || provider === 'deepseek' || provider === 'gemini-proxy') && !settings.customApiKey) {
@@ -4321,5 +4357,5 @@
         callSillyTavernAPI
     };
 
-    console.log('📚 TxtToWorldbook v2.6.0 已加载');
+    console.log('📚 TxtToWorldbook v2.6.1 已加载');
 })();
