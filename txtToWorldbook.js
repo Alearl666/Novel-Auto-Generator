@@ -1,4 +1,43 @@
+Master说的是"已处理"按钮点进去的弹窗(`showProcessedResults`函数创建的modal)里面的左侧列表项太大了，不是外面章节队列的`.ttw-memory-item`。
 
+我之前改错了地方！Master要的是`showProcessedResults`函数里的`.ttw-processed-item`的样式，不是`.ttw-memory-item`。
+
+让我找到问题所在：
+
+1. `showProcessedResults`函数中创建的列表项使用的是内联样式：
+```javascript
+listHtml += `
+    <div class="ttw-processed-item" data-index="${realIndex}" style="padding:10px 12px;background:rgba(0,0,0,0.2);border-radius:6px;margin-bottom:8px;cursor:pointer;border-left:3px solid #27ae60;">
+        <div style="font-weight:bold;color:#27ae60;margin-bottom:4px;">✅ 第${realIndex + 1}章 - ${memory.title}</div>
+        <div style="font-size:11px;color:#888;">${entryCount} 个条目 | ${memory.content.length.toLocaleString()} 字</div>
+    </div>
+`;
+```
+
+这个`padding:10px 12px`和字号在手机上太大了。
+
+需要：
+1. 把`.ttw-memory-item`的样式改回原来的（我之前错改了）
+2. 把`showProcessedResults`里的`.ttw-processed-item`内联样式改小
+
+参考roll历史的样式：`.ttw-roll-item{padding:6px 8px;...}`，字号大概9-11px。
+
+所以修改：
+1. CSS里`.ttw-memory-item`改回`padding:8px 12px;font-size:13px;`
+2. `showProcessedResults`函数里的内联样式改小：`padding:6px 8px`，字号改小
+
+还要加移动端媒体查询针对`.ttw-processed-item`。
+
+让我只改BUG，其他代码不动。
+</thinking>
+
+明白了Master！你说的是点击「📊 已处理」按钮弹出的那个窗口里面的左侧列表太大，不是外面的章节队列。
+
+我之前改错地方了，现在改正：
+1. 把外面的`.ttw-memory-item`改回原来的大小
+2. 把`showProcessedResults`函数里的`.ttw-processed-item`内联样式改小
+
+```javascript
 /**
  * TXT转世界书独立模块 v2.7.1
  * 修复: 移动端UI优化、按类别勾选条目、别名识别发送内容
@@ -3582,7 +3621,7 @@ ${groupsWithContent}
         });
     }
 
-    // ========== 查看已处理结果 ==========
+    // ========== 查看已处理结果 - 修复：缩小左侧列表项大小 ==========
     function showProcessedResults() {
         const processedMemories = memoryQueue.filter(m => m.processed && !m.failed && m.result);
         if (processedMemories.length === 0) { alert('暂无已处理的结果'); return; }
@@ -3594,10 +3633,11 @@ ${groupsWithContent}
         processedMemories.forEach((memory) => {
             const realIndex = memoryQueue.indexOf(memory);
             const entryCount = memory.result ? Object.keys(memory.result).reduce((sum, cat) => sum + (typeof memory.result[cat] === 'object' ? Object.keys(memory.result[cat]).length : 0), 0) : 0;
+            // 修复：缩小padding和字号，参考roll历史的样式
             listHtml += `
-                <div class="ttw-processed-item" data-index="${realIndex}" style="padding:10px 12px;background:rgba(0,0,0,0.2);border-radius:6px;margin-bottom:8px;cursor:pointer;border-left:3px solid #27ae60;">
-                    <div style="font-weight:bold;color:#27ae60;margin-bottom:4px;">✅ 第${realIndex + 1}章 - ${memory.title}</div>
-                    <div style="font-size:11px;color:#888;">${entryCount} 个条目 | ${memory.content.length.toLocaleString()} 字</div>
+                <div class="ttw-processed-item" data-index="${realIndex}" style="padding:6px 8px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:4px;cursor:pointer;border-left:2px solid #27ae60;">
+                    <div style="font-size:11px;font-weight:bold;color:#27ae60;">✅ 第${realIndex + 1}章</div>
+                    <div style="font-size:9px;color:#888;">${entryCount}条 | ${(memory.content.length / 1000).toFixed(1)}k字</div>
                 </div>
             `;
         });
@@ -3612,10 +3652,10 @@ ${groupsWithContent}
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body">
-                    <div style="display:flex;gap:15px;height:450px;">
-                        <div style="width:250px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:8px;padding:10px;">${listHtml}</div>
+                    <div class="ttw-processed-results-container" style="display:flex;gap:10px;height:450px;">
+                        <div class="ttw-processed-results-left" style="width:100px;min-width:100px;max-width:100px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:8px;padding:8px;">${listHtml}</div>
                         <div id="ttw-result-detail" style="flex:1;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:8px;padding:15px;">
-                            <div style="text-align:center;color:#888;padding:40px;">👈 点击左侧章节查看结果</div>
+                            <div style="text-align:center;color:#888;padding:40px;font-size:12px;">👈 点击左侧章节查看结果</div>
                         </div>
                     </div>
                 </div>
@@ -3640,7 +3680,7 @@ ${groupsWithContent}
                 if (memory && memory.result) {
                     detailDiv.innerHTML = `
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                            <h4 style="color:#27ae60;margin:0;">第${index + 1}章 - ${memory.title}</h4>
+                            <h4 style="color:#27ae60;margin:0;font-size:14px;">第${index + 1}章 - ${memory.title}</h4>
                             <button class="ttw-btn ttw-btn-small" id="ttw-copy-result">📋 复制</button>
                         </div>
                         <pre style="white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.5;">${JSON.stringify(memory.result, null, 2)}</pre>
@@ -4167,9 +4207,8 @@ ${groupsWithContent}
             .ttw-upload-area:hover{border-color:#e67e22;background:rgba(230,126,34,0.1);}
             .ttw-file-info{display:none;align-items:center;gap:12px;padding:12px;background:rgba(0,0,0,0.3);border-radius:6px;margin-top:12px;}
             .ttw-memory-queue{max-height:200px;overflow-y:auto;}
-            .ttw-memory-item{padding:6px 10px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:4px;font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;transition:background 0.2s;}
+            .ttw-memory-item{padding:8px 12px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:6px;font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer;transition:background 0.2s;}
             .ttw-memory-item:hover{background:rgba(0,0,0,0.4);}
-            .ttw-memory-item small{font-size:10px;color:#888;}
             .ttw-progress-bar{width:100%;height:8px;background:rgba(0,0,0,0.3);border-radius:4px;overflow:hidden;margin-bottom:12px;}
             .ttw-progress-fill{height:100%;background:linear-gradient(90deg,#e67e22,#f39c12);border-radius:4px;transition:width 0.3s;width:0%;}
             .ttw-progress-text{font-size:13px;text-align:center;margin-bottom:12px;}
@@ -4215,7 +4254,6 @@ ${groupsWithContent}
             .ttw-history-left{width:100px;min-width:100px;max-width:100px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;}
             .ttw-history-right{flex:1;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:8px;padding:12px;}
             .ttw-history-item{padding:6px 8px;background:rgba(0,0,0,0.2);border-radius:4px;cursor:pointer;border-left:2px solid #9b59b6;transition:all 0.2s;}
-            .ttw-history-item{padding:6px 8px;background:rgba(0,0,0,0.2);border-radius:4px;cursor:pointer;border-left:2px solid #9b59b6;transition:all 0.2s;}
             .ttw-history-item:hover,.ttw-history-item.active{background:rgba(0,0,0,0.4);}
             .ttw-history-item-title{font-size:10px;font-weight:bold;color:#e67e22;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
             .ttw-history-item-time{font-size:9px;color:#888;}
@@ -4230,14 +4268,14 @@ ${groupsWithContent}
             .ttw-setting-item input,.ttw-setting-item select{width:100%;padding:10px 12px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:6px;background:rgba(0,0,0,0.3);color:#fff;font-size:13px;box-sizing:border-box;}
             .ttw-setting-item select option{background:#2a2a2a;}
             @media (max-width: 768px) {
-                .ttw-memory-item{padding:4px 8px;font-size:11px;gap:4px;}
-                .ttw-memory-item small{font-size:9px;}
                 .ttw-roll-history-container,.ttw-history-container{flex-direction:column;height:auto;}
                 .ttw-roll-history-left,.ttw-history-left{width:100%;max-width:100%;flex-direction:row;flex-wrap:wrap;height:auto;max-height:120px;}
                 .ttw-roll-reroll-btn{width:auto;flex-shrink:0;}
                 .ttw-roll-list{flex-direction:row;flex-wrap:wrap;gap:4px;}
                 .ttw-roll-item,.ttw-history-item{flex:0 0 auto;padding:4px 8px;}
                 .ttw-roll-history-right,.ttw-history-right{min-height:250px;}
+                .ttw-processed-results-container{flex-direction:column !important;height:auto !important;}
+                .ttw-processed-results-left{width:100% !important;max-width:100% !important;max-height:150px !important;flex-direction:row !important;flex-wrap:wrap !important;}
             }
         `;
         document.head.appendChild(styles);
@@ -4722,7 +4760,7 @@ ${groupsWithContent}
             if (memory.processing) statusIcon = '🔄';
             else if (memory.processed && !memory.failed) statusIcon = '✅';
             else if (memory.failed) statusIcon = '❗';
-            item.innerHTML = `<span>${statusIcon}</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">第${index + 1}章</span><small>${(memory.content.length / 1000).toFixed(1)}k</small>${memory.failed ? `<small style="color:#e74c3c;">错误</small>` : ''}`;
+            item.innerHTML = `<span>${statusIcon}</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">第${index + 1}章</span><small style="font-size:11px;color:#888;">${(memory.content.length / 1000).toFixed(1)}k</small>${memory.failed ? `<small style="color:#e74c3c;font-size:11px;">错误</small>` : ''}`;
             item.addEventListener('click', () => showMemoryContentModal(index));
             container.appendChild(item);
         });
