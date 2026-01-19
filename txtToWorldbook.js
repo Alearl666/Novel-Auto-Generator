@@ -2744,71 +2744,211 @@
     }
 
     // 修复：发送内容摘要给AI判断
+    // 生成两两配对
+    function generatePairs(group) {
+        const pairs = [];
+        for (let i = 0; i < group.length; i++) {
+            for (let j = i + 1; j < group.length; j++) {
+                pairs.push([group[i], group[j]]);
+            }
+        }
+        return pairs;
+    }
+
+    // 并查集类 - 用于合并确认的同一人
+    class UnionFind {
+        constructor(items) {
+            this.parent = {};
+            this.rank = {};
+            items.forEach(item => {
+                this.parent[item] = item;
+                this.rank[item] = 0;
+            });
+        }
+
+        find(x) {
+            if (this.parent[x] !== x) {
+                this.parent[x] = this.find(this.parent[x]);
+            }
+            return this.parent[x];
+        }
+
+        union(x, y) {
+            const rootX = this.find(x);
+            const rootY = this.find(y);
+            if (rootX === rootY) return;
+
+            if (this.rank[rootX] < this.rank[rootY]) {
+                this.parent[rootX] = rootY;
+            } else if (this.rank[rootX] > this.rank[rootY]) {
+                this.parent[rootY] = rootX;
+            } else {
+                this.parent[rootY] = rootX;
+                this.rank[rootX]++;
+            }
+        }
+
+        getGroups() {
+            const groups = {};
+            for (const item in this.parent) {
+                const root = this.find(item);
+                if (!groups[root]) groups[root] = [];
+                groups[root].push(item);
+            }
+            return Object.values(groups).filter(g => g.length > 1);
+        }
+    }
+
+    // 两两判断版本
     async function verifyDuplicatesWithAI(suspectedGroups) {
-        if (suspectedGroups.length === 0) return [];
+        if (suspectedGroups.length === 0) return { pairResults: [], mergedGroups: [] };
 
         const characters = generatedWorldbook['角色'];
 
-        // 构建带内容摘要的组信息
-        const groupsWithContent = suspectedGroups.map((group, i) => {
-            const entries = group.map(name => {
-                const entry = characters[name];
-                const keywords = entry?.['关键词']?.join(', ') || '无';
-                const content = (entry?.['内容'] || '').substring(0, 400); // 取前400字作为摘要
-                return `  - **${name}**\n    关键词: ${keywords}\n    内容摘要: ${content}${content.length >= 400 ? '...' : ''}`;
-            }).join('\n');
-            return `组${i + 1}:\n${entries}`;
+        // 收集所有需要判断的配对
+        const allPairs = [];
+        const allNames = new Set();
+
+        for (const group of suspectedGroups) {
+            const pairs = generatePairs(group);
+            pairs.forEach(pair => {
+                allPairs.push(pair);
+                allNames.add(pair[0]);
+                allNames.add(pair[1]);
+            });
+        }
+
+        if (allPairs.length === 0) return { pairResults: [], mergedGroups: [] };
+
+        // 构建配对信息
+        const pairsWithContent = allPairs.map((pair, i) => {
+            const [nameA, nameB] = pair;
+            const entryA = characters[nameA];
+            const entryB = characters[nameB];
+
+            const keywordsA = entryA?.['关键词']?.join(', ') || '无';
+            const keywordsB = entryB?.['关键词']?.join(', ') || '无';
+            const contentA = (entryA?.['内容'] || '').substring(0, 300);
+            const contentB = (entryB?.['内容'] || '').substring(0, 300);
+
+            return `配对${i + 1}: 「${nameA}」vs「${nameB}」
+  【${nameA}】关键词: ${keywordsA}
+  内容摘要: ${contentA}${contentA.length >= 300 ? '...' : ''}
+  【${nameB}】关键词: ${keywordsB}
+  内容摘要: ${contentB}${contentB.length >= 300 ? '...' : ''}`;
         }).join('\n\n');
 
-        const prompt = getLanguagePrefix() + `你是角色识别专家。请根据以下每组角色的关键词和内容摘要，判断它们是否为同一人物。
+        const prompt = getLanguagePrefix() + `你是角色识别专家。请对以下每一对角色进行判断，判断它们是否为同一人物。
 
-## 疑似同人组（含关键词和内容摘要）
-${groupsWithContent}
+## 待判断的角色配对
+${pairsWithContent}
 
 ## 判断依据
 - 仔细阅读每个角色的关键词和内容摘要
 - 根据描述的性别、身份、背景、外貌等信息判断
 - 考虑：全名vs昵称、姓vs名、绰号等称呼变化
 - 如果内容描述明显指向同一个人，则判定为同一人
+- 【重要】即使名字相似，如果性别、身份、背景明显不同，也要判定为不同人
 
 ## 要求
-- 如果是同一人，选择最完整/最常用的名称作为mainName
+- 对每一对分别判断
+- 如果是同一人，选择更完整/更常用的名称作为mainName
 - 如果不是同一人，说明原因
 - 返回JSON格式
 
 ## 输出格式
 {
     "results": [
-        {"group": 1, "isSamePerson": true, "mainName": "最完整的名称", "reason": "判断依据"},
-        {"group": 2, "isSamePerson": false, "reason": "不是同一人的原因"}
+        {"pair": 1, "nameA": "角色A名", "nameB": "角色B名", "isSamePerson": true, "mainName": "保留的名称", "reason": "判断依据"},
+        {"pair": 2, "nameA": "角色A名", "nameB": "角色B名", "isSamePerson": false, "reason": "不是同一人的原因"}
     ]
 }`;
 
+        updateStreamContent('\n🤖 发送两两配对判断请求...\n');
         const response = await callAPI(prompt);
-        return parseAIResponse(response);
+        const aiResult = parseAIResponse(response);
+
+        // 使用并查集合并结果
+        const uf = new UnionFind([...allNames]);
+        const pairResults = [];
+
+        for (const result of aiResult.results || []) {
+            const pairIndex = (result.pair || 1) - 1;
+            if (pairIndex < 0 || pairIndex >= allPairs.length) continue;
+
+            const [nameA, nameB] = allPairs[pairIndex];
+            pairResults.push({
+                nameA: result.nameA || nameA,
+                nameB: result.nameB || nameB,
+                isSamePerson: result.isSamePerson,
+                mainName: result.mainName,
+                reason: result.reason
+            });
+
+            if (result.isSamePerson) {
+                uf.union(nameA, nameB);
+            }
+        }
+
+        // 获取合并后的组
+        const mergedGroups = uf.getGroups();
+
+        // 为每个组确定mainName（选择内容最长的或AI指定的）
+        const finalGroups = mergedGroups.map(group => {
+            // 找到AI为这个组成员指定的mainName
+            let mainName = null;
+            for (const result of pairResults) {
+                if (result.isSamePerson && result.mainName) {
+                    if (group.includes(result.nameA) || group.includes(result.nameB)) {
+                        if (group.includes(result.mainName)) {
+                            mainName = result.mainName;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // 如果没找到，选内容最长的
+            if (!mainName) {
+                let maxLen = 0;
+                for (const name of group) {
+                    const len = (characters[name]?.['内容'] || '').length;
+                    if (len > maxLen) {
+                        maxLen = len;
+                        mainName = name;
+                    }
+                }
+            }
+
+            return { names: group, mainName: mainName || group[0] };
+        });
+
+        return {
+            pairResults,
+            mergedGroups: finalGroups,
+            _allPairs: allPairs
+        };
     }
 
-    async function mergeConfirmedDuplicates(confirmedGroups, suspectedGroups) {
+
+    async function mergeConfirmedDuplicates(aiResult) {
         const characters = generatedWorldbook['角色'];
         let mergedCount = 0;
 
-        for (const result of confirmedGroups.results || []) {
-            if (!result.isSamePerson) continue;
+        const mergedGroups = aiResult.mergedGroups || [];
 
-            const groupIndex = result.group - 1;
-            if (groupIndex < 0 || groupIndex >= suspectedGroups.length) continue;
-
-            const group = suspectedGroups[groupIndex];
-            const mainName = result.mainName || group[0];
+        for (const groupInfo of mergedGroups) {
+            const { names, mainName } = groupInfo;
+            if (!names || names.length < 2 || !mainName) continue;
 
             // 收集所有关键词和内容
             let mergedKeywords = [];
             let mergedContent = '';
 
-            for (const name of group) {
+            for (const name of names) {
                 if (characters[name]) {
                     mergedKeywords.push(...(characters[name]['关键词'] || []));
-                    mergedKeywords.push(name);
+                    mergedKeywords.push(name); // 把名字本身也加入关键词
                     if (characters[name]['内容']) {
                         mergedContent += characters[name]['内容'] + '\n\n---\n\n';
                     }
@@ -2822,7 +2962,7 @@ ${groupsWithContent}
             };
 
             // 删除其他条目
-            for (const name of group) {
+            for (const name of names) {
                 if (name !== mainName && characters[name]) {
                     delete characters[name];
                 }
@@ -2834,6 +2974,7 @@ ${groupsWithContent}
         return mergedCount;
     }
 
+
     async function showAliasMergeUI() {
         updateStreamContent('\n🔍 第一阶段：扫描疑似同人...\n');
         const suspected = findPotentialDuplicateCharacters();
@@ -2843,7 +2984,13 @@ ${groupsWithContent}
             return;
         }
 
-        updateStreamContent(`发现 ${suspected.length} 组疑似同人\n`);
+        // 计算总配对数
+        let totalPairs = 0;
+        for (const group of suspected) {
+            totalPairs += (group.length * (group.length - 1)) / 2;
+        }
+
+        updateStreamContent(`发现 ${suspected.length} 组疑似同人，共 ${totalPairs} 对需要判断\n`);
 
         const existingModal = document.getElementById('ttw-alias-modal');
         if (existingModal) existingModal.remove();
@@ -2854,7 +3001,7 @@ ${groupsWithContent}
 
         const characters = generatedWorldbook['角色'];
         let groupsHtml = suspected.map((group, i) => {
-            // 显示每个角色的关键词预览
+            const pairCount = (group.length * (group.length - 1)) / 2;
             const groupInfo = group.map(name => {
                 const entry = characters[name];
                 const keywords = (entry?.['关键词'] || []).slice(0, 3).join(', ');
@@ -2865,7 +3012,7 @@ ${groupsWithContent}
                 <label style="display:flex;align-items:flex-start;gap:8px;padding:8px 12px;background:rgba(155,89,182,0.1);border-radius:6px;margin-bottom:6px;cursor:pointer;">
                     <input type="checkbox" class="ttw-alias-group-cb" data-index="${i}" checked style="margin-top:3px;">
                     <div>
-                        <div style="color:#9b59b6;font-weight:bold;font-size:12px;">组${i + 1}</div>
+                        <div style="color:#9b59b6;font-weight:bold;font-size:12px;">组${i + 1} <span style="color:#888;font-weight:normal;">(${group.length}人, ${pairCount}对)</span></div>
                         <div style="font-size:11px;color:#ccc;word-break:break-all;">${groupInfo}</div>
                     </div>
                 </label>
@@ -2873,16 +3020,17 @@ ${groupsWithContent}
         }).join('');
 
         modal.innerHTML = `
-            <div class="ttw-modal" style="max-width:700px;">
+            <div class="ttw-modal" style="max-width:750px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">🔗 别名识别与合并</span>
+                    <span class="ttw-modal-title">🔗 别名识别与合并 (两两判断模式)</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body">
                     <div style="margin-bottom:16px;padding:12px;background:rgba(52,152,219,0.15);border-radius:8px;">
                         <div style="font-weight:bold;color:#3498db;margin-bottom:8px;">📊 第一阶段：本地检测结果</div>
                         <div style="font-size:13px;color:#ccc;">
-                            基于关键词交集和名称相似度，发现 <span style="color:#9b59b6;font-weight:bold;">${suspected.length}</span> 组疑似同人角色
+                            基于关键词交集和名称相似度，发现 <span style="color:#9b59b6;font-weight:bold;">${suspected.length}</span> 组疑似同人角色，
+                            共 <span style="color:#e67e22;font-weight:bold;">${totalPairs}</span> 对需要AI判断
                         </div>
                     </div>
 
@@ -2891,24 +3039,31 @@ ${groupsWithContent}
                             <span style="font-weight:bold;">选择要发送给AI判断的组</span>
                             <label style="font-size:12px;"><input type="checkbox" id="ttw-select-all-alias" checked> 全选</label>
                         </div>
-                        <div style="max-height:250px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:8px;">
+                        <div style="max-height:200px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:8px;">
                             ${groupsHtml}
                         </div>
                     </div>
 
                     <div style="margin-bottom:16px;padding:10px;background:rgba(230,126,34,0.1);border-radius:6px;font-size:11px;color:#f39c12;">
-                        💡 AI会根据每个角色的<strong>关键词</strong>和<strong>内容摘要</strong>（前400字）来判断是否为同一人
+                        💡 <strong>两两判断模式</strong>：AI会对每一对角色分别判断是否同一人，然后自动合并确认的结果。<br>
+                        例如：[A,B,C] 会拆成 (A,B) (A,C) (B,C) 三对分别判断，如果A=B且B=C，则A、B、C会被合并。
                     </div>
 
-                    <div id="ttw-alias-result" style="display:none;margin-bottom:16px;padding:12px;background:rgba(39,174,96,0.15);border-radius:8px;">
-                        <div style="font-weight:bold;color:#27ae60;margin-bottom:8px;">📊 第二阶段：AI判断结果</div>
-                        <div id="ttw-alias-result-content"></div>
+                    <div id="ttw-alias-result" style="display:none;margin-bottom:16px;">
+                        <div style="padding:12px;background:rgba(155,89,182,0.15);border-radius:8px;margin-bottom:12px;">
+                            <div style="font-weight:bold;color:#9b59b6;margin-bottom:8px;">🔍 配对判断结果</div>
+                            <div id="ttw-pair-results" style="max-height:150px;overflow-y:auto;"></div>
+                        </div>
+                        <div style="padding:12px;background:rgba(39,174,96,0.15);border-radius:8px;">
+                            <div style="font-weight:bold;color:#27ae60;margin-bottom:8px;">📦 合并方案</div>
+                            <div id="ttw-merge-plan"></div>
+                        </div>
                     </div>
                 </div>
                 <div class="ttw-modal-footer">
                     <button class="ttw-btn ttw-btn-secondary" id="ttw-stop-alias" style="display:none;">⏸️ 停止</button>
                     <button class="ttw-btn" id="ttw-cancel-alias">取消</button>
-                    <button class="ttw-btn ttw-btn-primary" id="ttw-ai-verify-alias">🤖 AI判断</button>
+                    <button class="ttw-btn ttw-btn-primary" id="ttw-ai-verify-alias">🤖 AI两两判断</button>
                     <button class="ttw-btn ttw-btn-primary" id="ttw-confirm-alias" style="display:none;">✅ 确认合并</button>
                 </div>
             </div>
@@ -2942,36 +3097,49 @@ ${groupsWithContent}
             stopBtn.style.display = 'inline-block';
 
             try {
-                updateStreamContent('\n🤖 第二阶段：发送给AI判断（含内容摘要）...\n');
+                updateStreamContent('\n🤖 第二阶段：两两配对判断...\n');
                 aiResult = await verifyDuplicatesWithAI(selectedGroups);
-                aiResult._selectedGroups = selectedGroups;
 
-                // 显示结果
+                // 显示配对结果
                 const resultDiv = modal.querySelector('#ttw-alias-result');
-                const resultContent = modal.querySelector('#ttw-alias-result-content');
+                const pairResultsDiv = modal.querySelector('#ttw-pair-results');
+                const mergePlanDiv = modal.querySelector('#ttw-merge-plan');
                 resultDiv.style.display = 'block';
 
-                let resultHtml = '';
-                for (const result of aiResult.results || []) {
-                    const group = selectedGroups[result.group - 1];
+                // 显示每一对的判断结果
+                let pairHtml = '';
+                for (const result of aiResult.pairResults || []) {
                     const icon = result.isSamePerson ? '✅' : '❌';
                     const color = result.isSamePerson ? '#27ae60' : '#e74c3c';
-                    resultHtml += `
-                        <div style="padding:8px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:6px;border-left:3px solid ${color};">
-                            <div style="display:flex;align-items:center;gap:8px;">
-                                <span style="color:${color};">${icon}</span>
-                                <span>${group?.join(', ') || '未知组'}</span>
-                            </div>
-                            ${result.isSamePerson
-                                ? `<div style="color:#27ae60;font-size:11px;margin-top:4px;">→ 合并为: ${result.mainName}</div>`
-                                : `<div style="color:#888;font-size:11px;margin-top:4px;">原因: ${result.reason || '不同人'}</div>`
-                            }
+                    pairHtml += `
+                        <div style="display:inline-flex;align-items:center;gap:4px;padding:4px 8px;background:rgba(0,0,0,0.2);border-radius:4px;margin:2px;font-size:11px;border-left:2px solid ${color};">
+                            <span style="color:${color};">${icon}</span>
+                            <span>「${result.nameA}」vs「${result.nameB}」</span>
+                            ${result.isSamePerson ? `<span style="color:#888;">→${result.mainName}</span>` : ''}
                         </div>
                     `;
                 }
-                resultContent.innerHTML = resultHtml;
+                pairResultsDiv.innerHTML = pairHtml || '<div style="color:#888;">无配对结果</div>';
 
-                modal.querySelector('#ttw-confirm-alias').style.display = 'inline-block';
+                // 显示合并方案
+                let mergePlanHtml = '';
+                if (aiResult.mergedGroups && aiResult.mergedGroups.length > 0) {
+                    for (const group of aiResult.mergedGroups) {
+                        mergePlanHtml += `
+                            <div style="padding:8px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:6px;border-left:3px solid #27ae60;">
+                                <div style="color:#27ae60;font-weight:bold;font-size:12px;">→ 合并为「${group.mainName}」</div>
+                                <div style="font-size:11px;color:#ccc;margin-top:4px;">包含: ${group.names.join(', ')}</div>
+                            </div>
+                        `;
+                    }
+                } else {
+                    mergePlanHtml = '<div style="color:#888;font-size:12px;">没有需要合并的角色（所有配对都是不同人）</div>';
+                }
+                mergePlanDiv.innerHTML = mergePlanHtml;
+
+                if (aiResult.mergedGroups && aiResult.mergedGroups.length > 0) {
+                    modal.querySelector('#ttw-confirm-alias').style.display = 'inline-block';
+                }
                 btn.style.display = 'none';
                 stopBtn.style.display = 'none';
 
@@ -2981,7 +3149,7 @@ ${groupsWithContent}
                 updateStreamContent(`❌ AI判断失败: ${error.message}\n`);
                 alert('AI判断失败: ' + error.message);
                 btn.disabled = false;
-                btn.textContent = '🤖 AI判断';
+                btn.textContent = '🤖 AI两两判断';
                 stopBtn.style.display = 'none';
             }
         });
@@ -2989,29 +3157,27 @@ ${groupsWithContent}
         modal.querySelector('#ttw-stop-alias').addEventListener('click', () => {
             stopProcessing();
             modal.querySelector('#ttw-ai-verify-alias').disabled = false;
-            modal.querySelector('#ttw-ai-verify-alias').textContent = '🤖 AI判断';
+            modal.querySelector('#ttw-ai-verify-alias').textContent = '🤖 AI两两判断';
             modal.querySelector('#ttw-stop-alias').style.display = 'none';
         });
 
         modal.querySelector('#ttw-confirm-alias').addEventListener('click', async () => {
-            if (!aiResult) return;
-
-            const samePersonCount = (aiResult.results || []).filter(r => r.isSamePerson).length;
-            if (samePersonCount === 0) {
+            if (!aiResult || !aiResult.mergedGroups || aiResult.mergedGroups.length === 0) {
                 alert('没有需要合并的角色');
                 modal.remove();
                 return;
             }
 
-            if (!confirm(`确定合并 ${samePersonCount} 组同人角色？`)) return;
+            if (!confirm(`确定合并 ${aiResult.mergedGroups.length} 组同人角色？`)) return;
 
-            const mergedCount = await mergeConfirmedDuplicates(aiResult, aiResult._selectedGroups);
+            const mergedCount = await mergeConfirmedDuplicates(aiResult);
 
             updateWorldbookPreview();
             modal.remove();
             alert(`合并完成！合并了 ${mergedCount} 组角色。\n\n建议使用"整理条目"功能清理合并后的重复内容。`);
         });
     }
+
 
     // ========== 导出功能 ==========
     function convertToSillyTavernFormat(worldbook) {
