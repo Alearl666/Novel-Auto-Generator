@@ -4696,13 +4696,24 @@ ${pairsWithContent}
         const chapterRegex = /第[一二三四五六七八九十百千万0-9]+[章节卷集回]/g;
         const matches = [...content.matchAll(chapterRegex)];
 
-        if (matches.length > 0) {
-            const chapters = [];
-            for (let i = 0; i < matches.length; i++) {
-                const startIndex = matches[i].index;
-                const endIndex = i < matches.length - 1 ? matches[i + 1].index : content.length;
-                chapters.push({ title: matches[i][0], content: content.slice(startIndex, endIndex) });
-            }
+        
+if (matches.length > 0) {
+    const chapters = [];
+
+    for (let i = 0; i < matches.length; i++) {
+        const startIndex = matches[i].index;
+        const endIndex = i < matches.length - 1 ? matches[i + 1].index : content.length;
+        let chapterContent = content.slice(startIndex, endIndex);
+
+        // 如果是第一章，把章节标记前的内容也加进去
+        if (i === 0 && startIndex > 0) {
+            const preContent = content.slice(0, startIndex);
+            chapterContent = preContent + chapterContent;
+        }
+
+        chapters.push({ title: matches[i][0], content: chapterContent });
+    }
+
 
             const mergedChapters = [];
             let pendingChapter = null;
