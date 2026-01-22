@@ -207,6 +207,26 @@
                             </div>
                         </div>
                         
+                        <!-- 排序按钮组 -->
+                        <div id="epub-sort-btns" style="display: flex; gap: 8px;">
+                            <button id="epub-sort-name-asc" class="menu_button" style="
+                                background: #3498db !important;
+                                padding: 8px 12px !important;
+                                flex: 1;
+                                font-size: 13px !important;
+                            ">
+                                🔤 名称排序 ↑
+                            </button>
+                            <button id="epub-sort-name-desc" class="menu_button" style="
+                                background: #2980b9 !important;
+                                padding: 8px 12px !important;
+                                flex: 1;
+                                font-size: 13px !important;
+                            ">
+                                🔤 名称排序 ↓
+                            </button>
+                        </div>
+                        
                         <div id="epub-progress" style="
                             display: none;
                             text-align: center;
@@ -327,11 +347,56 @@
         $('#epub-convert-btn').on('click', convertAll);
         $('#epub-close-btn').on('click', closeModal);
         
+        // 排序按钮事件
+        $('#epub-sort-name-asc').on('click', () => sortByName('asc'));
+        $('#epub-sort-name-desc').on('click', () => sortByName('desc'));
+        
         $('#epub-to-txt-modal').on('click', (e) => {
             if (e.target.id === 'epub-to-txt-modal') {
                 closeModal();
             }
         });
+    }
+
+    // ============================================
+    // 按名称排序
+    // ============================================
+    function sortByName(order = 'asc') {
+        if (epubFiles.length < 2) {
+            toastr.info('至少需要2个文件才能排序');
+            return;
+        }
+        
+        epubFiles.sort((a, b) => {
+            // 优先使用书名，没有则使用文件名
+            const nameA = (a.title || a.fileName).toLowerCase();
+            const nameB = (b.title || b.fileName).toLowerCase();
+            
+            // 自然排序（处理数字）
+            return naturalCompare(nameA, nameB) * (order === 'asc' ? 1 : -1);
+        });
+        
+        renderFileList();
+        toastr.success(order === 'asc' ? '已按名称升序排列' : '已按名称降序排列');
+    }
+
+    // ============================================
+    // 自然排序比较函数（正确处理数字）
+    // ============================================
+    function naturalCompare(a, b) {
+        const ax = [], bx = [];
+        
+        a.replace(/(\d+)|(\D+)/g, (_, $1, $2) => { ax.push([$1 || Infinity, $2 || '']) });
+        b.replace(/(\d+)|(\D+)/g, (_, $1, $2) => { bx.push([$1 || Infinity, $2 || '']) });
+        
+        while (ax.length && bx.length) {
+            const an = ax.shift();
+            const bn = bx.shift();
+            const nn = (parseInt(an[0]) - parseInt(bn[0])) || an[1].localeCompare(bn[1]);
+            if (nn) return nn;
+        }
+        
+        return ax.length - bx.length;
     }
 
     // ============================================
@@ -521,7 +586,8 @@
     window.EpubToTxt = {
         open: openModal,
         close: closeModal,
-        parseEpub: parseEpub
+        parseEpub: parseEpub,
+        sortByName: sortByName  // 新增：暴露排序方法
     };
 
     console.log('[EpubToTxt] 📖 EPUB批量转TXT模块已加载');
