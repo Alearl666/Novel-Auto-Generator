@@ -50,7 +50,7 @@
             .replace(/[ \t]+/g, ' ')
             .replace(/ \n/g, '\n')
             .replace(/\n /g, '\n')
-            .replace(/\n{3,}/g, '\n\n')
+            .replace(/\n{2,}/g, '\n')
             .replace(/^\s+/, '')
             .replace(/\s+$/, '');
         
@@ -546,7 +546,7 @@
             const title = f.title || f.fileName.replace(/\.epub$/i, '');
             const separator = '═'.repeat(40);
             const header = `${separator}\n【${index + 1}】${title}\n${separator}\n`;
-            return header + f.content.trim();
+            return header + f.content.trim().replace(/\n{2,}/g, '\n');
         }).join('\n');
         
         // 文件名：第一个文件名 + 合并数量
