@@ -1,12 +1,11 @@
 import { saveSettingsDebounced } from "../../../../script.js";
 import { extension_settings } from "../../../extensions.js";
 import './txtToWorldbook.js';
+import './epubToTxt.js';  // 新增：引入EPUB转TXT模块
 
 const extensionName = "novel-auto-generator";
 
-const defaultSettings = {
-    // 可以根据需要保留 txtToWorldbook 相关的设置
-};
+const defaultSettings = {};
 
 let settings = {};
 
@@ -38,11 +37,12 @@ function createUI() {
     <div id="nag-container">
         <div class="inline-drawer">
             <div class="inline-drawer-toggle inline-drawer-header">
-                <b>📚 TXT转世界书工具</b>
+                <b>📚 文件转换工具</b>
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
             <div class="inline-drawer-content">
                 <div class="nag-section">
+                    <!-- TXT转世界书按钮 -->
                     <div class="nag-btn-row">
                         <button id="nag-btn-txt-to-worldbook" class="menu_button" style="background: linear-gradient(135deg, #e67e22, #d35400); width: 100%;">
                             📚 TXT转世界书
@@ -51,11 +51,21 @@ function createUI() {
                     <div style="margin-top: 10px; font-size: 12px; opacity: 0.7; text-align: center;">
                         将TXT文件转换为SillyTavern世界书格式
                     </div>
+
+                    <!-- 新增：EPUB转TXT按钮 -->
+                    <div class="nag-btn-row" style="margin-top: 15px;">
+                        <button id="nag-btn-epub-to-txt" class="menu_button" style="background: linear-gradient(135deg, #9b59b6, #8e44ad); width: 100%;">
+                            📖 EPUB转TXT
+                        </button>
+                    </div>
+                    <div style="margin-top: 10px; font-size: 12px; opacity: 0.7; text-align: center;">
+                        将EPUB电子书转换为TXT纯文本格式
+                    </div>
                 </div>
             </div>
         </div>
     </div>`;
-    
+
     $('#extensions_settings').append(html);
     bindEvents();
 }
@@ -69,6 +79,15 @@ function bindEvents() {
             toastr.error('TXT转世界书模块未加载');
         }
     });
+
+    // 新增：EPUB转TXT入口
+    $('#nag-btn-epub-to-txt').on('click', () => {
+        if (typeof window.EpubToTxt !== 'undefined') {
+            window.EpubToTxt.open();
+        } else {
+            toastr.error('EPUB转TXT模块未加载');
+        }
+    });
 }
 
 // ============================================
@@ -78,5 +97,5 @@ function bindEvents() {
 jQuery(async () => {
     loadSettings();
     createUI();
-    log('TXT转世界书扩展已加载', 'success');
+    log('文件转换工具扩展已加载', 'success');
 });
