@@ -1,10 +1,9 @@
-// epubToTxt.js - EPUB转TXT模块（支持批量导入排序）
+// epubToTxt.js - EPUB转TXT模块（支持批量导入+手机拖拽排序）
 
 (function() {
     'use strict';
 
-    let epubFiles = []; // 存储已加载的EPUB文件数据
-    let draggedItem = null;
+    let epubFiles = [];
 
     // ============================================
     // 动态加载 JSZip 库
@@ -22,7 +21,7 @@
     }
 
     // ============================================
-    // HTML转纯文本（修复：保持原有换行格式）
+    // HTML转纯文本
     // ============================================
     function htmlToText(html) {
         const parser = new DOMParser();
@@ -30,35 +29,30 @@
         
         if (!doc.body) return '';
         
-        // 移除script和style标签
         doc.querySelectorAll('script, style').forEach(el => el.remove());
         
-        // 处理<br>标签
         doc.querySelectorAll('br').forEach(el => {
             el.replaceWith('\n');
         });
         
-        // 处理块级元素 - 只在后面加一个换行
         const blockTags = ['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 
                           'li', 'tr', 'blockquote', 'section', 'article'];
         
         blockTags.forEach(tag => {
             doc.querySelectorAll(tag).forEach(el => {
-                // 在元素内容后添加换行
                 el.innerHTML = el.innerHTML + '\n';
             });
         });
         
         let text = doc.body.textContent || '';
         
-        // 清理空白
         text = text
-            .replace(/[ \t]+/g, ' ')           // 多个空格合并
-            .replace(/ \n/g, '\n')             // 换行前的空格去掉
-            .replace(/\n /g, '\n')             // 换行后的空格去掉
-            .replace(/\n{3,}/g, '\n\n')        // 最多保留两个换行（一个空行）
-            .replace(/^\s+/, '')               // 开头空白
-            .replace(/\s+$/, '');              // 结尾空白
+            .replace(/[ \t]+/g, ' ')
+            .replace(/ \n/g, '\n')
+            .replace(/\n /g, '\n')
+            .replace(/\n{3,}/g, '\n\n')
+            .replace(/^\s+/, '')
+            .replace(/\s+$/, '');
         
         return text;
     }
@@ -92,7 +86,6 @@
         const opfContent = await opfFile.async('string');
         const opfDoc = parser.parseFromString(opfContent, 'application/xml');
         
-        // 获取书名
         const titleEl = opfDoc.querySelector('metadata title, dc\\:title');
         const bookTitle = titleEl ? titleEl.textContent.trim() : '';
         
@@ -172,23 +165,22 @@
                     background: var(--SmartThemeBlurTintColor, #1a1a2e);
                     border: 1px solid var(--SmartThemeBorderColor, #444);
                     border-radius: 12px;
-                    padding: 24px;
+                    padding: 20px;
                     width: 100%;
                     max-width: 500px;
                     color: var(--SmartThemeBodyColor, #fff);
                     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
                     margin: 20px 0;
                 ">
-                    <h3 style="margin: 0 0 20px 0; text-align: center; font-size: 20px;">
+                    <h3 style="margin: 0 0 15px 0; text-align: center; font-size: 18px;">
                         📖 EPUB批量转TXT
                     </h3>
                     
-                    <div style="display: flex; flex-direction: column; gap: 15px;">
-                        <!-- 文件选择 -->
+                    <div style="display: flex; flex-direction: column; gap: 12px;">
                         <input type="file" id="epub-file-input" accept=".epub" multiple style="display: none;">
                         <button id="epub-select-btn" class="menu_button" style="
                             background: linear-gradient(135deg, #9b59b6, #8e44ad) !important;
-                            padding: 14px 24px !important;
+                            padding: 12px 20px !important;
                             font-size: 15px !important;
                             border-radius: 8px !important;
                             width: 100%;
@@ -196,27 +188,25 @@
                             📁 选择EPUB文件（可多选）
                         </button>
                         
-                        <!-- 文件列表 -->
                         <div id="epub-file-list" style="
-                            min-height: 60px;
-                            max-height: 300px;
+                            min-height: 80px;
+                            max-height: 350px;
                             overflow-y: auto;
                             border: 1px dashed #666;
                             border-radius: 8px;
-                            padding: 10px;
+                            padding: 8px;
                         ">
                             <div id="epub-empty-tip" style="
                                 text-align: center;
                                 color: #888;
-                                padding: 20px;
+                                padding: 25px 10px;
                                 font-size: 14px;
                             ">
                                 请选择EPUB文件<br>
-                                <small>可拖动调整顺序</small>
+                                <small>用↑↓按钮调整顺序</small>
                             </div>
                         </div>
                         
-                        <!-- 进度 -->
                         <div id="epub-progress" style="
                             display: none;
                             text-align: center;
@@ -227,19 +217,20 @@
                             <span id="epub-progress-text">⏳ 正在处理...</span>
                         </div>
                         
-                        <!-- 按钮组 -->
                         <div style="display: flex; gap: 10px;">
                             <button id="epub-clear-btn" class="menu_button" style="
                                 background: #c0392b !important;
-                                padding: 10px 20px !important;
+                                padding: 10px 15px !important;
                                 flex: 1;
+                                font-size: 14px !important;
                             ">
                                 🗑️ 清空
                             </button>
                             <button id="epub-convert-btn" class="menu_button" style="
                                 background: linear-gradient(135deg, #27ae60, #2ecc71) !important;
-                                padding: 10px 20px !important;
+                                padding: 10px 15px !important;
                                 flex: 2;
+                                font-size: 14px !important;
                             ">
                                 ✨ 生成TXT
                             </button>
@@ -247,7 +238,8 @@
                         
                         <button id="epub-close-btn" class="menu_button" style="
                             background: #555 !important;
-                            padding: 10px 20px !important;
+                            padding: 10px 15px !important;
+                            font-size: 14px !important;
                         ">
                             关闭
                         </button>
@@ -260,49 +252,61 @@
             .epub-file-item {
                 display: flex;
                 align-items: center;
-                padding: 10px;
-                margin: 5px 0;
+                padding: 8px;
+                margin: 4px 0;
                 background: rgba(255,255,255,0.1);
                 border-radius: 6px;
-                cursor: grab;
-                user-select: none;
+                gap: 6px;
             }
-            .epub-file-item:active {
-                cursor: grabbing;
-            }
-            .epub-file-item.dragging {
-                opacity: 0.5;
-                background: rgba(155, 89, 182, 0.3);
-            }
-            .epub-file-item .drag-handle {
-                margin-right: 10px;
-                color: #888;
+            .epub-file-item .file-index {
+                min-width: 22px;
+                height: 22px;
+                background: #9b59b6;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 11px;
+                flex-shrink: 0;
             }
             .epub-file-item .file-name {
                 flex: 1;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
-                font-size: 14px;
+                font-size: 13px;
+                min-width: 0;
+            }
+            .epub-file-item .move-btns {
+                display: flex;
+                flex-direction: column;
+                gap: 2px;
+                flex-shrink: 0;
+            }
+            .epub-file-item .move-btn {
+                background: #555;
+                border: none;
+                color: #fff;
+                width: 26px;
+                height: 20px;
+                border-radius: 3px;
+                cursor: pointer;
+                font-size: 10px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .epub-file-item .move-btn:active {
+                background: #9b59b6;
             }
             .epub-file-item .remove-btn {
                 background: transparent;
                 border: none;
                 color: #e74c3c;
                 cursor: pointer;
-                padding: 5px;
+                padding: 5px 8px;
                 font-size: 16px;
-            }
-            .epub-file-item .file-index {
-                min-width: 24px;
-                height: 24px;
-                background: #9b59b6;
-                border-radius: 50%;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                font-size: 12px;
-                margin-right: 10px;
+                flex-shrink: 0;
             }
         </style>`;
         
@@ -338,9 +342,14 @@
         if (!files.length) return;
         
         $('#epub-progress').show();
-        $('#epub-progress-text').text('⏳ 正在解析EPUB文件...');
+        $('#epub-progress-text').text(`⏳ 正在解析 0/${files.length}...`);
         
-        for (const file of files) {
+        let successCount = 0;
+        
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            $('#epub-progress-text').text(`⏳ 正在解析 ${i + 1}/${files.length}...`);
+            
             try {
                 const arrayBuffer = await file.arrayBuffer();
                 const result = await parseEpub(arrayBuffer);
@@ -351,6 +360,7 @@
                     title: result.title || file.name.replace(/\.epub$/i, ''),
                     content: result.content
                 });
+                successCount++;
             } catch (e) {
                 console.error('[EpubToTxt] 解析失败:', file.name, e);
                 toastr.error(`解析失败: ${file.name}`);
@@ -361,7 +371,9 @@
         $('#epub-file-input').val('');
         renderFileList();
         
-        toastr.success(`已添加 ${files.length} 个文件`);
+        if (successCount > 0) {
+            toastr.success(`已添加 ${successCount} 个文件`);
+        }
     }
 
     // ============================================
@@ -375,11 +387,11 @@
                 <div id="epub-empty-tip" style="
                     text-align: center;
                     color: #888;
-                    padding: 20px;
+                    padding: 25px 10px;
                     font-size: 14px;
                 ">
                     请选择EPUB文件<br>
-                    <small>可拖动调整顺序</small>
+                    <small>用↑↓按钮调整顺序</small>
                 </div>
             `);
             return;
@@ -388,10 +400,13 @@
         let html = '';
         epubFiles.forEach((file, index) => {
             html += `
-                <div class="epub-file-item" data-id="${file.id}" draggable="true">
+                <div class="epub-file-item" data-id="${file.id}">
                     <span class="file-index">${index + 1}</span>
-                    <span class="drag-handle">☰</span>
                     <span class="file-name" title="${file.fileName}">${file.title || file.fileName}</span>
+                    <div class="move-btns">
+                        <button class="move-btn move-up" data-id="${file.id}" ${index === 0 ? 'disabled style="opacity:0.3"' : ''}>▲</button>
+                        <button class="move-btn move-down" data-id="${file.id}" ${index === epubFiles.length - 1 ? 'disabled style="opacity:0.3"' : ''}>▼</button>
+                    </div>
                     <button class="remove-btn" data-id="${file.id}">✕</button>
                 </div>
             `;
@@ -402,75 +417,42 @@
         // 绑定删除按钮
         listEl.find('.remove-btn').on('click', function(e) {
             e.stopPropagation();
-            const id = $(this).data('id');
+            const id = parseFloat($(this).data('id'));
             epubFiles = epubFiles.filter(f => f.id !== id);
             renderFileList();
         });
         
-        // 绑定拖拽事件
-        bindDragEvents();
-    }
-
-    // ============================================
-    // 拖拽排序
-    // ============================================
-    function bindDragEvents() {
-        const items = document.querySelectorAll('.epub-file-item');
+        // 绑定上移按钮
+        listEl.find('.move-up').on('click', function(e) {
+            e.stopPropagation();
+            const id = parseFloat($(this).data('id'));
+            moveFile(id, -1);
+        });
         
-        items.forEach(item => {
-            item.addEventListener('dragstart', (e) => {
-                draggedItem = item;
-                item.classList.add('dragging');
-                e.dataTransfer.effectAllowed = 'move';
-            });
-            
-            item.addEventListener('dragend', () => {
-                item.classList.remove('dragging');
-                draggedItem = null;
-                updateFileOrder();
-            });
-            
-            item.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = 'move';
-                
-                if (draggedItem && draggedItem !== item) {
-                    const list = item.parentNode;
-                    const items = Array.from(list.querySelectorAll('.epub-file-item'));
-                    const draggedIndex = items.indexOf(draggedItem);
-                    const targetIndex = items.indexOf(item);
-                    
-                    if (draggedIndex < targetIndex) {
-                        item.after(draggedItem);
-                    } else {
-                        item.before(draggedItem);
-                    }
-                }
-            });
+        // 绑定下移按钮
+        listEl.find('.move-down').on('click', function(e) {
+            e.stopPropagation();
+            const id = parseFloat($(this).data('id'));
+            moveFile(id, 1);
         });
     }
 
     // ============================================
-    // 更新文件顺序
+    // 移动文件位置
     // ============================================
-    function updateFileOrder() {
-        const items = document.querySelectorAll('.epub-file-item');
-        const newOrder = [];
+    function moveFile(id, direction) {
+        const index = epubFiles.findIndex(f => f.id === id);
+        if (index === -1) return;
         
-        items.forEach((item, index) => {
-            const id = parseFloat(item.dataset.id);
-            const file = epubFiles.find(f => f.id === id);
-            if (file) {
-                newOrder.push(file);
-            }
-            // 更新序号显示
-            const indexEl = item.querySelector('.file-index');
-            if (indexEl) {
-                indexEl.textContent = index + 1;
-            }
-        });
+        const newIndex = index + direction;
+        if (newIndex < 0 || newIndex >= epubFiles.length) return;
         
-        epubFiles = newOrder;
+        // 交换位置
+        const temp = epubFiles[index];
+        epubFiles[index] = epubFiles[newIndex];
+        epubFiles[newIndex] = temp;
+        
+        renderFileList();
     }
 
     // ============================================
@@ -491,10 +473,8 @@
             return;
         }
         
-        // 按当前顺序合并所有内容
         const allContent = epubFiles.map(f => f.content).join('\n');
         
-        // 生成文件名
         let fileName;
         if (epubFiles.length === 1) {
             fileName = epubFiles[0].fileName.replace(/\.epub$/i, '.txt');
@@ -502,7 +482,6 @@
             fileName = `合并_${epubFiles.length}本_${new Date().toLocaleDateString('zh-CN').replace(/\//g, '')}.txt`;
         }
         
-        // 下载
         const blob = new Blob([allContent], { type: 'text/plain;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
