@@ -3,7 +3,9 @@ import { extension_settings } from "../../../extensions.js";
 import './txtToWorldbook.js';
 
 const extensionName = "novel-auto-generator";
-const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
+
+// 自动获取当前扩展的路径
+const extensionFolderPath = import.meta.url.substring(0, import.meta.url.lastIndexOf('/'));
 
 const defaultSettings = {};
 
@@ -89,14 +91,14 @@ function bindEvents() {
     });
     
     $('#nag-btn-epub-to-txt').on('click', async () => {
-        // 如果模块还没加载，先加载
         if (typeof window.EpubToTxt === 'undefined') {
             try {
                 toastr.info('正在加载EPUB模块...');
                 await loadScript('epubToTxt.js');
             } catch (e) {
-                toastr.error('EPUB转TXT模块加载失败，请确认epubToTxt.js文件存在');
+                toastr.error('EPUB转TXT模块加载失败');
                 console.error('[NovelGen] 加载epubToTxt.js失败:', e);
+                console.error('[NovelGen] 尝试加载路径:', `${extensionFolderPath}/epubToTxt.js`);
                 return;
             }
         }
@@ -117,12 +119,13 @@ jQuery(async () => {
     loadSettings();
     createUI();
     
-    // 尝试预加载epubToTxt模块（失败也不影响扩展运行）
+    log('扩展路径: ' + extensionFolderPath, 'debug');
+    
     try {
         await loadScript('epubToTxt.js');
         log('EPUB转TXT模块已加载', 'success');
     } catch (e) {
-        log('EPUB转TXT模块未找到，点击按钮时将尝试加载', 'warning');
+        log('EPUB转TXT模块将在点击时加载', 'warning');
     }
     
     log('文件转换工具扩展已加载', 'success');
