@@ -545,9 +545,9 @@
         const allContent = epubFiles.map((f, index) => {
             const title = f.title || f.fileName.replace(/\.epub$/i, '');
             const separator = '═'.repeat(40);
-            const header = `\n${separator}\n【${index + 1}】${title}\n${separator}\n`;
-            return header + f.content;
-        }).join('\n\n');
+            const header = `${separator}\n【${index + 1}】${title}\n${separator}\n`;
+            return header + f.content.trim();
+        }).join('\n');
         
         // 文件名：第一个文件名 + 合并数量
         const firstName = epubFiles[0].fileName.replace(/\.epub$/i, '');
