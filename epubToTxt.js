@@ -475,11 +475,13 @@
         
         const allContent = epubFiles.map(f => f.content).join('\n');
         
+        // 文件名：第一个文件名 + 合并数量
+        const firstName = epubFiles[0].fileName.replace(/\.epub$/i, '');
         let fileName;
         if (epubFiles.length === 1) {
-            fileName = epubFiles[0].fileName.replace(/\.epub$/i, '.txt');
+            fileName = `${firstName}.txt`;
         } else {
-            fileName = `合并_${epubFiles.length}本_${new Date().toLocaleDateString('zh-CN').replace(/\//g, '')}.txt`;
+            fileName = `${firstName}_合并${epubFiles.length}本.txt`;
         }
         
         const blob = new Blob([allContent], { type: 'text/plain;charset=utf-8' });
