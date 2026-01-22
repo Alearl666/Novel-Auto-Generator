@@ -1,7 +1,7 @@
 import { saveSettingsDebounced } from "../../../../script.js";
 import { extension_settings } from "../../../extensions.js";
 import './txtToWorldbook.js';
-import './epubToTxt.js';  // 新增：引入EPUB转TXT模块
+import './epubToTxt.js';
 
 const extensionName = "novel-auto-generator";
 
@@ -42,7 +42,6 @@ function createUI() {
             </div>
             <div class="inline-drawer-content">
                 <div class="nag-section">
-                    <!-- TXT转世界书按钮 -->
                     <div class="nag-btn-row">
                         <button id="nag-btn-txt-to-worldbook" class="menu_button" style="background: linear-gradient(135deg, #e67e22, #d35400); width: 100%;">
                             📚 TXT转世界书
@@ -51,8 +50,7 @@ function createUI() {
                     <div style="margin-top: 10px; font-size: 12px; opacity: 0.7; text-align: center;">
                         将TXT文件转换为SillyTavern世界书格式
                     </div>
-
-                    <!-- 新增：EPUB转TXT按钮 -->
+                    
                     <div class="nag-btn-row" style="margin-top: 15px;">
                         <button id="nag-btn-epub-to-txt" class="menu_button" style="background: linear-gradient(135deg, #9b59b6, #8e44ad); width: 100%;">
                             📖 EPUB转TXT
@@ -65,13 +63,12 @@ function createUI() {
             </div>
         </div>
     </div>`;
-
+    
     $('#extensions_settings').append(html);
     bindEvents();
 }
 
 function bindEvents() {
-    // TXT转世界书入口
     $('#nag-btn-txt-to-worldbook').on('click', () => {
         if (typeof window.TxtToWorldbook !== 'undefined') {
             window.TxtToWorldbook.open();
@@ -79,8 +76,7 @@ function bindEvents() {
             toastr.error('TXT转世界书模块未加载');
         }
     });
-
-    // 新增：EPUB转TXT入口
+    
     $('#nag-btn-epub-to-txt').on('click', () => {
         if (typeof window.EpubToTxt !== 'undefined') {
             window.EpubToTxt.open();
