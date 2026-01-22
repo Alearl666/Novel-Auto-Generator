@@ -1,9 +1,9 @@
 import { saveSettingsDebounced } from "../../../../script.js";
 import { extension_settings } from "../../../extensions.js";
 import './txtToWorldbook.js';
-import './epubToTxt.js';
 
 const extensionName = "novel-auto-generator";
+const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 
 const defaultSettings = {};
 
@@ -16,6 +16,17 @@ let settings = {};
 function log(msg, type = 'info') {
     const p = { info: '📘', success: '✅', warning: '⚠️', error: '❌', debug: '🔍' }[type] || 'ℹ️';
     console.log(`[NovelGen] ${p} ${msg}`);
+}
+
+// 动态加载JS文件
+async function loadScript(filename) {
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = `${extensionFolderPath}/${filename}`;
+        script.onload = () => resolve();
+        script.onerror = (e) => reject(e);
+        document.head.appendChild(script);
+    });
 }
 
 // ============================================
@@ -77,7 +88,19 @@ function bindEvents() {
         }
     });
     
-    $('#nag-btn-epub-to-txt').on('click', () => {
+    $('#nag-btn-epub-to-txt').on('click', async () => {
+        // 如果模块还没加载，先加载
+        if (typeof window.EpubToTxt === 'undefined') {
+            try {
+                toastr.info('正在加载EPUB模块...');
+                await loadScript('epubToTxt.js');
+            } catch (e) {
+                toastr.error('EPUB转TXT模块加载失败，请确认epubToTxt.js文件存在');
+                console.error('[NovelGen] 加载epubToTxt.js失败:', e);
+                return;
+            }
+        }
+        
         if (typeof window.EpubToTxt !== 'undefined') {
             window.EpubToTxt.open();
         } else {
@@ -93,5 +116,14 @@ function bindEvents() {
 jQuery(async () => {
     loadSettings();
     createUI();
+    
+    // 尝试预加载epubToTxt模块（失败也不影响扩展运行）
+    try {
+        await loadScript('epubToTxt.js');
+        log('EPUB转TXT模块已加载', 'success');
+    } catch (e) {
+        log('EPUB转TXT模块未找到，点击按钮时将尝试加载', 'warning');
+    }
+    
     log('文件转换工具扩展已加载', 'success');
 });
