@@ -237,6 +237,7 @@
                             <span id="epub-progress-text">⏳ 正在处理...</span>
                         </div>
                         
+                        <!-- 操作按钮组 -->
                         <div style="display: flex; gap: 10px;">
                             <button id="epub-clear-btn" class="menu_button" style="
                                 background: #c0392b !important;
@@ -256,12 +257,14 @@
                             </button>
                         </div>
                         
+                        <!-- 关闭按钮单独一行 -->
                         <button id="epub-close-btn" class="menu_button" style="
                             background: #555 !important;
                             padding: 10px 15px !important;
                             font-size: 14px !important;
+                            width: 100%;
                         ">
-                            关闭
+                            ✖ 关闭
                         </button>
                     </div>
                 </div>
@@ -538,7 +541,13 @@
             return;
         }
         
-        const allContent = epubFiles.map(f => f.content).join('\n');
+        // 每个文件内容开头加上文件名标题
+        const allContent = epubFiles.map((f, index) => {
+            const title = f.title || f.fileName.replace(/\.epub$/i, '');
+            const separator = '═'.repeat(40);
+            const header = `\n${separator}\n【${index + 1}】${title}\n${separator}\n`;
+            return header + f.content;
+        }).join('\n\n');
         
         // 文件名：第一个文件名 + 合并数量
         const firstName = epubFiles[0].fileName.replace(/\.epub$/i, '');
@@ -587,7 +596,7 @@
         open: openModal,
         close: closeModal,
         parseEpub: parseEpub,
-        sortByName: sortByName  // 新增：暴露排序方法
+        sortByName: sortByName
     };
 
     console.log('[EpubToTxt] 📖 EPUB批量转TXT模块已加载');
