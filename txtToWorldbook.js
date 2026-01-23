@@ -1,6 +1,6 @@
 
 /**
- * TXT转世界书独立模块 v2.9.0
+ * TXT转世界书独立模块 v2.9.1
  * 新增: 查找高亮、批量替换、多选整理分类、条目位置/深度/顺序配置、默认世界书UI化
  */
 
@@ -742,6 +742,17 @@
             streamEl.textContent = currentStreamContent;
             streamEl.scrollTop = streamEl.scrollHeight;
         }
+    }
+    // 位置值转中文显示
+    function getPositionDisplayName(position) {
+        const positionNames = {
+            0: '在角色定义之前',
+            1: '在角色定义之后',
+            2: '在作者注释之前',
+            3: '在作者注释之后',
+            4: '自定义深度'
+        };
+        return positionNames[position] || '在角色定义之前';
     }
 
     // ========== 分类灯状态管理 ==========
@@ -3945,12 +3956,13 @@ ${pairsWithContent}
                     <div class="ttw-form-group">
                         <label>位置 (Position)</label>
                         <select id="ttw-entry-position" class="ttw-select">
-                            <option value="0" ${config.position === 0 ? 'selected' : ''}>0 - Before Main Prompt</option>
-                            <option value="1" ${config.position === 1 ? 'selected' : ''}>1 - After Main Prompt</option>
-                            <option value="2" ${config.position === 2 ? 'selected' : ''}>2 - Before Author's Note</option>
-                            <option value="3" ${config.position === 3 ? 'selected' : ''}>3 - After Author's Note</option>
-                            <option value="4" ${config.position === 4 ? 'selected' : ''}>4 - @ Depth (自定义深度)</option>
-                        </select>
+    <option value="0" ${config.position === 0 ? 'selected' : ''}>在角色定义之前</option>
+    <option value="1" ${config.position === 1 ? 'selected' : ''}>在角色定义之后</option>
+    <option value="2" ${config.position === 2 ? 'selected' : ''}>在作者注释之前</option>
+    <option value="3" ${config.position === 3 ? 'selected' : ''}>在作者注释之后</option>
+    <option value="4" ${config.position === 4 ? 'selected' : ''}>自定义深度</option>
+</select>
+
                     </div>
 
                     <div class="ttw-form-group">
@@ -4012,12 +4024,13 @@ ${pairsWithContent}
                     <div class="ttw-form-group">
                         <label>默认位置 (Position)</label>
                         <select id="ttw-cat-position" class="ttw-select">
-                            <option value="0" ${config.position === 0 ? 'selected' : ''}>0 - Before Main Prompt</option>
-                            <option value="1" ${config.position === 1 ? 'selected' : ''}>1 - After Main Prompt</option>
-                            <option value="2" ${config.position === 2 ? 'selected' : ''}>2 - Before Author's Note</option>
-                            <option value="3" ${config.position === 3 ? 'selected' : ''}>3 - After Author's Note</option>
-                            <option value="4" ${config.position === 4 ? 'selected' : ''}>4 - @ Depth (自定义深度)</option>
-                        </select>
+    <option value="0" ${config.position === 0 ? 'selected' : ''}>在角色定义之前</option>
+    <option value="1" ${config.position === 1 ? 'selected' : ''}>在角色定义之后</option>
+    <option value="2" ${config.position === 2 ? 'selected' : ''}>在作者注释之前</option>
+    <option value="3" ${config.position === 3 ? 'selected' : ''}>在作者注释之后</option>
+    <option value="4" ${config.position === 4 ? 'selected' : ''}>自定义深度</option>
+</select>
+
                     </div>
 
                     <div class="ttw-form-group">
@@ -4679,8 +4692,12 @@ ${pairsWithContent}
             category: '',
             name: '',
             keywords: [],
-            content: ''
+            content: '',
+            position: 0,
+            depth: 4,
+            order: 100
         };
+
 
         const modal = document.createElement('div');
         modal.id = 'ttw-default-entry-modal';
@@ -4705,9 +4722,24 @@ ${pairsWithContent}
                         <input type="text" id="ttw-default-entry-keywords" value="${(entry.keywords || []).join(', ')}" placeholder="关键词1, 关键词2" class="ttw-input">
                     </div>
                     <div class="ttw-form-group">
-                        <label>内容</label>
-                        <textarea id="ttw-default-entry-content" rows="6" class="ttw-textarea-small" placeholder="条目内容...">${entry.content || ''}</textarea>
-                    </div>
+    <label>位置</label>
+    <select id="ttw-default-entry-position" class="ttw-select">
+        <option value="0" ${(entry.position || 0) === 0 ? 'selected' : ''}>在角色定义之前</option>
+        <option value="1" ${entry.position === 1 ? 'selected' : ''}>在角色定义之后</option>
+        <option value="2" ${entry.position === 2 ? 'selected' : ''}>在作者注释之前</option>
+        <option value="3" ${entry.position === 3 ? 'selected' : ''}>在作者注释之后</option>
+        <option value="4" ${entry.position === 4 ? 'selected' : ''}>自定义深度</option>
+    </select>
+</div>
+<div class="ttw-form-group">
+    <label>深度（仅位置为"自定义深度"时有效）</label>
+    <input type="number" id="ttw-default-entry-depth" class="ttw-input" value="${entry.depth || 4}" min="0" max="999">
+</div>
+<div class="ttw-form-group">
+    <label>顺序（数字越小越靠前）</label>
+    <input type="number" id="ttw-default-entry-order" class="ttw-input" value="${entry.order || 100}" min="0" max="9999">
+</div>
+
                 </div>
                 <div class="ttw-modal-footer">
                     <button class="ttw-btn" id="ttw-cancel-default-entry">取消</button>
@@ -4732,7 +4764,12 @@ ${pairsWithContent}
 
             const keywords = keywordsStr ? keywordsStr.split(/[,，]/).map(k => k.trim()).filter(k => k) : [];
 
-            const newEntry = { category, name, keywords, content };
+            const position = parseInt(document.getElementById('ttw-default-entry-position').value) || 0;
+            const depth = parseInt(document.getElementById('ttw-default-entry-depth').value) || 4;
+            const order = parseInt(document.getElementById('ttw-default-entry-order').value) || 100;
+
+            const newEntry = { category, name, keywords, content, position, depth, order };
+
 
             if (isEdit) {
                 defaultWorldbookEntriesUI[editIndex] = newEntry;
@@ -6501,7 +6538,7 @@ ${pairsWithContent}
                 html += `<div style="margin:8px;border:1px solid #555;border-radius:6px;overflow:hidden;">
                     <div style="background:#3a3a3a;padding:8px 12px;cursor:pointer;display:flex;justify-content:space-between;border-left:3px solid #3498db;" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
                         <span style="display:flex;align-items:center;gap:6px;">📄 ${entryName}<button class="ttw-entry-config-btn ttw-config-btn" data-category="${category}" data-entry="${entryName}" title="配置位置/深度/顺序" onclick="event.stopPropagation();">⚙️</button></span>
-                        <span style="font-size:10px;color:#888;">P${config.position} D${config.depth} O${config.order}</span>
+                        <span style="font-size:10px;color:#888;">${getPositionDisplayName(config.position)} | 深度${config.depth} | 顺序${config.order}</span>
                     </div>
                     <div style="display:none;background:#1c1c1c;padding:12px;">`;
                 if (entry && typeof entry === 'object') {
@@ -6750,6 +6787,6 @@ ${pairsWithContent}
         getDefaultWorldbookEntriesUI: () => defaultWorldbookEntriesUI
     };
 
-    console.log('📚 TxtToWorldbook v2.9.0 已加载');
+    console.log('📚 TxtToWorldbook v2.9.1 已加载');
 })();
 
