@@ -6789,6 +6789,6 @@ ${pairsWithContent}
         getDefaultWorldbookEntriesUI: () => defaultWorldbookEntriesUI
     };
 
-    console.log('📚 TxtToWorldbook v2.9.0 已加载');
+    console.log('📚 TxtToWorldbook v2.9.1 已加载');
 })();
 
