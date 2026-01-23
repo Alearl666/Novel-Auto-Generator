@@ -3634,66 +3634,67 @@ ${pairsWithContent}
 
     // 修改：导入配置 - 包含提示词配置
     function importSettings() {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.json';
-        input.onchange = async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            try {
-                const content = await file.text();
-                const data = JSON.parse(content);
-                if (data.type !== 'settings') throw new Error('不是有效的配置文件');
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        try {
+            const content = await file.text();
+            const data = JSON.parse(content);
+            if (data.type !== 'settings') throw new Error('不是有效的配置文件');
 
-                if (data.settings) {
-                    settings = { ...defaultSettings, ...data.settings };
-                }
-                if (data.parallelConfig) {
-                    parallelConfig = { ...parallelConfig, ...data.parallelConfig };
-                }
-                if (data.categoryLightSettings) {
-                    categoryLightSettings = { ...categoryLightSettings, ...data.categoryLightSettings };
-                }
-                if (data.customWorldbookCategories) {
-                    customWorldbookCategories = data.customWorldbookCategories;
-                    await saveCustomCategories();
-                }
-                if (data.chapterRegexSettings) {
-                    chapterRegexSettings = data.chapterRegexSettings;
-                }
-
-                // 新增：恢复提示词配置
-                if (data.prompts) {
-                    if (data.prompts.worldbookPrompt !== undefined) {
-                        settings.customWorldbookPrompt = data.prompts.worldbookPrompt;
-                    }
-                    if (data.prompts.plotPrompt !== undefined) {
-                        settings.customPlotPrompt = data.prompts.plotPrompt;
-                    }
-                    if (data.prompts.stylePrompt !== undefined) {
-                        settings.customStylePrompt = data.prompts.stylePrompt;
-                    }
-                    if (data.prompts.mergePrompt !== undefined) {
-                        settings.customMergePrompt = data.prompts.mergePrompt;
-                    }
-                    if (data.prompts.rerollPrompt !== undefined) {
-                        settings.customRerollPrompt = data.prompts.rerollPrompt;
-                    }
-                    if (data.prompts.defaultWorldbookEntries !== undefined) {
-                        settings.defaultWorldbookEntries = data.prompts.defaultWorldbookEntries;
-                    }
-                }
-
-                saveCurrentSettings();
-                updateSettingsUI();
-                renderCategoriesList();
-                updateChapterRegexUI();
-
-                alert('配置导入成功！（包含提示词配置）');
-            } catch (error) {
-                alert('导入失败: ' + error.message);
+            if (data.settings) {
+                settings = { ...defaultSettings, ...data.settings };
             }
-        };
+            if (data.parallelConfig) {
+                parallelConfig = { ...parallelConfig, ...data.parallelConfig };
+            }
+            if (data.categoryLightSettings) {
+                categoryLightSettings = { ...categoryLightSettings, ...data.categoryLightSettings };
+            }
+            if (data.customWorldbookCategories) {
+                customWorldbookCategories = data.customWorldbookCategories;
+                await saveCustomCategories();
+            }
+            if (data.chapterRegexSettings) {
+                chapterRegexSettings = data.chapterRegexSettings;
+            }
+
+            // 新增：恢复提示词配置
+            if (data.prompts) {
+                if (data.prompts.worldbookPrompt !== undefined) {
+                    settings.customWorldbookPrompt = data.prompts.worldbookPrompt;
+                }
+                if (data.prompts.plotPrompt !== undefined) {
+                    settings.customPlotPrompt = data.prompts.plotPrompt;
+                }
+                if (data.prompts.stylePrompt !== undefined) {
+                    settings.customStylePrompt = data.prompts.stylePrompt;
+                }
+                if (data.prompts.mergePrompt !== undefined) {
+                    settings.customMergePrompt = data.prompts.mergePrompt;
+                }
+                if (data.prompts.rerollPrompt !== undefined) {
+                    settings.customRerollPrompt = data.prompts.rerollPrompt;
+                }
+                if (data.prompts.defaultWorldbookEntries !== undefined) {
+                    settings.defaultWorldbookEntries = data.prompts.defaultWorldbookEntries;
+                }
+            }
+
+            // ✅ 修复：先更新UI，再保存到localStorage
+            updateSettingsUI();
+            renderCategoriesList();
+            updateChapterRegexUI();
+            saveCurrentSettings();   // 移到最后，这样从已填充的DOM读取正确值
+
+            alert('配置导入成功！（包含提示词配置）');
+        } catch (error) {
+            alert('导入失败: ' + error.message);
+        }
+    };
         input.click();
     }
 
