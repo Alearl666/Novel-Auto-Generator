@@ -1,6 +1,6 @@
 
 /**
- * TXT转世界书独立模块 v2.8.1
+ * TXT转世界书独立模块 v2.8.2
  * 修复: 自定义分类位置、导入导出配置、占位符提示、单项重置、多选删除、重新分块、API测试
  */
 
@@ -2011,31 +2011,37 @@
     }
 
     function updateStartButtonState(isProcessing) {
-        const startBtn = document.getElementById('ttw-start-btn');
-        if (!startBtn) return;
-        if (isProcessing) {
-            startBtn.disabled = true;
-            startBtn.textContent = '转换中...';
+    const startBtn = document.getElementById('ttw-start-btn');
+    if (!startBtn) return;
+
+    // 修复：如果还有并行任务在运行，不更新为非处理状态
+    if (!isProcessing && activeParallelTasks.size > 0) {
+        return;
+    }
+
+    if (isProcessing) {
+        startBtn.disabled = true;
+        startBtn.textContent = '转换中...';
+    } else {
+        startBtn.disabled = false;
+        if (userSelectedStartIndex !== null) {
+            startBtn.textContent = `▶️ 从第${userSelectedStartIndex + 1}章开始`;
+            startFromIndex = userSelectedStartIndex;
+            return;
+        }
+        const firstUnprocessed = memoryQueue.findIndex(m => !m.processed || m.failed);
+        if (firstUnprocessed !== -1 && firstUnprocessed < memoryQueue.length) {
+            startBtn.textContent = `▶️ 继续转换 (从第${firstUnprocessed + 1}章)`;
+            startFromIndex = firstUnprocessed;
+        } else if (memoryQueue.length > 0 && memoryQueue.every(m => m.processed && !m.failed)) {
+            startBtn.textContent = '🚀 重新转换';
+            startFromIndex = 0;
         } else {
-            startBtn.disabled = false;
-            if (userSelectedStartIndex !== null) {
-                startBtn.textContent = `▶️ 从第${userSelectedStartIndex + 1}章开始`;
-                startFromIndex = userSelectedStartIndex;
-                return;
-            }
-            const firstUnprocessed = memoryQueue.findIndex(m => !m.processed || m.failed);
-            if (firstUnprocessed !== -1 && firstUnprocessed < memoryQueue.length) {
-                startBtn.textContent = `▶️ 继续转换 (从第${firstUnprocessed + 1}章)`;
-                startFromIndex = firstUnprocessed;
-            } else if (memoryQueue.length > 0 && memoryQueue.every(m => m.processed && !m.failed)) {
-                startBtn.textContent = '🚀 重新转换';
-                startFromIndex = 0;
-            } else {
-                startBtn.textContent = '🚀 开始转换';
-                startFromIndex = 0;
-            }
+            startBtn.textContent = '🚀 开始转换';
+            startFromIndex = 0;
         }
     }
+}
 
     // ========== 修复失败记忆 ==========
     async function repairSingleMemory(index) {
@@ -5880,5 +5886,5 @@ ${pairsWithContent}
         rechunkMemories
     };
 
-    console.log('📚 TxtToWorldbook v2.8.1 已加载 (修复版)');
+    console.log('📚 TxtToWorldbook v2.8.2 已加载 (修复版)');
 })();
