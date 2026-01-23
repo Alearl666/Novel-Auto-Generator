@@ -1,6 +1,6 @@
 
 /**
- * TXT转世界书独立模块 v2.9.1
+ * TXT转世界书独立模块 v2.9.2
  * 新增: 查找高亮、批量替换、多选整理分类、条目位置/深度/顺序配置、默认世界书UI化
  */
 
@@ -1906,6 +1906,7 @@
     }
 
     // ========== 应用默认世界书条目 ==========
+    // ========== 应用默认世界书条目 ==========
     function applyDefaultWorldbookEntries() {
         // 优先使用UI数据
         if (defaultWorldbookEntriesUI && defaultWorldbookEntriesUI.length > 0) {
@@ -1918,6 +1919,15 @@
                     '关键词': entry.keywords || [],
                     '内容': entry.content || ''
                 };
+
+                // 【新增】同步位置/深度/顺序配置到 entryPositionConfig
+                if (entry.position !== undefined || entry.depth !== undefined || entry.order !== undefined) {
+                    setEntryConfig(entry.category, entry.name, {
+                        position: entry.position ?? 0,
+                        depth: entry.depth ?? 4,
+                        order: entry.order ?? 100
+                    });
+                }
             }
             updateStreamContent(`\n📚 已添加 ${defaultWorldbookEntriesUI.length} 个默认世界书条目\n`);
             return true;
@@ -1937,6 +1947,7 @@
             return false;
         }
     }
+
 
     // ========== 主处理流程 ==========
     async function startAIProcessing() {
@@ -6789,6 +6800,6 @@ ${pairsWithContent}
         getDefaultWorldbookEntriesUI: () => defaultWorldbookEntriesUI
     };
 
-    console.log('📚 TxtToWorldbook v2.9.1 已加载');
+    console.log('📚 TxtToWorldbook v2.9.2 已加载');
 })();
 
