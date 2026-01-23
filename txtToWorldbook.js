@@ -4875,7 +4875,7 @@ ${pairsWithContent}
         helpModal.innerHTML = `
             <div class="ttw-modal" style="max-width:650px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">❓ TXT转世界书 v2.9.0 帮助</span>
+                    <span class="ttw-modal-title">❓ TXT转世界书 v2.9.2  帮助</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
@@ -4884,7 +4884,7 @@ ${pairsWithContent}
                         <p style="color:#ccc;line-height:1.6;margin:0;">将TXT小说转换为SillyTavern世界书格式，自动提取角色、地点、组织等信息。</p>
                     </div>
                     <div style="margin-bottom:16px;">
-                        <h4 style="color:#9b59b6;margin:0 0 10px;">🏷️ v2.9.0 更新</h4>
+                        <h4 style="color:#9b59b6;margin:0 0 10px;">🏷️ v2.9.2  更新</h4>
                         <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
                             <li><strong>🔍 查找功能</strong>：查找处理结果中的特定字符并高亮</li>
                             <li><strong>🔄 批量替换</strong>：替换所有处理结果中的词语</li>
@@ -5347,7 +5347,7 @@ ${pairsWithContent}
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v2.9.0</span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v2.9.2 </span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
