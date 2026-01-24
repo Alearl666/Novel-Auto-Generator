@@ -1,7 +1,7 @@
 
 /**
- * TXT转世界书独立模块 v2.7.2
- * 修复: 移动端UI优化、按类别勾选条目、别名识别发送内容
+ * TXT转世界书独立模块 v2.9.2
+ * 新增: 查找高亮、批量替换、多选整理分类、条目位置/深度/顺序配置、默认世界书UI化
  */
 
 (function () {
@@ -28,6 +28,87 @@
     // 新增：导入数据暂存
     let pendingImportData = null;
 
+    // 新增：多选删除模式
+    let isMultiSelectMode = false;
+    let selectedMemoryIndices = new Set();
+
+    // 新增：查找高亮关键词
+    let searchHighlightKeyword = '';
+
+    // 新增：条目位置/深度/顺序配置（按分类和条目名称存储）
+    let entryPositionConfig = {};
+
+    // ========== 新增：默认世界书条目UI数据 ==========
+    let defaultWorldbookEntriesUI = [];
+
+    // ========== 新增：自定义分类系统 ==========
+    const DEFAULT_WORLDBOOK_CATEGORIES = [
+        {
+            name: "角色",
+            enabled: true,
+            isBuiltin: true,
+            entryExample: "角色真实姓名",
+            keywordsExample: ["真实姓名", "称呼1", "称呼2", "绰号"],
+            contentGuide: "基于原文的角色描述，包含但不限于**名称**:（必须要）、**性别**:、**MBTI(必须要，如变化请说明背景)**:、**貌龄**:、**年龄**:、**身份**:、**背景**:、**性格**:、**外貌**:、**技能**:、**重要事件**:、**话语示例**:、**弱点**:、**背景故事**:等（实际嵌套或者排列方式按合理的逻辑）"
+        },
+        {
+            name: "地点",
+            enabled: true,
+            isBuiltin: true,
+            entryExample: "地点真实名称",
+            keywordsExample: ["地点名", "别称", "俗称"],
+            contentGuide: "基于原文的地点描述，包含但不限于**名称**:（必须要）、**位置**:、**特征**:、**重要事件**:等（实际嵌套或者排列方式按合理的逻辑）"
+        },
+        {
+            name: "组织",
+            enabled: true,
+            isBuiltin: true,
+            entryExample: "组织真实名称",
+            keywordsExample: ["组织名", "简称", "代号"],
+            contentGuide: "基于原文的组织描述，包含但不限于**名称**:（必须要）、**性质**:、**成员**:、**目标**:等（实际嵌套或者排列方式按合理的逻辑）"
+        },
+        {
+            name: "道具",
+            enabled: false,
+            isBuiltin: false,
+            entryExample: "道具名称",
+            keywordsExample: ["道具名", "别名"],
+            contentGuide: "基于原文的道具描述，包含但不限于**名称**:、**类型**:、**功能**:、**来源**:、**持有者**:等"
+        },
+        {
+            name: "玩法",
+            enabled: false,
+            isBuiltin: false,
+            entryExample: "玩法名称",
+            keywordsExample: ["玩法名", "规则名"],
+            contentGuide: "基于原文的玩法/规则描述，包含但不限于**名称**:、**规则说明**:、**参与条件**:、**奖惩机制**:等"
+        },
+        {
+            name: "章节剧情",
+            enabled: false,
+            isBuiltin: false,
+            entryExample: "第X章",
+            keywordsExample: ["章节名", "章节号"],
+            contentGuide: "该章节的剧情概要，包含但不限于**章节标题**:、**主要事件**:、**出场角色**:、**关键转折**:、**伏笔线索**:等"
+        },
+        {
+            name: "角色内心",
+            enabled: false,
+            isBuiltin: false,
+            entryExample: "角色名-内心世界",
+            keywordsExample: ["角色名", "内心", "心理"],
+            contentGuide: "角色的内心想法和心理活动，包含但不限于**原文内容**:、**内心独白**:、**情感变化**:、**动机分析**:、**心理矛盾**:等"
+        }
+    ];
+
+    let customWorldbookCategories = JSON.parse(JSON.stringify(DEFAULT_WORLDBOOK_CATEGORIES));
+
+    // ========== 新增：章回正则配置 ==========
+    let chapterRegexSettings = {
+        pattern: '第[零一二三四五六七八九十百千万0-9]+[章回卷节部篇]',
+        useCustomRegex: false
+    };
+
     // ========== 分类灯状态配置 ==========
     let categoryLightSettings = {
         '角色': false,
@@ -39,6 +120,9 @@
         '地图环境': true,
         '剧情节点': true
     };
+
+    // ========== 新增：分类默认位置/深度配置 ==========
+    let categoryDefaultConfig = {};
 
     // ========== 并行处理配置 ==========
     let parallelConfig = {
@@ -63,26 +147,7 @@
 请生成标准JSON格式，确保能被JavaScript正确解析：
 
 \`\`\`json
-{
-"角色": {
-"角色真实姓名": {
-"关键词": ["真实姓名", "称呼1", "称呼2", "绰号"],
-"内容": "基于原文的角色描述，包含但不限于**名称**:（必须要）、**性别**:、**MBTI(必须要，如变化请说明背景)**:、**貌龄**:、**年龄**:、**身份**:、**背景**:、**性格**:、**外貌**:、**技能**:、**重要事件**:、**话语示例**:、**弱点**:、**背景故事**:等（实际嵌套或者排列方式按合理的逻辑）"
-}
-},
-"地点": {
-"地点真实名称": {
-"关键词": ["地点名", "别称", "俗称"],
-"内容": "基于原文的地点描述，包含但不限于**名称**:（必须要）、**位置**:、**特征**:、**重要事件**:等（实际嵌套或者排列方式按合理的逻辑）"
-}
-},
-"组织": {
-"组织真实名称": {
-"关键词": ["组织名", "简称", "代号"],
-"内容": "基于原文的组织描述，包含但不限于**名称**:（必须要）、**性质**:、**成员**:、**目标**:等（实际嵌套或者排列方式按合理的逻辑）"
-}
-}
-}
+{DYNAMIC_JSON_TEMPLATE}
 \`\`\`
 
 ## 重要提醒
@@ -162,7 +227,12 @@
         customApiKey: '',
         customApiEndpoint: '',
         customApiModel: 'gemini-2.5-flash',
-        forceChapterMarker: true
+        forceChapterMarker: true,
+        chapterRegexPattern: '第[零一二三四五六七八九十百千万0-9]+[章回卷节部篇]',
+        useCustomChapterRegex: false,
+        defaultWorldbookEntriesUI: [],
+        categoryDefaultConfig: {},
+        entryPositionConfig: {}
     };
 
     let settings = { ...defaultSettings };
@@ -220,12 +290,13 @@
         metaStoreName: 'meta',
         stateStoreName: 'state',
         rollStoreName: 'rolls',
+        categoriesStoreName: 'categories',
         db: null,
 
         async openDB() {
             if (this.db) return this.db;
             return new Promise((resolve, reject) => {
-                const request = indexedDB.open(this.dbName, 4);
+                const request = indexedDB.open(this.dbName, 5);
                 request.onupgradeneeded = (event) => {
                     const db = event.target.result;
                     if (!db.objectStoreNames.contains(this.storeName)) {
@@ -243,12 +314,37 @@
                         const rollStore = db.createObjectStore(this.rollStoreName, { keyPath: 'id', autoIncrement: true });
                         rollStore.createIndex('memoryIndex', 'memoryIndex', { unique: false });
                     }
+                    if (!db.objectStoreNames.contains(this.categoriesStoreName)) {
+                        db.createObjectStore(this.categoriesStoreName, { keyPath: 'key' });
+                    }
                 };
                 request.onsuccess = (event) => {
                     this.db = event.target.result;
                     resolve(this.db);
                 };
                 request.onerror = (event) => reject(event.target.error);
+            });
+        },
+
+        async saveCustomCategories(categories) {
+            const db = await this.openDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([this.categoriesStoreName], 'readwrite');
+                const store = transaction.objectStore(this.categoriesStoreName);
+                const request = store.put({ key: 'customCategories', value: categories });
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+            });
+        },
+
+        async getCustomCategories() {
+            const db = await this.openDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([this.categoriesStoreName], 'readonly');
+                const store = transaction.objectStore(this.categoriesStoreName);
+                const request = store.get('customCategories');
+                request.onsuccess = () => resolve(request.result?.value || null);
+                request.onerror = () => reject(request.error);
             });
         },
 
@@ -505,6 +601,75 @@
         }
     };
 
+    // ========== 新增：自定义分类管理函数 ==========
+    async function saveCustomCategories() {
+        try {
+            await MemoryHistoryDB.saveCustomCategories(customWorldbookCategories);
+            console.log('自定义分类配置已保存');
+        } catch (error) {
+            console.error('保存自定义分类配置失败:', error);
+        }
+    }
+
+    async function loadCustomCategories() {
+        try {
+            const saved = await MemoryHistoryDB.getCustomCategories();
+            if (saved && Array.isArray(saved) && saved.length > 0) {
+                customWorldbookCategories = saved;
+            }
+        } catch (error) {
+            console.error('加载自定义分类配置失败:', error);
+        }
+    }
+
+    async function resetToDefaultCategories() {
+        customWorldbookCategories = JSON.parse(JSON.stringify(DEFAULT_WORLDBOOK_CATEGORIES));
+        await saveCustomCategories();
+        console.log('已重置为默认分类配置');
+    }
+
+    async function resetSingleCategory(index) {
+        const cat = customWorldbookCategories[index];
+        if (!cat) return;
+
+        const defaultCat = DEFAULT_WORLDBOOK_CATEGORIES.find(c => c.name === cat.name);
+        if (defaultCat) {
+            customWorldbookCategories[index] = JSON.parse(JSON.stringify(defaultCat));
+        } else {
+            customWorldbookCategories.splice(index, 1);
+        }
+        await saveCustomCategories();
+    }
+
+    function getEnabledCategories() {
+        return customWorldbookCategories.filter(cat => cat.enabled);
+    }
+
+    function generateDynamicJsonTemplate() {
+        const enabledCategories = getEnabledCategories();
+        let template = '{\n';
+        const parts = [];
+
+        for (const cat of enabledCategories) {
+            parts.push(`"${cat.name}": {
+"${cat.entryExample}": {
+"关键词": ${JSON.stringify(cat.keywordsExample)},
+"内容": "${cat.contentGuide}"
+}
+}`);
+        }
+
+        template += parts.join(',\n');
+        template += '\n}';
+        return template;
+    }
+
+    function getEnabledCategoryNames() {
+        const names = getEnabledCategories().map(cat => cat.name);
+        names.push('剧情大纲', '知识书', '文风配置', '地图环境', '剧情节点');
+        return names;
+    }
+
     // ========== 工具函数 ==========
     async function calculateFileHash(content) {
         if (window.crypto && window.crypto.subtle) {
@@ -578,6 +743,17 @@
             streamEl.scrollTop = streamEl.scrollHeight;
         }
     }
+    // 位置值转中文显示
+    function getPositionDisplayName(position) {
+        const positionNames = {
+            0: '在角色定义之前',
+            1: '在角色定义之后',
+            2: '在作者注释之前',
+            3: '在作者注释之后',
+            4: '自定义深度'
+        };
+        return positionNames[position] || '在角色定义之前';
+    }
 
     // ========== 分类灯状态管理 ==========
     function getCategoryLightState(category) {
@@ -601,6 +777,32 @@
         if (settings.categoryLightSettings) {
             categoryLightSettings = { ...categoryLightSettings, ...settings.categoryLightSettings };
         }
+    }
+
+    // ========== 新增：条目位置/深度/顺序配置管理 ==========
+    function getEntryConfig(category, entryName) {
+        const key = `${category}::${entryName}`;
+        if (entryPositionConfig[key]) {
+            return entryPositionConfig[key];
+        }
+        // 返回分类默认配置或全局默认
+        if (categoryDefaultConfig[category]) {
+            return { ...categoryDefaultConfig[category] };
+        }
+        return { position: 0, depth: 4, order: 100 };
+    }
+
+    function setEntryConfig(category, entryName, config) {
+        const key = `${category}::${entryName}`;
+        entryPositionConfig[key] = { ...config };
+        settings.entryPositionConfig = entryPositionConfig;
+        saveCurrentSettings();
+    }
+
+    function setCategoryDefaultConfig(category, config) {
+        categoryDefaultConfig[category] = { ...config };
+        settings.categoryDefaultConfig = categoryDefaultConfig;
+        saveCurrentSettings();
     }
 
     // ========== API调用 - 酒馆API ==========
@@ -800,15 +1002,15 @@
             let result;
 
             if (provider === 'gemini') {
-                result = data.candidates[0].content.parts[0].text;
+                result = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
             } else if (provider === 'gemini-proxy') {
                 if (data.candidates) {
-                    result = data.candidates[0].content.parts[0].text;
+                    result = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
                 } else if (data.choices) {
-                    result = data.choices[0].message.content;
+                    result = data.choices?.[0]?.message?.content || '';
                 }
             } else {
-                result = data.choices[0].message.content;
+                result = data.choices?.[0]?.message?.content || '';
             }
 
             updateStreamContent(`📥 收到响应 (${result.length}字符)\n`);
@@ -914,8 +1116,9 @@
             headers: headers,
             body: JSON.stringify({
                 model: model,
-                messages: [{ role: 'user', content: 'Hi' }],
-                max_tokens: 50
+                messages: [{ role: 'user', content: 'Say "OK" if you can hear me.' }],
+                max_tokens: 100,
+                temperature: 0.1
             })
         });
 
@@ -930,12 +1133,47 @@
         console.log('📥 测试响应:', data);
 
         let responseText = '';
-        if (data.choices && data.choices[0]) {
-            responseText = data.choices[0].message?.content || data.choices[0].text || '';
+
+        if (data.choices && Array.isArray(data.choices) && data.choices.length > 0) {
+            const choice = data.choices[0];
+            if (choice.message && choice.message.content) {
+                responseText = choice.message.content;
+            } else if (choice.text) {
+                responseText = choice.text;
+            } else if (typeof choice.content === 'string') {
+                responseText = choice.content;
+            }
+        } else if (data.response) {
+            responseText = data.response;
+        } else if (data.content) {
+            responseText = data.content;
+        } else if (data.text) {
+            responseText = data.text;
+        } else if (data.output) {
+            responseText = data.output;
+        } else if (data.generated_text) {
+            responseText = data.generated_text;
         }
 
         if (!responseText || responseText.trim() === '') {
-            throw new Error('API返回了空响应，请检查模型配置');
+            console.warn('无法解析响应，完整数据:', JSON.stringify(data, null, 2));
+
+            const possibleFields = ['result', 'message', 'data', 'completion'];
+            for (const field of possibleFields) {
+                if (data[field]) {
+                    if (typeof data[field] === 'string') {
+                        responseText = data[field];
+                        break;
+                    } else if (typeof data[field] === 'object' && data[field].content) {
+                        responseText = data[field].content;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!responseText || responseText.trim() === '') {
+            throw new Error(`API返回了无法解析的响应格式。\n响应数据: ${JSON.stringify(data).substring(0, 200)}`);
         }
 
         return {
@@ -1083,7 +1321,7 @@
             processed[category] = {};
             for (const entryName in result[category]) {
                 let newEntryName = entryName;
-                if (category === '剧情大纲' || category === '剧情节点') {
+                if (category === '剧情大纲' || category === '剧情节点' || category === '章节剧情') {
                     newEntryName = entryName.replace(/第[一二三四五六七八九十百千万\d]+章/g, `第${chapterIndex}章`);
                     if (!newEntryName.includes(`第${chapterIndex}章`) && !newEntryName.includes('-第')) {
                         newEntryName = `${newEntryName}-第${chapterIndex}章`;
@@ -1098,7 +1336,7 @@
     // ========== 解析AI响应 ==========
     function extractWorldbookDataByRegex(jsonString) {
         const result = {};
-        const categories = ['角色', '地点', '组织', '剧情大纲', '知识书', '文风配置', '地图环境', '剧情节点'];
+        const categories = getEnabledCategoryNames();
         for (const category of categories) {
             const categoryPattern = new RegExp(`"${category}"\\s*:\\s*\\{`, 'g');
             const categoryMatch = categoryPattern.exec(jsonString);
@@ -1279,9 +1517,48 @@
         }
     }
 
+    function deleteSelectedMemories() {
+        if (selectedMemoryIndices.size === 0) {
+            alert('请先选择要删除的章节');
+            return;
+        }
+
+        const hasProcessed = [...selectedMemoryIndices].some(i => memoryQueue[i]?.processed && !memoryQueue[i]?.failed);
+        let confirmMsg = `确定要删除选中的 ${selectedMemoryIndices.size} 个章节吗？`;
+        if (hasProcessed) {
+            confirmMsg += '\n\n⚠️ 警告：选中的章节中包含已处理的章节，删除后相关的世界书数据不会自动更新！';
+        }
+
+        if (!confirm(confirmMsg)) return;
+
+        const sortedIndices = [...selectedMemoryIndices].sort((a, b) => b - a);
+        for (const index of sortedIndices) {
+            memoryQueue.splice(index, 1);
+        }
+
+        memoryQueue.forEach((m, i) => {
+            if (!m.title.includes('-')) m.title = `记忆${i + 1}`;
+        });
+
+        startFromIndex = Math.min(startFromIndex, Math.max(0, memoryQueue.length - 1));
+        if (userSelectedStartIndex !== null) {
+            userSelectedStartIndex = Math.min(userSelectedStartIndex, Math.max(0, memoryQueue.length - 1));
+        }
+
+        selectedMemoryIndices.clear();
+        isMultiSelectMode = false;
+
+        updateMemoryQueueUI();
+        updateStartButtonState(false);
+    }
+
     // ========== 获取系统提示词 ==========
     function getSystemPrompt() {
-        const worldbookPrompt = settings.customWorldbookPrompt?.trim() || defaultWorldbookPrompt;
+        let worldbookPrompt = settings.customWorldbookPrompt?.trim() || defaultWorldbookPrompt;
+
+        const dynamicTemplate = generateDynamicJsonTemplate();
+        worldbookPrompt = worldbookPrompt.replace('{DYNAMIC_JSON_TEMPLATE}', dynamicTemplate);
+
         const additionalParts = [];
         if (settings.enablePlotOutline) {
             additionalParts.push(settings.customPlotPrompt?.trim() || defaultPlotPrompt);
@@ -1314,6 +1591,11 @@
                 if (result['剧情节点']) {
                     for (const entryName in result['剧情节点']) {
                         plotContext.push(`${entryName}: ${result['剧情节点'][entryName]['内容']?.substring(0, 200) || ''}`);
+                    }
+                }
+                if (result['章节剧情']) {
+                    for (const entryName in result['章节剧情']) {
+                        plotContext.push(`${entryName}: ${result['章节剧情'][entryName]['内容']?.substring(0, 200) || ''}`);
                     }
                 }
 
@@ -1363,10 +1645,12 @@
         }
 
         prompt += `\n\n当前需要分析的内容（第${chapterIndex}章）：\n---\n${memory.content}\n---\n`;
-        prompt += `\n请提取角色、地点、组织等信息，直接输出JSON。`;
+
+        const enabledCatNames = getEnabledCategories().map(c => c.name).join('、');
+        prompt += `\n请提取${enabledCatNames}等信息，直接输出JSON。`;
 
         if (settings.forceChapterMarker) {
-            prompt += `\n\n【重要提醒】如果输出剧情大纲或剧情节点，条目名称必须包含"第${chapterIndex}章"！`;
+            prompt += `\n\n【重要提醒】如果输出剧情大纲或剧情节点或章节剧情，条目名称必须包含"第${chapterIndex}章"！`;
             prompt += chapterForcePrompt;
         }
 
@@ -1521,7 +1805,7 @@
         }
 
         if (settings.forceChapterMarker) {
-            prompt += `\n\n【重要提醒】如果输出剧情大纲或剧情节点，条目名称必须包含"第${chapterIndex}章"！`;
+            prompt += `\n\n【重要提醒】如果输出剧情大纲或剧情节点或章节剧情，条目名称必须包含"第${chapterIndex}章"！`;
             prompt += `\n直接输出JSON格式结果。`;
             prompt += chapterForcePrompt;
         } else {
@@ -1622,7 +1906,34 @@
     }
 
     // ========== 应用默认世界书条目 ==========
+    // ========== 应用默认世界书条目 ==========
     function applyDefaultWorldbookEntries() {
+        // 优先使用UI数据
+        if (defaultWorldbookEntriesUI && defaultWorldbookEntriesUI.length > 0) {
+            for (const entry of defaultWorldbookEntriesUI) {
+                if (!entry.category || !entry.name) continue;
+                if (!generatedWorldbook[entry.category]) {
+                    generatedWorldbook[entry.category] = {};
+                }
+                generatedWorldbook[entry.category][entry.name] = {
+                    '关键词': entry.keywords || [],
+                    '内容': entry.content || ''
+                };
+
+                // 【新增】同步位置/深度/顺序配置到 entryPositionConfig
+                if (entry.position !== undefined || entry.depth !== undefined || entry.order !== undefined) {
+                    setEntryConfig(entry.category, entry.name, {
+                        position: entry.position ?? 0,
+                        depth: entry.depth ?? 4,
+                        order: entry.order ?? 100
+                    });
+                }
+            }
+            updateStreamContent(`\n📚 已添加 ${defaultWorldbookEntriesUI.length} 个默认世界书条目\n`);
+            return true;
+        }
+
+        // 兼容旧的JSON格式
         if (!settings.defaultWorldbookEntries?.trim()) return false;
 
         try {
@@ -1637,6 +1948,7 @@
         }
     }
 
+
     // ========== 主处理流程 ==========
     async function startAIProcessing() {
         showProgressSection(true);
@@ -1648,7 +1960,9 @@
         activeParallelTasks.clear();
 
         updateStreamContent('', true);
-        updateStreamContent(`🚀 开始处理...\n📊 处理模式: ${parallelConfig.enabled ? `并行 (${parallelConfig.concurrency}并发)` : '串行'}\n🔧 API模式: ${settings.useTavernApi ? '酒馆API' : '自定义API (' + settings.customApiProvider + ')'}\n📌 强制章节标记: ${settings.forceChapterMarker ? '开启' : '关闭'}\n${'='.repeat(50)}\n`);
+
+        const enabledCatNames = getEnabledCategories().map(c => c.name).join(', ');
+        updateStreamContent(`🚀 开始处理...\n📊 处理模式: ${parallelConfig.enabled ? `并行 (${parallelConfig.concurrency}并发)` : '串行'}\n🔧 API模式: ${settings.useTavernApi ? '酒馆API' : '自定义API (' + settings.customApiProvider + ')'}\n📌 强制章节标记: ${settings.forceChapterMarker ? '开启' : '关闭'}\n🏷️ 启用分类: ${enabledCatNames}\n${'='.repeat(50)}\n`);
 
         const effectiveStartIndex = userSelectedStartIndex !== null ? userSelectedStartIndex : startFromIndex;
 
@@ -1759,6 +2073,11 @@
     function updateStartButtonState(isProcessing) {
         const startBtn = document.getElementById('ttw-start-btn');
         if (!startBtn) return;
+
+        if (!isProcessing && activeParallelTasks.size > 0) {
+            return;
+        }
+
         if (isProcessing) {
             startBtn.disabled = true;
             startBtn.textContent = '转换中...';
@@ -1794,7 +2113,7 @@
         prompt += getLanguagePrefix() + `你是世界书生成专家。请提取关键信息。
 
 输出JSON格式：
-{"角色": {...}, "地点": {...}, "组织": {...}}
+${generateDynamicJsonTemplate()}
 `;
 
         const prevContext = getPreviousMemoryContext(index);
@@ -2071,7 +2390,6 @@
                     memory.processed = true;
                     memory.failed = false;
 
-                    // 重建整个世界书
                     rebuildWorldbookFromMemories();
 
                     updateMemoryQueueUI();
@@ -2108,7 +2426,6 @@
                     worldbookToMerge = importedData;
                 }
 
-                // 保存到暂存变量
                 pendingImportData = {
                     worldbook: worldbookToMerge,
                     fileName: file.name,
@@ -2126,7 +2443,6 @@
         input.click();
     }
 
-    // ST格式转换
     function convertSTFormatToInternal(stData) {
         const result = {};
         if (!stData.entries) return result;
@@ -2177,7 +2493,6 @@
         return result;
     }
 
-    // 查找真正的重复条目
     function findDuplicateEntries(existing, imported) {
         const duplicates = [];
         for (const category in imported) {
@@ -2212,7 +2527,6 @@
         return newEntries;
     }
 
-    // 按分类分组条目
     function groupEntriesByCategory(entries) {
         const grouped = {};
         for (const item of entries) {
@@ -2225,7 +2539,6 @@
     }
 
     function showMergeOptionsModal(importedWorldbook, fileName) {
-        // 如果参数为空但有暂存数据，恢复它
         if (!importedWorldbook && pendingImportData) {
             importedWorldbook = pendingImportData.worldbook;
             fileName = pendingImportData.fileName;
@@ -2242,7 +2555,6 @@
         const duplicates = findDuplicateEntries(generatedWorldbook, importedWorldbook);
         const newEntries = findNewEntries(generatedWorldbook, importedWorldbook);
 
-        // 按分类分组
         const groupedNew = groupEntriesByCategory(newEntries);
         const groupedDup = groupEntriesByCategory(duplicates);
 
@@ -2250,7 +2562,6 @@
         modal.id = 'ttw-merge-modal';
         modal.className = 'ttw-modal-container';
 
-        // 生成新条目列表（按分类）
         let newEntriesListHtml = '';
         if (newEntries.length > 0) {
             newEntriesListHtml = `
@@ -2287,7 +2598,6 @@
             newEntriesListHtml += `</div></div>`;
         }
 
-        // 生成重复条目列表（按分类）
         let dupEntriesListHtml = '';
         if (duplicates.length > 0) {
             dupEntriesListHtml = `
@@ -2408,7 +2718,6 @@
 
         document.body.appendChild(modal);
 
-        // 绑定全选事件
         const selectAllNewCb = modal.querySelector('#ttw-select-all-new');
         if (selectAllNewCb) {
             selectAllNewCb.addEventListener('change', (e) => {
@@ -2425,7 +2734,6 @@
             });
         }
 
-        // 绑定分类全选联动 - 新条目
         modal.querySelectorAll('.ttw-new-category-cb').forEach(cb => {
             cb.addEventListener('change', (e) => {
                 const category = e.target.dataset.category;
@@ -2435,7 +2743,6 @@
             });
         });
 
-        // 绑定分类全选联动 - 重复条目
         modal.querySelectorAll('.ttw-dup-category-cb').forEach(cb => {
             cb.addEventListener('change', (e) => {
                 const category = e.target.dataset.category;
@@ -2445,7 +2752,6 @@
             });
         });
 
-        // 条目勾选变化时更新分类复选框状态
         modal.querySelectorAll('.ttw-new-entry-cb').forEach(cb => {
             cb.addEventListener('change', () => {
                 const category = cb.dataset.category;
@@ -2498,7 +2804,6 @@
             settings.customMergePrompt = customPrompt;
             saveCurrentSettings();
 
-            // 获取选中的条目
             const selectedNewIndices = [...modal.querySelectorAll('.ttw-new-entry-cb:checked')].map(cb => parseInt(cb.dataset.index));
             const selectedDupIndices = [...modal.querySelectorAll('.ttw-dup-entry-cb:checked')].map(cb => parseInt(cb.dataset.index));
 
@@ -2517,7 +2822,6 @@
         updateStreamContent('', true);
         updateStreamContent(`🔀 开始合并世界书\n合并模式: ${mergeMode}\n并发数: ${concurrency}\n${'='.repeat(50)}\n`);
 
-        // 添加新条目
         for (const item of newEntries) {
             if (!generatedWorldbook[item.category]) generatedWorldbook[item.category] = {};
             generatedWorldbook[item.category][item.name] = item.entry;
@@ -2528,7 +2832,6 @@
             updateStreamContent(`\n🔀 处理 ${duplicates.length} 个重复条目...\n`);
 
             if (mergeMode === 'ai') {
-                // 并发AI合并
                 const semaphore = new Semaphore(concurrency);
                 let completed = 0;
                 let failed = 0;
@@ -2561,7 +2864,6 @@
                 updateStreamContent(`\n📦 AI合并完成: 成功 ${completed}, 失败 ${failed}\n`);
 
             } else {
-                // 非AI模式，顺序处理
                 for (let i = 0; i < duplicates.length; i++) {
                     if (isProcessingStopped) break;
 
@@ -2589,7 +2891,6 @@
             }
         }
 
-        // 清空暂存数据
         pendingImportData = null;
 
         updateProgress(100, '合并完成！');
@@ -2625,7 +2926,7 @@
         }
     }
 
-    // ========== 条目内容整理功能 ==========
+    // ========== 条目内容整理功能 - 修改为支持多选分类 ==========
     async function consolidateEntry(category, entryName) {
         const entry = generatedWorldbook[category]?.[entryName];
         if (!entry || !entry['内容']) return;
@@ -2639,27 +2940,110 @@
         }
     }
 
-    async function consolidateAllEntries(category = '角色') {
-        const entries = generatedWorldbook[category];
-        if (!entries || Object.keys(entries).length === 0) {
-            alert(`没有 ${category} 条目可整理`);
+    // 新增：显示分类选择弹窗
+    function showConsolidateCategorySelector() {
+        const categories = Object.keys(generatedWorldbook).filter(cat => {
+            const entries = generatedWorldbook[cat];
+            return entries && typeof entries === 'object' && Object.keys(entries).length > 0;
+        });
+
+        if (categories.length === 0) {
+            alert('没有可整理的分类');
             return;
         }
 
-        const entryNames = Object.keys(entries);
-        if (!confirm(`确定要整理 ${entryNames.length} 个 ${category} 条目吗？\n这将使用AI去除重复信息。`)) return;
+        const existingModal = document.getElementById('ttw-consolidate-modal');
+        if (existingModal) existingModal.remove();
+
+        const modal = document.createElement('div');
+        modal.id = 'ttw-consolidate-modal';
+        modal.className = 'ttw-modal-container';
+
+        let categoriesHtml = '';
+        categories.forEach(cat => {
+            const entryCount = Object.keys(generatedWorldbook[cat]).length;
+            categoriesHtml += `
+                <label class="ttw-consolidate-category-item">
+                    <input type="checkbox" class="ttw-consolidate-cat-cb" data-category="${cat}" checked>
+                    <span>${cat}</span>
+                    <span style="color:#888;font-size:11px;">(${entryCount}条)</span>
+                </label>
+            `;
+        });
+
+        modal.innerHTML = `
+            <div class="ttw-modal" style="max-width:500px;">
+                <div class="ttw-modal-header">
+                    <span class="ttw-modal-title">🧹 整理条目 - 选择分类</span>
+                    <button class="ttw-modal-close" type="button">✕</button>
+                </div>
+                <div class="ttw-modal-body">
+                    <div style="margin-bottom:16px;padding:12px;background:rgba(52,152,219,0.15);border-radius:8px;">
+                        <div style="font-size:12px;color:#ccc;">选择要整理的分类，AI将去除重复信息并优化格式。</div>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                        <span style="font-weight:bold;">选择分类</span>
+                        <label style="font-size:12px;"><input type="checkbox" id="ttw-select-all-consolidate" checked> 全选</label>
+                    </div>
+                    <div style="max-height:300px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:10px;">
+                        ${categoriesHtml}
+                    </div>
+                </div>
+                <div class="ttw-modal-footer">
+                    <button class="ttw-btn" id="ttw-cancel-consolidate">取消</button>
+                    <button class="ttw-btn ttw-btn-primary" id="ttw-start-consolidate">🧹 开始整理</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        modal.querySelector('#ttw-select-all-consolidate').addEventListener('change', (e) => {
+            modal.querySelectorAll('.ttw-consolidate-cat-cb').forEach(cb => cb.checked = e.target.checked);
+        });
+
+        modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
+        modal.querySelector('#ttw-cancel-consolidate').addEventListener('click', () => modal.remove());
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+        modal.querySelector('#ttw-start-consolidate').addEventListener('click', async () => {
+            const selectedCategories = [...modal.querySelectorAll('.ttw-consolidate-cat-cb:checked')].map(cb => cb.dataset.category);
+            if (selectedCategories.length === 0) {
+                alert('请至少选择一个分类');
+                return;
+            }
+
+            modal.remove();
+            await consolidateSelectedCategories(selectedCategories);
+        });
+    }
+
+    async function consolidateSelectedCategories(categories) {
+        let totalEntries = 0;
+        for (const cat of categories) {
+            totalEntries += Object.keys(generatedWorldbook[cat] || {}).length;
+        }
+
+        if (!confirm(`确定要整理 ${categories.length} 个分类，共 ${totalEntries} 个条目吗？\n这将使用AI去除重复信息。`)) return;
 
         showProgressSection(true);
         isProcessingStopped = false;
         updateProgress(0, '开始整理条目...');
         updateStreamContent('', true);
-        updateStreamContent(`🧹 开始整理 ${category} 条目\n${'='.repeat(50)}\n`);
+        updateStreamContent(`🧹 开始整理条目\n分类: ${categories.join(', ')}\n${'='.repeat(50)}\n`);
 
         const semaphore = new Semaphore(parallelConfig.concurrency);
         let completed = 0;
         let failed = 0;
 
-        const processOne = async (name, index) => {
+        const allEntries = [];
+        for (const cat of categories) {
+            for (const name of Object.keys(generatedWorldbook[cat] || {})) {
+                allEntries.push({ category: cat, name });
+            }
+        }
+
+        const processOne = async (entry, index) => {
             if (isProcessingStopped) return;
 
             await semaphore.acquire();
@@ -2669,10 +3053,10 @@
             }
 
             try {
-                updateStreamContent(`📝 [${index + 1}/${entryNames.length}] ${name}\n`);
-                await consolidateEntry(category, name);
+                updateStreamContent(`📝 [${index + 1}/${allEntries.length}] ${entry.category} - ${entry.name}\n`);
+                await consolidateEntry(entry.category, entry.name);
                 completed++;
-                updateProgress((completed / entryNames.length) * 100, `整理中 (${completed}/${entryNames.length})`);
+                updateProgress((completed / allEntries.length) * 100, `整理中 (${completed}/${allEntries.length})`);
                 updateStreamContent(`   ✅ 完成\n`);
             } catch (error) {
                 failed++;
@@ -2682,7 +3066,7 @@
             }
         };
 
-        await Promise.allSettled(entryNames.map((name, i) => processOne(name, i)));
+        await Promise.allSettled(allEntries.map((entry, i) => processOne(entry, i)));
 
         updateProgress(100, `整理完成: 成功 ${completed}, 失败 ${failed}`);
         updateStreamContent(`\n${'='.repeat(50)}\n✅ 整理完成！成功 ${completed}, 失败 ${failed}\n`);
@@ -2711,13 +3095,10 @@
 
                 const keywordsB = new Set(characters[names[j]]['关键词'] || []);
 
-                // 检查关键词交集
                 const intersection = [...keywordsA].filter(k => keywordsB.has(k));
 
-                // 检查名称包含关系
                 const nameContains = names[i].includes(names[j]) || names[j].includes(names[i]);
 
-                // 检查短名匹配
                 const shortNameMatch = checkShortNameMatch(names[i], names[j]);
 
                 if (intersection.length > 0 || nameContains || shortNameMatch) {
@@ -2747,8 +3128,6 @@
         return shortA === shortB || nameA.includes(shortB) || nameB.includes(shortA);
     }
 
-    // 修复：发送内容摘要给AI判断
-    // 生成两两配对
     function generatePairs(group) {
         const pairs = [];
         for (let i = 0; i < group.length; i++) {
@@ -2759,7 +3138,6 @@
         return pairs;
     }
 
-    // 并查集类 - 用于合并确认的同一人
     class UnionFind {
         constructor(items) {
             this.parent = {};
@@ -2803,13 +3181,11 @@
         }
     }
 
-    // 两两判断版本
     async function verifyDuplicatesWithAI(suspectedGroups) {
         if (suspectedGroups.length === 0) return { pairResults: [], mergedGroups: [] };
 
         const characters = generatedWorldbook['角色'];
 
-        // 收集所有需要判断的配对
         const allPairs = [];
         const allNames = new Set();
 
@@ -2824,7 +3200,6 @@
 
         if (allPairs.length === 0) return { pairResults: [], mergedGroups: [] };
 
-        // 构建配对信息
         const pairsWithContent = allPairs.map((pair, i) => {
             const [nameA, nameB] = pair;
             const entryA = characters[nameA];
@@ -2872,7 +3247,6 @@ ${pairsWithContent}
         const response = await callAPI(prompt);
         const aiResult = parseAIResponse(response);
 
-        // 使用并查集合并结果
         const uf = new UnionFind([...allNames]);
         const pairResults = [];
 
@@ -2894,12 +3268,9 @@ ${pairsWithContent}
             }
         }
 
-        // 获取合并后的组
         const mergedGroups = uf.getGroups();
 
-        // 为每个组确定mainName（选择内容最长的或AI指定的）
         const finalGroups = mergedGroups.map(group => {
-            // 找到AI为这个组成员指定的mainName
             let mainName = null;
             for (const result of pairResults) {
                 if (result.isSamePerson && result.mainName) {
@@ -2912,7 +3283,6 @@ ${pairsWithContent}
                 }
             }
 
-            // 如果没找到，选内容最长的
             if (!mainName) {
                 let maxLen = 0;
                 for (const name of group) {
@@ -2945,27 +3315,24 @@ ${pairsWithContent}
             const { names, mainName } = groupInfo;
             if (!names || names.length < 2 || !mainName) continue;
 
-            // 收集所有关键词和内容
             let mergedKeywords = [];
             let mergedContent = '';
 
             for (const name of names) {
                 if (characters[name]) {
                     mergedKeywords.push(...(characters[name]['关键词'] || []));
-                    mergedKeywords.push(name); // 把名字本身也加入关键词
+                    mergedKeywords.push(name);
                     if (characters[name]['内容']) {
                         mergedContent += characters[name]['内容'] + '\n\n---\n\n';
                     }
                 }
             }
 
-            // 创建合并后的条目
             characters[mainName] = {
                 '关键词': [...new Set(mergedKeywords)],
                 '内容': mergedContent.replace(/\n\n---\n\n$/, '')
             };
 
-            // 删除其他条目
             for (const name of names) {
                 if (name !== mainName && characters[name]) {
                     delete characters[name];
@@ -2988,7 +3355,6 @@ ${pairsWithContent}
             return;
         }
 
-        // 计算总配对数
         let totalPairs = 0;
         for (const group of suspected) {
             totalPairs += (group.length * (group.length - 1)) / 2;
@@ -3104,13 +3470,11 @@ ${pairsWithContent}
                 updateStreamContent('\n🤖 第二阶段：两两配对判断...\n');
                 aiResult = await verifyDuplicatesWithAI(selectedGroups);
 
-                // 显示配对结果
                 const resultDiv = modal.querySelector('#ttw-alias-result');
                 const pairResultsDiv = modal.querySelector('#ttw-pair-results');
                 const mergePlanDiv = modal.querySelector('#ttw-merge-plan');
                 resultDiv.style.display = 'block';
 
-                // 显示每一对的判断结果
                 let pairHtml = '';
                 for (const result of aiResult.pairResults || []) {
                     const icon = result.isSamePerson ? '✅' : '❌';
@@ -3125,7 +3489,6 @@ ${pairsWithContent}
                 }
                 pairResultsDiv.innerHTML = pairHtml || '<div style="color:#888;">无配对结果</div>';
 
-                // 显示合并方案
                 let mergePlanHtml = '';
                 if (aiResult.mergedGroups && aiResult.mergedGroups.length > 0) {
                     for (const group of aiResult.mergedGroups) {
@@ -3182,8 +3545,555 @@ ${pairsWithContent}
         });
     }
 
+    // ========== 新增：查找功能 ==========
+    function showSearchModal() {
+        const existingModal = document.getElementById('ttw-search-modal');
+        if (existingModal) existingModal.remove();
 
-    // ========== 导出功能 ==========
+        const modal = document.createElement('div');
+        modal.id = 'ttw-search-modal';
+        modal.className = 'ttw-modal-container';
+
+        modal.innerHTML = `
+            <div class="ttw-modal" style="max-width:600px;">
+                <div class="ttw-modal-header">
+                    <span class="ttw-modal-title">🔍 查找内容</span>
+                    <button class="ttw-modal-close" type="button">✕</button>
+                </div>
+                <div class="ttw-modal-body">
+                    <div style="margin-bottom:16px;">
+                        <label style="display:block;margin-bottom:8px;font-size:13px;">输入要查找的字符（如乱码字符 �）</label>
+                        <input type="text" id="ttw-search-input" class="ttw-input" placeholder="输入要查找的内容..." value="${searchHighlightKeyword}">
+                    </div>
+                    <div id="ttw-search-results" style="max-height:400px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:12px;">
+                        <div style="text-align:center;color:#888;">输入关键词后点击"查找"</div>
+                    </div>
+                </div>
+                <div class="ttw-modal-footer">
+                    <button class="ttw-btn" id="ttw-clear-search">清除高亮</button>
+                    <button class="ttw-btn ttw-btn-primary" id="ttw-do-search">🔍 查找</button>
+                    <button class="ttw-btn" id="ttw-close-search">关闭</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
+        modal.querySelector('#ttw-close-search').addEventListener('click', () => modal.remove());
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+        modal.querySelector('#ttw-do-search').addEventListener('click', () => {
+            const keyword = modal.querySelector('#ttw-search-input').value;
+            if (!keyword) {
+                alert('请输入要查找的内容');
+                return;
+            }
+            searchHighlightKeyword = keyword;
+            performSearch(keyword, modal.querySelector('#ttw-search-results'));
+        });
+
+        modal.querySelector('#ttw-clear-search').addEventListener('click', () => {
+            searchHighlightKeyword = '';
+            modal.querySelector('#ttw-search-input').value = '';
+            modal.querySelector('#ttw-search-results').innerHTML = '<div style="text-align:center;color:#888;">已清除高亮</div>';
+            updateWorldbookPreview();
+        });
+
+        // 回车搜索
+        modal.querySelector('#ttw-search-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                modal.querySelector('#ttw-do-search').click();
+            }
+        });
+    }
+
+    function performSearch(keyword, resultsContainer) {
+        const results = [];
+
+        // 搜索世界书
+        for (const category in generatedWorldbook) {
+            for (const entryName in generatedWorldbook[category]) {
+                const entry = generatedWorldbook[category][entryName];
+                const keywordsStr = Array.isArray(entry['关键词']) ? entry['关键词'].join(', ') : '';
+                const content = entry['内容'] || '';
+
+                const matches = [];
+                if (entryName.includes(keyword)) {
+                    matches.push({ field: '条目名', text: entryName });
+                }
+                if (keywordsStr.includes(keyword)) {
+                    matches.push({ field: '关键词', text: keywordsStr });
+                }
+                if (content.includes(keyword)) {
+                    // 找到上下文
+                    const idx = content.indexOf(keyword);
+                    const start = Math.max(0, idx - 30);
+                    const end = Math.min(content.length, idx + keyword.length + 30);
+                    const context = (start > 0 ? '...' : '') + content.substring(start, end) + (end < content.length ? '...' : '');
+                    matches.push({ field: '内容', text: context });
+                }
+
+                if (matches.length > 0) {
+                    results.push({ category, entryName, matches });
+                }
+            }
+        }
+
+        // 搜索处理结果
+        for (let i = 0; i < memoryQueue.length; i++) {
+            const memory = memoryQueue[i];
+            if (memory.result) {
+                for (const category in memory.result) {
+                    for (const entryName in memory.result[category]) {
+                        const entry = memory.result[category][entryName];
+                        const keywordsStr = Array.isArray(entry['关键词']) ? entry['关键词'].join(', ') : '';
+                        const content = entry['内容'] || '';
+
+                        if (entryName.includes(keyword) || keywordsStr.includes(keyword) || content.includes(keyword)) {
+                            const existingResult = results.find(r => r.category === category && r.entryName === entryName);
+                            if (!existingResult) {
+                                results.push({
+                                    category,
+                                    entryName,
+                                    memoryIndex: i,
+                                    matches: [{ field: '处理结果', text: `第${i + 1}章` }]
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (results.length === 0) {
+            resultsContainer.innerHTML = `<div style="text-align:center;color:#888;padding:20px;">未找到包含"${keyword}"的内容</div>`;
+            return;
+        }
+
+        let html = `<div style="margin-bottom:12px;font-size:13px;color:#27ae60;">找到 ${results.length} 个匹配项</div>`;
+
+        results.forEach((result, idx) => {
+            const highlightKeyword = (text) => {
+                return text.replace(new RegExp(keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'),
+                    `<span style="background:#f1c40f;color:#000;padding:1px 2px;border-radius:2px;">${keyword}</span>`);
+            };
+
+            html += `
+                <div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:10px;margin-bottom:8px;border-left:3px solid #f1c40f;">
+                    <div style="font-weight:bold;color:#e67e22;margin-bottom:6px;">[${result.category}] ${highlightKeyword(result.entryName)}</div>
+                    ${result.matches.map(m => `
+                        <div style="font-size:12px;color:#ccc;margin-bottom:4px;">
+                            <span style="color:#888;">${m.field}:</span> ${highlightKeyword(m.text)}
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        });
+
+        resultsContainer.innerHTML = html;
+    }
+
+    // ========== 新增：替换功能 ==========
+    function showReplaceModal() {
+        const existingModal = document.getElementById('ttw-replace-modal');
+        if (existingModal) existingModal.remove();
+
+        const modal = document.createElement('div');
+        modal.id = 'ttw-replace-modal';
+        modal.className = 'ttw-modal-container';
+
+        modal.innerHTML = `
+            <div class="ttw-modal" style="max-width:600px;">
+                <div class="ttw-modal-header">
+                    <span class="ttw-modal-title">🔄 批量替换</span>
+                    <button class="ttw-modal-close" type="button">✕</button>
+                </div>
+                <div class="ttw-modal-body">
+                    <div style="margin-bottom:16px;">
+                        <label style="display:block;margin-bottom:8px;font-size:13px;">查找内容</label>
+                        <input type="text" id="ttw-replace-find" class="ttw-input" placeholder="输入要查找的词语...">
+                    </div>
+                    <div style="margin-bottom:16px;">
+                        <label style="display:block;margin-bottom:8px;font-size:13px;">替换为（留空则删除该词语）</label>
+                        <input type="text" id="ttw-replace-with" class="ttw-input" placeholder="输入替换内容，留空则删除...">
+                    </div>
+                    <div style="margin-bottom:16px;padding:12px;background:rgba(230,126,34,0.1);border-radius:6px;">
+                        <label class="ttw-checkbox-label">
+                            <input type="checkbox" id="ttw-replace-in-worldbook" checked>
+                            <span>替换世界书中的内容</span>
+                        </label>
+                        <label class="ttw-checkbox-label" style="margin-top:8px;">
+                            <input type="checkbox" id="ttw-replace-in-results" checked>
+                            <span>替换各章节处理结果中的内容</span>
+                        </label>
+                    </div>
+                    <div id="ttw-replace-preview" style="display:none;max-height:200px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:12px;margin-bottom:16px;">
+                    </div>
+                </div>
+                <div class="ttw-modal-footer">
+                    <button class="ttw-btn" id="ttw-preview-replace">👁️ 预览</button>
+                    <button class="ttw-btn ttw-btn-warning" id="ttw-do-replace">🔄 执行替换</button>
+                    <button class="ttw-btn" id="ttw-close-replace">关闭</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
+        modal.querySelector('#ttw-close-replace').addEventListener('click', () => modal.remove());
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+        modal.querySelector('#ttw-preview-replace').addEventListener('click', () => {
+            const findText = modal.querySelector('#ttw-replace-find').value;
+            const replaceWith = modal.querySelector('#ttw-replace-with').value;
+            const inWorldbook = modal.querySelector('#ttw-replace-in-worldbook').checked;
+            const inResults = modal.querySelector('#ttw-replace-in-results').checked;
+
+            if (!findText) {
+                alert('请输入要查找的内容');
+                return;
+            }
+
+            const preview = previewReplace(findText, replaceWith, inWorldbook, inResults);
+            const previewDiv = modal.querySelector('#ttw-replace-preview');
+            previewDiv.style.display = 'block';
+
+            if (preview.count === 0) {
+                previewDiv.innerHTML = `<div style="color:#888;text-align:center;">未找到"${findText}"</div>`;
+            } else {
+                previewDiv.innerHTML = `
+                    <div style="color:#27ae60;margin-bottom:8px;">将替换 ${preview.count} 处</div>
+                    ${preview.samples.map(s => `
+                        <div style="font-size:11px;margin-bottom:6px;padding:6px;background:rgba(0,0,0,0.2);border-radius:4px;">
+                            <div style="color:#888;">[${s.location}]</div>
+                            <div style="color:#e74c3c;text-decoration:line-through;">${s.before}</div>
+                            <div style="color:#27ae60;">${s.after}</div>
+                        </div>
+                    `).join('')}
+                    ${preview.count > preview.samples.length ? `<div style="color:#888;text-align:center;">...还有 ${preview.count - preview.samples.length} 处</div>` : ''}
+                `;
+            }
+        });
+
+        modal.querySelector('#ttw-do-replace').addEventListener('click', () => {
+            const findText = modal.querySelector('#ttw-replace-find').value;
+            const replaceWith = modal.querySelector('#ttw-replace-with').value;
+            const inWorldbook = modal.querySelector('#ttw-replace-in-worldbook').checked;
+            const inResults = modal.querySelector('#ttw-replace-in-results').checked;
+
+            if (!findText) {
+                alert('请输入要查找的内容');
+                return;
+            }
+
+            const preview = previewReplace(findText, replaceWith, inWorldbook, inResults);
+            if (preview.count === 0) {
+                alert(`未找到"${findText}"`);
+                return;
+            }
+
+            const action = replaceWith ? `替换为"${replaceWith}"` : '删除';
+            if (!confirm(`确定要${action} ${preview.count} 处"${findText}"吗？\n\n此操作不可撤销！`)) {
+                return;
+            }
+
+            const result = executeReplace(findText, replaceWith, inWorldbook, inResults);
+            modal.remove();
+            updateWorldbookPreview();
+            alert(`替换完成！共替换了 ${result.count} 处`);
+        });
+    }
+
+    function previewReplace(findText, replaceWith, inWorldbook, inResults) {
+        const regex = new RegExp(findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+        let count = 0;
+        const samples = [];
+        const maxSamples = 5;
+
+        if (inWorldbook) {
+            for (const category in generatedWorldbook) {
+                for (const entryName in generatedWorldbook[category]) {
+                    const entry = generatedWorldbook[category][entryName];
+
+                    // 检查关键词
+                    if (Array.isArray(entry['关键词'])) {
+                        for (const kw of entry['关键词']) {
+                            if (kw.includes(findText)) {
+                                count++;
+                                if (samples.length < maxSamples) {
+                                    samples.push({
+                                        location: `世界书/${category}/${entryName}/关键词`,
+                                        before: kw,
+                                        after: kw.replace(regex, replaceWith)
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    // 检查内容
+                    if (entry['内容'] && entry['内容'].includes(findText)) {
+                        const matches = entry['内容'].match(regex);
+                        count += matches ? matches.length : 0;
+                        if (samples.length < maxSamples) {
+                            const idx = entry['内容'].indexOf(findText);
+                            const start = Math.max(0, idx - 20);
+                            const end = Math.min(entry['内容'].length, idx + findText.length + 20);
+                            const context = entry['内容'].substring(start, end);
+                            samples.push({
+                                location: `世界书/${category}/${entryName}/内容`,
+                                before: context,
+                                after: context.replace(regex, replaceWith)
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        if (inResults) {
+            for (let i = 0; i < memoryQueue.length; i++) {
+                const memory = memoryQueue[i];
+                if (!memory.result) continue;
+
+                for (const category in memory.result) {
+                    for (const entryName in memory.result[category]) {
+                        const entry = memory.result[category][entryName];
+
+                        if (Array.isArray(entry['关键词'])) {
+                            for (const kw of entry['关键词']) {
+                                if (kw.includes(findText)) {
+                                    count++;
+                                }
+                            }
+                        }
+
+                        if (entry['内容'] && entry['内容'].includes(findText)) {
+                            const matches = entry['内容'].match(regex);
+                            count += matches ? matches.length : 0;
+                        }
+                    }
+                }
+            }
+        }
+
+        return { count, samples };
+    }
+
+    function executeReplace(findText, replaceWith, inWorldbook, inResults) {
+        const regex = new RegExp(findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+        let count = 0;
+
+        if (inWorldbook) {
+            for (const category in generatedWorldbook) {
+                for (const entryName in generatedWorldbook[category]) {
+                    const entry = generatedWorldbook[category][entryName];
+
+                    if (Array.isArray(entry['关键词'])) {
+                        entry['关键词'] = entry['关键词'].map(kw => {
+                            if (kw.includes(findText)) {
+                                count++;
+                                return kw.replace(regex, replaceWith);
+                            }
+                            return kw;
+                        }).filter(kw => kw); // 过滤空字符串
+                    }
+
+                    if (entry['内容'] && entry['内容'].includes(findText)) {
+                        const matches = entry['内容'].match(regex);
+                        count += matches ? matches.length : 0;
+                        entry['内容'] = entry['内容'].replace(regex, replaceWith);
+                    }
+                }
+            }
+        }
+
+        if (inResults) {
+            for (let i = 0; i < memoryQueue.length; i++) {
+                const memory = memoryQueue[i];
+                if (!memory.result) continue;
+
+                for (const category in memory.result) {
+                    for (const entryName in memory.result[category]) {
+                        const entry = memory.result[category][entryName];
+
+                        if (Array.isArray(entry['关键词'])) {
+                            entry['关键词'] = entry['关键词'].map(kw => {
+                                if (kw.includes(findText)) {
+                                    count++;
+                                    return kw.replace(regex, replaceWith);
+                                }
+                                return kw;
+                            }).filter(kw => kw);
+                        }
+
+                        if (entry['内容'] && entry['内容'].includes(findText)) {
+                            const matches = entry['内容'].match(regex);
+                            count += matches ? matches.length : 0;
+                            entry['内容'] = entry['内容'].replace(regex, replaceWith);
+                        }
+                    }
+                }
+            }
+        }
+
+        return { count };
+    }
+
+    // ========== 新增：条目配置弹窗 ==========
+    function showEntryConfigModal(category, entryName) {
+        const existingModal = document.getElementById('ttw-entry-config-modal');
+        if (existingModal) existingModal.remove();
+
+        const config = getEntryConfig(category, entryName);
+
+        const modal = document.createElement('div');
+        modal.id = 'ttw-entry-config-modal';
+        modal.className = 'ttw-modal-container';
+
+        modal.innerHTML = `
+            <div class="ttw-modal" style="max-width:500px;">
+                <div class="ttw-modal-header">
+                    <span class="ttw-modal-title">⚙️ 条目配置: ${entryName}</span>
+                    <button class="ttw-modal-close" type="button">✕</button>
+                </div>
+                <div class="ttw-modal-body">
+                    <div style="margin-bottom:16px;padding:12px;background:rgba(52,152,219,0.15);border-radius:8px;">
+                        <div style="font-size:12px;color:#ccc;">配置此条目在导出为SillyTavern格式时的位置、深度和顺序</div>
+                    </div>
+
+                    <div class="ttw-form-group">
+                        <label>位置 (Position)</label>
+                        <select id="ttw-entry-position" class="ttw-select">
+    <option value="0" ${config.position === 0 ? 'selected' : ''}>在角色定义之前</option>
+    <option value="1" ${config.position === 1 ? 'selected' : ''}>在角色定义之后</option>
+    <option value="2" ${config.position === 2 ? 'selected' : ''}>在作者注释之前</option>
+    <option value="3" ${config.position === 3 ? 'selected' : ''}>在作者注释之后</option>
+    <option value="4" ${config.position === 4 ? 'selected' : ''}>自定义深度</option>
+</select>
+
+                    </div>
+
+                    <div class="ttw-form-group">
+                        <label>深度 (Depth) - 仅Position=4时有效</label>
+                        <input type="number" id="ttw-entry-depth" class="ttw-input" value="${config.depth}" min="0" max="999">
+                    </div>
+
+                    <div class="ttw-form-group">
+                        <label>顺序 (Order) - 数字越小越靠前</label>
+                        <input type="number" id="ttw-entry-order" class="ttw-input" value="${config.order}" min="0" max="9999">
+                    </div>
+                </div>
+                <div class="ttw-modal-footer">
+                    <button class="ttw-btn" id="ttw-cancel-entry-config">取消</button>
+                    <button class="ttw-btn ttw-btn-primary" id="ttw-save-entry-config">💾 保存</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
+        modal.querySelector('#ttw-cancel-entry-config').addEventListener('click', () => modal.remove());
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+        modal.querySelector('#ttw-save-entry-config').addEventListener('click', () => {
+            const position = parseInt(modal.querySelector('#ttw-entry-position').value);
+            const depth = parseInt(modal.querySelector('#ttw-entry-depth').value) || 4;
+            const order = parseInt(modal.querySelector('#ttw-entry-order').value) || 100;
+
+            setEntryConfig(category, entryName, { position, depth, order });
+            modal.remove();
+            alert('配置已保存');
+        });
+    }
+
+    // ========== 新增：分类配置弹窗 ==========
+    function showCategoryConfigModal(category) {
+        const existingModal = document.getElementById('ttw-category-config-modal');
+        if (existingModal) existingModal.remove();
+
+        const config = categoryDefaultConfig[category] || { position: 0, depth: 4, order: 100 };
+
+        const modal = document.createElement('div');
+        modal.id = 'ttw-category-config-modal';
+        modal.className = 'ttw-modal-container';
+
+        modal.innerHTML = `
+            <div class="ttw-modal" style="max-width:500px;">
+                <div class="ttw-modal-header">
+                    <span class="ttw-modal-title">⚙️ 分类默认配置: ${category}</span>
+                    <button class="ttw-modal-close" type="button">✕</button>
+                </div>
+                <div class="ttw-modal-body">
+                    <div style="margin-bottom:16px;padding:12px;background:rgba(155,89,182,0.15);border-radius:8px;">
+                        <div style="font-size:12px;color:#ccc;">设置此分类下所有条目的默认位置/深度/顺序。单个条目的配置会覆盖分类默认配置。</div>
+                    </div>
+
+                    <div class="ttw-form-group">
+                        <label>默认位置 (Position)</label>
+                        <select id="ttw-cat-position" class="ttw-select">
+    <option value="0" ${config.position === 0 ? 'selected' : ''}>在角色定义之前</option>
+    <option value="1" ${config.position === 1 ? 'selected' : ''}>在角色定义之后</option>
+    <option value="2" ${config.position === 2 ? 'selected' : ''}>在作者注释之前</option>
+    <option value="3" ${config.position === 3 ? 'selected' : ''}>在作者注释之后</option>
+    <option value="4" ${config.position === 4 ? 'selected' : ''}>自定义深度</option>
+</select>
+
+                    </div>
+
+                    <div class="ttw-form-group">
+                        <label>默认深度 (Depth)</label>
+                        <input type="number" id="ttw-cat-depth" class="ttw-input" value="${config.depth}" min="0" max="999">
+                    </div>
+
+                    <div class="ttw-form-group">
+                        <label>默认顺序 (Order)</label>
+                        <input type="number" id="ttw-cat-order" class="ttw-input" value="${config.order}" min="0" max="9999">
+                    </div>
+
+                    <div style="margin-top:16px;padding:12px;background:rgba(230,126,34,0.1);border-radius:6px;">
+                        <label class="ttw-checkbox-label">
+                            <input type="checkbox" id="ttw-apply-to-existing">
+                            <span>同时应用到该分类下已有的所有条目</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="ttw-modal-footer">
+                    <button class="ttw-btn" id="ttw-cancel-cat-config">取消</button>
+                    <button class="ttw-btn ttw-btn-primary" id="ttw-save-cat-config">💾 保存</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
+        modal.querySelector('#ttw-cancel-cat-config').addEventListener('click', () => modal.remove());
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+        modal.querySelector('#ttw-save-cat-config').addEventListener('click', () => {
+            const position = parseInt(modal.querySelector('#ttw-cat-position').value);
+            const depth = parseInt(modal.querySelector('#ttw-cat-depth').value) || 4;
+            const order = parseInt(modal.querySelector('#ttw-cat-order').value) || 100;
+            const applyToExisting = modal.querySelector('#ttw-apply-to-existing').checked;
+
+            setCategoryDefaultConfig(category, { position, depth, order });
+
+            if (applyToExisting && generatedWorldbook[category]) {
+                for (const entryName in generatedWorldbook[category]) {
+                    setEntryConfig(category, entryName, { position, depth, order });
+                }
+            }
+
+            modal.remove();
+            alert('配置已保存');
+        });
+    }
+
+    // ========== 导出功能 - 修改为使用条目配置 ==========
     function convertToSillyTavernFormat(worldbook) {
         const entries = [];
         let entryId = 0;
@@ -3200,6 +4110,9 @@ ${pairsWithContent}
                     keywords = keywords.map(k => String(k).trim().replace(/[-_\s]+/g, '')).filter(k => k.length > 0 && k.length <= 20);
                     if (keywords.length === 0) keywords.push(itemName);
 
+                    // 获取条目配置
+                    const config = getEntryConfig(category, itemName);
+
                     entries.push({
                         uid: entryId++,
                         key: [...new Set(keywords)],
@@ -3210,14 +4123,14 @@ ${pairsWithContent}
                         selective: isGreenLight,
                         selectiveLogic: 0,
                         addMemo: true,
-                        order: entryId * 100,
-                        position: 0,
+                        order: config.order,
+                        position: config.position,
                         disable: false,
                         excludeRecursion: false,
                         preventRecursion: false,
                         delayUntilRecursion: false,
                         probability: 100,
-                        depth: 4,
+                        depth: config.depth,
                         group: category,
                         groupOverride: false,
                         groupWeight: 100,
@@ -3293,7 +4206,7 @@ ${pairsWithContent}
 
     async function exportTaskState() {
         const state = {
-            version: '2.7.1',
+            version: '2.9.0',
             timestamp: Date.now(),
             memoryQueue,
             generatedWorldbook,
@@ -3302,7 +4215,12 @@ ${pairsWithContent}
             fileHash: currentFileHash,
             settings,
             parallelConfig,
-            categoryLightSettings
+            categoryLightSettings,
+            customWorldbookCategories,
+            chapterRegexSettings,
+            defaultWorldbookEntriesUI,
+            categoryDefaultConfig,
+            entryPositionConfig
         };
         const timeString = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[:/\s]/g, '').replace(/,/g, '-');
         const fileName = currentFile ? `${currentFile.name.replace(/\.[^/.]+$/, '')}-任务状态-${timeString}.json` : `任务状态-${timeString}.json`;
@@ -3336,6 +4254,11 @@ ${pairsWithContent}
                 if (state.settings) settings = { ...defaultSettings, ...state.settings };
                 if (state.parallelConfig) parallelConfig = { ...parallelConfig, ...state.parallelConfig };
                 if (state.categoryLightSettings) categoryLightSettings = { ...categoryLightSettings, ...state.categoryLightSettings };
+                if (state.customWorldbookCategories) customWorldbookCategories = state.customWorldbookCategories;
+                if (state.chapterRegexSettings) chapterRegexSettings = state.chapterRegexSettings;
+                if (state.defaultWorldbookEntriesUI) defaultWorldbookEntriesUI = state.defaultWorldbookEntriesUI;
+                if (state.categoryDefaultConfig) categoryDefaultConfig = state.categoryDefaultConfig;
+                if (state.entryPositionConfig) entryPositionConfig = state.entryPositionConfig;
 
                 if (Object.keys(generatedWorldbook).length === 0) {
                     rebuildWorldbookFromMemories();
@@ -3349,6 +4272,9 @@ ${pairsWithContent}
                 if (useVolumeMode) updateVolumeIndicator();
                 updateStartButtonState(false);
                 updateSettingsUI();
+                renderCategoriesList();
+                renderDefaultWorldbookEntriesUI();
+                updateChapterRegexUI();
 
                 if (Object.keys(generatedWorldbook).length > 0) {
                     showResultSection(true);
@@ -3376,16 +4302,30 @@ ${pairsWithContent}
         updateStreamContent(`\n📚 从已处理记忆重建了世界书\n`);
     }
 
+    // 修改：导出配置 - 包含默认世界书条目UI
     function exportSettings() {
         saveCurrentSettings();
 
         const exportData = {
-            version: '2.7.1',
+            version: '2.9.0',
             type: 'settings',
             timestamp: Date.now(),
             settings: { ...settings },
             categoryLightSettings,
-            parallelConfig
+            parallelConfig,
+            customWorldbookCategories,
+            chapterRegexSettings,
+            defaultWorldbookEntriesUI,
+            categoryDefaultConfig,
+            entryPositionConfig,
+            prompts: {
+                worldbookPrompt: settings.customWorldbookPrompt,
+                plotPrompt: settings.customPlotPrompt,
+                stylePrompt: settings.customStylePrompt,
+                mergePrompt: settings.customMergePrompt,
+                rerollPrompt: settings.customRerollPrompt,
+                defaultWorldbookEntries: settings.defaultWorldbookEntries
+            }
         };
         const timeString = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[:/\s]/g, '').replace(/,/g, '-');
         const fileName = `TxtToWorldbook-配置-${timeString}.json`;
@@ -3396,9 +4336,10 @@ ${pairsWithContent}
         a.download = fileName;
         a.click();
         URL.revokeObjectURL(url);
-        alert('配置已导出！');
+        alert('配置已导出！（包含提示词配置和默认世界书条目）');
     }
 
+    // 修改：导入配置 - 包含默认世界书条目UI
     function importSettings() {
         const input = document.createElement('input');
         input.type = 'file';
@@ -3420,8 +4361,49 @@ ${pairsWithContent}
                 if (data.categoryLightSettings) {
                     categoryLightSettings = { ...categoryLightSettings, ...data.categoryLightSettings };
                 }
+                if (data.customWorldbookCategories) {
+                    customWorldbookCategories = data.customWorldbookCategories;
+                    await saveCustomCategories();
+                }
+                if (data.chapterRegexSettings) {
+                    chapterRegexSettings = data.chapterRegexSettings;
+                }
+                if (data.defaultWorldbookEntriesUI) {
+                    defaultWorldbookEntriesUI = data.defaultWorldbookEntriesUI;
+                }
+                if (data.categoryDefaultConfig) {
+                    categoryDefaultConfig = data.categoryDefaultConfig;
+                }
+                if (data.entryPositionConfig) {
+                    entryPositionConfig = data.entryPositionConfig;
+                }
+
+                if (data.prompts) {
+                    if (data.prompts.worldbookPrompt !== undefined) {
+                        settings.customWorldbookPrompt = data.prompts.worldbookPrompt;
+                    }
+                    if (data.prompts.plotPrompt !== undefined) {
+                        settings.customPlotPrompt = data.prompts.plotPrompt;
+                    }
+                    if (data.prompts.stylePrompt !== undefined) {
+                        settings.customStylePrompt = data.prompts.stylePrompt;
+                    }
+                    if (data.prompts.mergePrompt !== undefined) {
+                        settings.customMergePrompt = data.prompts.mergePrompt;
+                    }
+                    if (data.prompts.rerollPrompt !== undefined) {
+                        settings.customRerollPrompt = data.prompts.rerollPrompt;
+                    }
+                    if (data.prompts.defaultWorldbookEntries !== undefined) {
+                        settings.defaultWorldbookEntries = data.prompts.defaultWorldbookEntries;
+                    }
+                }
 
                 updateSettingsUI();
+                renderCategoriesList();
+                renderDefaultWorldbookEntriesUI();
+                updateChapterRegexUI();
+                saveCurrentSettings();
 
                 alert('配置导入成功！');
             } catch (error) {
@@ -3463,9 +4445,6 @@ ${pairsWithContent}
         const stylePromptEl = document.getElementById('ttw-style-prompt');
         if (stylePromptEl) stylePromptEl.value = settings.customStylePrompt || '';
 
-        const defaultWorldbookEl = document.getElementById('ttw-default-worldbook');
-        if (defaultWorldbookEl) defaultWorldbookEl.value = settings.defaultWorldbookEntries || '';
-
         const parallelEnabledEl = document.getElementById('ttw-parallel-enabled');
         if (parallelEnabledEl) parallelEnabledEl.checked = parallelConfig.enabled;
 
@@ -3499,6 +4478,392 @@ ${pairsWithContent}
         handleProviderChange();
     }
 
+    function updateChapterRegexUI() {
+        const regexInput = document.getElementById('ttw-chapter-regex');
+        if (regexInput) {
+            regexInput.value = chapterRegexSettings.pattern;
+        }
+    }
+
+    // ========== 渲染分类列表 ==========
+    function renderCategoriesList() {
+        const listContainer = document.getElementById('ttw-categories-list');
+        if (!listContainer) return;
+
+        listContainer.innerHTML = '';
+
+        customWorldbookCategories.forEach((cat, index) => {
+            const hasDefault = DEFAULT_WORLDBOOK_CATEGORIES.some(c => c.name === cat.name);
+
+            const item = document.createElement('div');
+            item.className = 'ttw-category-item';
+            item.innerHTML = `
+                <input type="checkbox" class="ttw-category-cb" data-index="${index}" ${cat.enabled ? 'checked' : ''}>
+                <span class="ttw-category-name">${cat.name}${cat.isBuiltin ? ' <span style="color:#888;font-size:10px;">(内置)</span>' : ''}</span>
+                <div class="ttw-category-actions">
+                    <button class="ttw-btn-tiny ttw-edit-cat" data-index="${index}" title="编辑">✏️</button>
+                    <button class="ttw-btn-tiny ttw-reset-single-cat" data-index="${index}" title="重置此项" ${hasDefault ? '' : 'style="opacity:0.3;" disabled'}>🔄</button>
+                    <button class="ttw-btn-tiny ttw-delete-cat" data-index="${index}" title="删除" ${cat.isBuiltin ? 'disabled style="opacity:0.3;"' : ''}>🗑️</button>
+                </div>
+            `;
+            listContainer.appendChild(item);
+        });
+
+        listContainer.querySelectorAll('.ttw-category-cb').forEach(cb => {
+            cb.addEventListener('change', async (e) => {
+                const index = parseInt(e.target.dataset.index);
+                customWorldbookCategories[index].enabled = e.target.checked;
+                await saveCustomCategories();
+            });
+        });
+
+        listContainer.querySelectorAll('.ttw-edit-cat').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const index = parseInt(e.target.dataset.index);
+                showEditCategoryModal(index);
+            });
+        });
+
+        listContainer.querySelectorAll('.ttw-reset-single-cat').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                const index = parseInt(e.target.dataset.index);
+                const cat = customWorldbookCategories[index];
+                if (confirm(`确定重置"${cat.name}"为默认配置吗？`)) {
+                    await resetSingleCategory(index);
+                    renderCategoriesList();
+                }
+            });
+        });
+
+        listContainer.querySelectorAll('.ttw-delete-cat').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                const index = parseInt(e.target.dataset.index);
+                const cat = customWorldbookCategories[index];
+                if (cat.isBuiltin) return;
+                if (confirm(`确定删除分类"${cat.name}"吗？`)) {
+                    customWorldbookCategories.splice(index, 1);
+                    await saveCustomCategories();
+                    renderCategoriesList();
+                }
+            });
+        });
+    }
+
+    function showAddCategoryModal() {
+        showEditCategoryModal(null);
+    }
+
+    function showEditCategoryModal(editIndex) {
+        const existingModal = document.getElementById('ttw-category-modal');
+        if (existingModal) existingModal.remove();
+
+        const isEdit = editIndex !== null;
+        const cat = isEdit ? customWorldbookCategories[editIndex] : {
+            name: '',
+            enabled: true,
+            isBuiltin: false,
+            entryExample: '',
+            keywordsExample: [],
+            contentGuide: ''
+        };
+
+        const modal = document.createElement('div');
+        modal.id = 'ttw-category-modal';
+        modal.className = 'ttw-modal-container';
+        modal.innerHTML = `
+            <div class="ttw-modal" style="max-width:500px;">
+                <div class="ttw-modal-header">
+                    <span class="ttw-modal-title">${isEdit ? '✏️ 编辑分类' : '➕ 添加分类'}</span>
+                    <button class="ttw-modal-close" type="button">✕</button>
+                </div>
+                <div class="ttw-modal-body">
+                    <div class="ttw-form-group">
+                        <label>分类名称 *</label>
+                        <input type="text" id="ttw-cat-name" value="${cat.name}" placeholder="如：道具、玩法" class="ttw-input">
+                    </div>
+                    <div class="ttw-form-group">
+                        <label>条目名称示例</label>
+                        <input type="text" id="ttw-cat-entry-example" value="${cat.entryExample}" placeholder="如：道具名称" class="ttw-input">
+                    </div>
+                    <div class="ttw-form-group">
+                        <label>关键词示例（逗号分隔）</label>
+                        <input type="text" id="ttw-cat-keywords" value="${cat.keywordsExample.join(', ')}" placeholder="如：道具名, 别名" class="ttw-input">
+                    </div>
+                    <div class="ttw-form-group">
+                        <label>内容提取指南</label>
+                        <textarea id="ttw-cat-content-guide" rows="4" class="ttw-textarea-small" placeholder="描述AI应该提取哪些信息...">${cat.contentGuide}</textarea>
+                    </div>
+                </div>
+                <div class="ttw-modal-footer">
+                    <button class="ttw-btn" id="ttw-cancel-cat">取消</button>
+                    <button class="ttw-btn ttw-btn-primary" id="ttw-save-cat">💾 保存</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
+        modal.querySelector('#ttw-cancel-cat').addEventListener('click', () => modal.remove());
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+        modal.querySelector('#ttw-save-cat').addEventListener('click', async () => {
+            const name = document.getElementById('ttw-cat-name').value.trim();
+            if (!name) { alert('请输入分类名称'); return; }
+
+            const duplicateIndex = customWorldbookCategories.findIndex((c, i) => c.name === name && i !== editIndex);
+            if (duplicateIndex !== -1) { alert('该分类名称已存在'); return; }
+
+            const entryExample = document.getElementById('ttw-cat-entry-example').value.trim();
+            const keywordsStr = document.getElementById('ttw-cat-keywords').value.trim();
+            const contentGuide = document.getElementById('ttw-cat-content-guide').value.trim();
+
+            const keywordsExample = keywordsStr ? keywordsStr.split(/[,，]/).map(k => k.trim()).filter(k => k) : [];
+
+            const newCat = {
+                name,
+                enabled: isEdit ? cat.enabled : true,
+                isBuiltin: isEdit ? cat.isBuiltin : false,
+                entryExample: entryExample || name + '名称',
+                keywordsExample: keywordsExample.length > 0 ? keywordsExample : [name + '名'],
+                contentGuide: contentGuide || `基于原文的${name}描述`
+            };
+
+            if (isEdit) {
+                customWorldbookCategories[editIndex] = newCat;
+            } else {
+                customWorldbookCategories.push(newCat);
+            }
+
+            await saveCustomCategories();
+            renderCategoriesList();
+            modal.remove();
+        });
+    }
+
+    // ========== 新增：默认世界书条目UI ==========
+    function renderDefaultWorldbookEntriesUI() {
+        const container = document.getElementById('ttw-default-entries-list');
+        if (!container) return;
+
+        container.innerHTML = '';
+
+        if (defaultWorldbookEntriesUI.length === 0) {
+            container.innerHTML = '<div style="text-align:center;color:#888;padding:10px;font-size:11px;">暂无默认条目，点击"添加"按钮创建</div>';
+            return;
+        }
+
+        defaultWorldbookEntriesUI.forEach((entry, index) => {
+            const item = document.createElement('div');
+            item.className = 'ttw-default-entry-item';
+            item.innerHTML = `
+                <div class="ttw-default-entry-header">
+                    <span class="ttw-default-entry-title">[${entry.category || '未分类'}] ${entry.name || '未命名'}</span>
+                    <div class="ttw-default-entry-actions">
+                        <button class="ttw-btn-tiny ttw-edit-default-entry" data-index="${index}" title="编辑">✏️</button>
+                        <button class="ttw-btn-tiny ttw-delete-default-entry" data-index="${index}" title="删除">🗑️</button>
+                    </div>
+                </div>
+                <div class="ttw-default-entry-info">
+                    <span style="color:#9b59b6;">关键词:</span> ${(entry.keywords || []).join(', ') || '无'}
+                </div>
+            `;
+            container.appendChild(item);
+        });
+
+        container.querySelectorAll('.ttw-edit-default-entry').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const index = parseInt(e.target.dataset.index);
+                showEditDefaultEntryModal(index);
+            });
+        });
+
+        container.querySelectorAll('.ttw-delete-default-entry').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const index = parseInt(e.target.dataset.index);
+                if (confirm(`确定删除此默认条目吗？`)) {
+                    defaultWorldbookEntriesUI.splice(index, 1);
+                    saveDefaultWorldbookEntriesUI();
+                    renderDefaultWorldbookEntriesUI();
+                }
+            });
+        });
+    }
+
+    function showAddDefaultEntryModal() {
+        showEditDefaultEntryModal(null);
+    }
+
+    function showEditDefaultEntryModal(editIndex) {
+        const existingModal = document.getElementById('ttw-default-entry-modal');
+        if (existingModal) existingModal.remove();
+
+        const isEdit = editIndex !== null;
+        const entry = isEdit ? defaultWorldbookEntriesUI[editIndex] : {
+            category: '',
+            name: '',
+            keywords: [],
+            content: '',
+            position: 0,
+            depth: 4,
+            order: 100
+        };
+
+        const modal = document.createElement('div');
+        modal.id = 'ttw-default-entry-modal';
+        modal.className = 'ttw-modal-container';
+        modal.innerHTML = `
+        <div class="ttw-modal" style="max-width:550px;">
+            <div class="ttw-modal-header">
+                <span class="ttw-modal-title">${isEdit ? '✏️ 编辑默认条目' : '➕ 添加默认条目'}</span>
+                <button class="ttw-modal-close" type="button">✕</button>
+            </div>
+            <div class="ttw-modal-body">
+                <div class="ttw-form-group">
+                    <label>分类 *</label>
+                    <input type="text" id="ttw-default-entry-category" value="${entry.category}" placeholder="如：角色、地点、系统" class="ttw-input">
+                </div>
+                <div class="ttw-form-group">
+                    <label>条目名称 *</label>
+                    <input type="text" id="ttw-default-entry-name" value="${entry.name}" placeholder="条目名称" class="ttw-input">
+                </div>
+                <div class="ttw-form-group">
+                    <label>关键词（逗号分隔）</label>
+                    <input type="text" id="ttw-default-entry-keywords" value="${(entry.keywords || []).join(', ')}" placeholder="关键词1, 关键词2" class="ttw-input">
+                </div>
+                <div class="ttw-form-group">
+                    <label>内容</label>
+                    <textarea id="ttw-default-entry-content" rows="6" class="ttw-textarea-small" placeholder="条目内容...">${entry.content || ''}</textarea>
+                </div>
+                <div class="ttw-form-group">
+                    <label>位置</label>
+                    <select id="ttw-default-entry-position" class="ttw-select">
+                        <option value="0" ${(entry.position || 0) === 0 ? 'selected' : ''}>在角色定义之前</option>
+                        <option value="1" ${entry.position === 1 ? 'selected' : ''}>在角色定义之后</option>
+                        <option value="2" ${entry.position === 2 ? 'selected' : ''}>在作者注释之前</option>
+                        <option value="3" ${entry.position === 3 ? 'selected' : ''}>在作者注释之后</option>
+                        <option value="4" ${entry.position === 4 ? 'selected' : ''}>自定义深度</option>
+                    </select>
+                </div>
+                <div class="ttw-form-group">
+                    <label>深度（仅位置为"自定义深度"时有效）</label>
+                    <input type="number" id="ttw-default-entry-depth" class="ttw-input" value="${entry.depth || 4}" min="0" max="999">
+                </div>
+                <div class="ttw-form-group">
+                    <label>顺序（数字越小越靠前）</label>
+                    <input type="number" id="ttw-default-entry-order" class="ttw-input" value="${entry.order || 100}" min="0" max="9999">
+                </div>
+            </div>
+            <div class="ttw-modal-footer">
+                <button class="ttw-btn" id="ttw-cancel-default-entry">取消</button>
+                <button class="ttw-btn ttw-btn-primary" id="ttw-save-default-entry">💾 保存</button>
+            </div>
+        </div>
+    `;
+
+        document.body.appendChild(modal);
+
+        modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
+        modal.querySelector('#ttw-cancel-default-entry').addEventListener('click', () => modal.remove());
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+        modal.querySelector('#ttw-save-default-entry').addEventListener('click', () => {
+            const category = document.getElementById('ttw-default-entry-category').value.trim();
+            const name = document.getElementById('ttw-default-entry-name').value.trim();
+            const keywordsStr = document.getElementById('ttw-default-entry-keywords').value.trim();
+            const content = document.getElementById('ttw-default-entry-content').value;
+            const position = parseInt(document.getElementById('ttw-default-entry-position').value) || 0;
+            const depth = parseInt(document.getElementById('ttw-default-entry-depth').value) || 4;
+            const order = parseInt(document.getElementById('ttw-default-entry-order').value) || 100;
+
+            if (!category) { alert('请输入分类'); return; }
+            if (!name) { alert('请输入条目名称'); return; }
+
+            const keywords = keywordsStr ? keywordsStr.split(/[,，]/).map(k => k.trim()).filter(k => k) : [];
+
+            const newEntry = { category, name, keywords, content, position, depth, order };
+
+            if (isEdit) {
+                defaultWorldbookEntriesUI[editIndex] = newEntry;
+            } else {
+                defaultWorldbookEntriesUI.push(newEntry);
+            }
+
+            saveDefaultWorldbookEntriesUI();
+            renderDefaultWorldbookEntriesUI();
+            modal.remove();
+        });
+    }
+
+
+    function saveDefaultWorldbookEntriesUI() {
+        settings.defaultWorldbookEntriesUI = defaultWorldbookEntriesUI;
+        saveCurrentSettings();
+    }
+
+    // ========== 章回检测功能 ==========
+    function detectChaptersWithRegex(content, regexPattern) {
+        try {
+            const regex = new RegExp(regexPattern, 'g');
+            const matches = [...content.matchAll(regex)];
+            return matches;
+        } catch (e) {
+            console.error('正则表达式错误:', e);
+            return [];
+        }
+    }
+
+    function testChapterRegex() {
+        if (!currentFile && memoryQueue.length === 0) {
+            alert('请先上传文件');
+            return;
+        }
+
+        const regexInput = document.getElementById('ttw-chapter-regex');
+        const pattern = regexInput?.value || chapterRegexSettings.pattern;
+
+        const content = memoryQueue.length > 0 ? memoryQueue.map(m => m.content).join('') : '';
+        if (!content) {
+            alert('请先上传并加载文件');
+            return;
+        }
+
+        const matches = detectChaptersWithRegex(content, pattern);
+
+        if (matches.length === 0) {
+            alert(`未检测到章节！\n\n当前正则: ${pattern}\n\n建议:\n1. 尝试使用快速选择按钮\n2. 检查正则表达式是否正确`);
+        } else {
+            const previewChapters = matches.slice(0, 10).map(m => m[0]).join('\n');
+            alert(`检测到 ${matches.length} 个章节\n\n前10个章节:\n${previewChapters}${matches.length > 10 ? '\n...' : ''}`);
+        }
+    }
+
+    function rechunkMemories() {
+        if (memoryQueue.length === 0) {
+            alert('没有可重新分块的内容');
+            return;
+        }
+
+        const processedCount = memoryQueue.filter(m => m.processed && !m.failed).length;
+
+        if (processedCount > 0) {
+            const confirmMsg = `⚠️ 警告：当前有 ${processedCount} 个已处理的章节。\n\n重新分块将会：\n1. 清除所有已处理状态\n2. 需要重新从头开始转换\n3. 但不会清除已生成的世界书数据\n\n确定要重新分块吗？`;
+            if (!confirm(confirmMsg)) return;
+        }
+
+        const allContent = memoryQueue.map(m => m.content).join('');
+
+        splitContentIntoMemory(allContent);
+
+        startFromIndex = 0;
+        userSelectedStartIndex = null;
+
+        updateMemoryQueueUI();
+        updateStartButtonState(false);
+
+        alert(`重新分块完成！\n当前共 ${memoryQueue.length} 个章节`);
+    }
+
     // ========== 帮助弹窗 ==========
     function showHelpModal() {
         const existingHelp = document.getElementById('ttw-help-modal');
@@ -3510,13 +4875,23 @@ ${pairsWithContent}
         helpModal.innerHTML = `
             <div class="ttw-modal" style="max-width:650px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">❓ TXT转世界书 v2.7.1 帮助</span>
+                    <span class="ttw-modal-title">❓ TXT转世界书 v2.9.2  帮助</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
                     <div style="margin-bottom:16px;">
                         <h4 style="color:#e67e22;margin:0 0 10px;">📌 基本功能</h4>
                         <p style="color:#ccc;line-height:1.6;margin:0;">将TXT小说转换为SillyTavern世界书格式，自动提取角色、地点、组织等信息。</p>
+                    </div>
+                    <div style="margin-bottom:16px;">
+                        <h4 style="color:#9b59b6;margin:0 0 10px;">🏷️ v2.9.2  更新</h4>
+                        <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
+                            <li><strong>🔍 查找功能</strong>：查找处理结果中的特定字符并高亮</li>
+                            <li><strong>🔄 批量替换</strong>：替换所有处理结果中的词语</li>
+                            <li><strong>🧹 多选整理</strong>：可选择多个分类进行整理</li>
+                            <li><strong>⚙️ 条目配置</strong>：每个条目可配置位置/深度/顺序</li>
+                            <li><strong>📚 默认条目UI</strong>：可视化管理默认世界书条目</li>
+                        </ul>
                     </div>
                     <div style="margin-bottom:16px;">
                         <h4 style="color:#27ae60;margin:0 0 10px;">🔧 API 模式</h4>
@@ -3527,15 +4902,13 @@ ${pairsWithContent}
                         </ul>
                     </div>
                     <div style="margin-bottom:16px;">
-                        <h4 style="color:#3498db;margin:0 0 10px;">✨ 主要功能</h4>
+                        <h4 style="color:#3498db;margin:0 0 10px;">✨ 其他功能</h4>
                         <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                            <li><strong>📝 记忆编辑</strong>：点击记忆可编辑/复制内容</li>
-                            <li><strong>🎲 重Roll功能</strong>：每个记忆可多次生成，支持自定义提示词</li>
-                            <li><strong>📥 合并导入的世界书</strong>：导入已有世界书，支持按分类勾选</li>
-                            <li><strong>🔵🟢 灯状态切换</strong>：每个分类可单独设置蓝灯(常驻)或绿灯(触发)</li>
-                            <li><strong>📚 默认世界书</strong>：可设置每次都会添加的默认条目</li>
-                            <li><strong>🧹 整理条目</strong>：用AI去除条目中的重复信息</li>
-                            <li><strong>🔗 别名识别</strong>：根据关键词和内容摘要识别同一角色</li>
+                            <li><strong>📝 记忆编辑</strong>：点击章节可查看/编辑/复制</li>
+                            <li><strong>🎲 重Roll功能</strong>：每个记忆可多次生成</li>
+                            <li><strong>📥 合并世界书</strong>：导入已有世界书进行合并</li>
+                            <li><strong>🔵🟢 灯状态</strong>：分类蓝灯(常驻)或绿灯(触发)</li>
+                            <li><strong>🔗 别名合并</strong>：识别同一角色的不同称呼</li>
                         </ul>
                     </div>
                 </div>
@@ -3653,7 +5026,7 @@ ${pairsWithContent}
                                 <button id="ttw-append-to-next" class="ttw-btn ttw-btn-small" ${index === memoryQueue.length - 1 ? 'disabled style="opacity:0.5;"' : ''} title="追加到下一章开头，并删除当前章">⬇️ 合并到下一章</button>
                             </div>
                         </div>
-                        <textarea id="ttw-memory-content-editor" class="ttw-textarea">${memory.content.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</textarea>
+                        <textarea id="ttw-memory-content-editor" class="ttw-textarea">${memory.content.replace(/</g, '<').replace(/>/g, '>')}</textarea>
                     </div>
                     ${resultHtml}
                 </div>
@@ -3752,7 +5125,7 @@ ${pairsWithContent}
         });
     }
 
-    // ========== 查看已处理结果 - 修复：缩小左侧列表项大小 ==========
+    // ========== 查看已处理结果 ==========
     function showProcessedResults() {
         const processedMemories = memoryQueue.filter(m => m.processed && !m.failed && m.result);
         if (processedMemories.length === 0) { alert('暂无已处理的结果'); return; }
@@ -3764,7 +5137,6 @@ ${pairsWithContent}
         processedMemories.forEach((memory) => {
             const realIndex = memoryQueue.indexOf(memory);
             const entryCount = memory.result ? Object.keys(memory.result).reduce((sum, cat) => sum + (typeof memory.result[cat] === 'object' ? Object.keys(memory.result[cat]).length : 0), 0) : 0;
-            // 修复：缩小padding和字号，参考roll历史的样式
             listHtml += `
                 <div class="ttw-processed-item" data-index="${realIndex}" style="padding:6px 8px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:4px;cursor:pointer;border-left:2px solid #27ae60;">
                     <div style="font-size:11px;font-weight:bold;color:#27ae60;">✅ 第${realIndex + 1}章</div>
@@ -3975,7 +5347,7 @@ ${pairsWithContent}
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v2.7.1</span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v2.9.2 </span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -4056,7 +5428,21 @@ ${pairsWithContent}
                                     </select>
                                 </div>
                             </div>
-                            <div style="display:flex;gap:12px;margin-bottom:12px;">
+
+                            <!-- 章回正则设置 -->
+                            <div class="ttw-setting-card" style="background:rgba(230,126,34,0.1);border:1px solid rgba(230,126,34,0.3);">
+                                <div style="font-weight:bold;color:#e67e22;margin-bottom:10px;">📖 章回正则设置</div>
+                                <div class="ttw-setting-hint" style="margin-bottom:8px;">自定义章节检测正则表达式</div>
+                                <input type="text" id="ttw-chapter-regex" class="ttw-input" value="第[零一二三四五六七八九十百千万0-9]+[章回卷节部篇]" style="margin-bottom:8px;">
+                                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                                    <button class="ttw-btn ttw-btn-small ttw-chapter-preset" data-regex="第[零一二三四五六七八九十百千万0-9]+[章回卷节部篇]">中文通用</button>
+                                    <button class="ttw-btn ttw-btn-small ttw-chapter-preset" data-regex="Chapter\\s*\\d+">英文Chapter</button>
+                                    <button class="ttw-btn ttw-btn-small ttw-chapter-preset" data-regex="第\\d+章">数字章节</button>
+                                    <button id="ttw-test-chapter-regex" class="ttw-btn ttw-btn-small" style="background:#e67e22;">🔍 检测</button>
+                                </div>
+                            </div>
+
+                            <div style="display:flex;gap:12px;margin-bottom:12px;align-items:flex-end;">
                                 <div style="flex:1;">
                                     <label class="ttw-label">每块字数</label>
                                     <input type="number" id="ttw-chunk-size" value="15000" min="1000" max="500000" class="ttw-input">
@@ -4064,6 +5450,9 @@ ${pairsWithContent}
                                 <div style="flex:1;">
                                     <label class="ttw-label">API超时(秒)</label>
                                     <input type="number" id="ttw-api-timeout" value="120" min="30" max="600" class="ttw-input">
+                                </div>
+                                <div>
+                                    <button id="ttw-rechunk-btn" class="ttw-btn ttw-btn-small" style="background:rgba(230,126,34,0.5);" title="修改字数后点击重新分块">🔄 重新分块</button>
                                 </div>
                             </div>
                             <div style="display:flex;flex-direction:column;gap:8px;">
@@ -4091,21 +5480,24 @@ ${pairsWithContent}
                             </div>
                             <div id="ttw-volume-indicator" class="ttw-volume-indicator"></div>
 
-                            <!-- 默认世界书条目配置 -->
+                            <!-- 默认世界书条目配置 - UI化 -->
                             <div class="ttw-prompt-section" style="margin-top:16px;border:1px solid var(--SmartThemeBorderColor,#444);border-radius:8px;overflow:hidden;">
-                                <div class="ttw-prompt-header ttw-prompt-header-green" data-target="ttw-default-worldbook-content">
+                                <div class="ttw-prompt-header ttw-prompt-header-green" data-target="ttw-default-entries-content">
                                     <div style="display:flex;align-items:center;gap:8px;">
                                         <span>📚</span><span style="font-weight:500;">默认世界书条目</span>
                                         <span class="ttw-badge ttw-badge-gray">可选</span>
                                     </div>
                                     <span class="ttw-collapse-icon">▶</span>
                                 </div>
-                                <div id="ttw-default-worldbook-content" class="ttw-prompt-content">
-                                    <div class="ttw-setting-hint" style="margin-bottom:10px;">每次转换完成后自动添加的世界书条目（JSON格式），会在开始转换时立即应用</div>
-                                    <textarea id="ttw-default-worldbook" rows="6" placeholder='例如：{"角色":{"系统提示":{"关键词":["系统"],"内容":"这是一个默认条目"}}}' class="ttw-textarea-small"></textarea>
-                                    <div style="margin-top:8px;">
-                                        <button class="ttw-btn ttw-btn-small" id="ttw-apply-default-worldbook">🔄 立即应用</button>
+                                <div id="ttw-default-entries-content" class="ttw-prompt-content">
+                                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                                        <div class="ttw-setting-hint" style="font-size:11px;">每次转换完成后自动添加的世界书条目</div>
+                                        <div style="display:flex;gap:6px;">
+                                            <button id="ttw-add-default-entry" class="ttw-btn ttw-btn-small" style="background:#27ae60;">➕ 添加</button>
+                                            <button id="ttw-apply-default-entries" class="ttw-btn ttw-btn-small">🔄 立即应用</button>
+                                        </div>
                                     </div>
+                                    <div id="ttw-default-entries-list" class="ttw-default-entries-list"></div>
                                 </div>
                             </div>
 
@@ -4113,8 +5505,8 @@ ${pairsWithContent}
                                 <div class="ttw-prompt-config-header">
                                     <span>📝 提示词配置</span>
                                     <div style="display:flex;gap:8px;">
-                                       <button id="ttw-export-settings" class="ttw-btn ttw-btn-small">📤 导出配置</button>
-                                       <button id="ttw-import-settings" class="ttw-btn ttw-btn-small">📥 导入配置</button>
+                                       <button id="ttw-export-settings" class="ttw-btn ttw-btn-small">📤 导出</button>
+                                       <button id="ttw-import-settings" class="ttw-btn ttw-btn-small">📥 导入</button>
                                         <button id="ttw-preview-prompt" class="ttw-btn ttw-btn-small">👁️ 预览</button>
                                     </div>
                                 </div>
@@ -4128,6 +5520,11 @@ ${pairsWithContent}
                                     </div>
                                     <div id="ttw-worldbook-content" class="ttw-prompt-content">
                                         <div class="ttw-setting-hint" style="margin-bottom:10px;">核心提示词。留空使用默认。</div>
+                                        <div class="ttw-placeholder-hint" style="margin-bottom:10px;padding:8px;background:rgba(231,76,60,0.15);border:1px solid rgba(231,76,60,0.4);border-radius:6px;">
+                                            <span style="color:#e74c3c;font-weight:bold;">⚠️ 必须包含占位符：</span>
+                                            <code style="background:rgba(0,0,0,0.3);padding:2px 6px;border-radius:3px;color:#f39c12;font-family:monospace;">{DYNAMIC_JSON_TEMPLATE}</code>
+                                            <div style="font-size:11px;color:#888;margin-top:4px;">此占位符会被自动替换为根据启用分类生成的JSON模板</div>
+                                        </div>
                                         <textarea id="ttw-worldbook-prompt" rows="6" placeholder="留空使用默认..." class="ttw-textarea-small"></textarea>
                                         <div style="margin-top:8px;"><button class="ttw-btn ttw-btn-small ttw-reset-prompt" data-type="worldbook">🔄 恢复默认</button></div>
                                     </div>
@@ -4164,6 +5561,26 @@ ${pairsWithContent}
                                         <div style="margin-top:8px;"><button class="ttw-btn ttw-btn-small ttw-reset-prompt" data-type="style">🔄 恢复默认</button></div>
                                     </div>
                                 </div>
+
+                                <!-- 自定义提取分类 - 修改按钮布局 -->
+                                <div class="ttw-prompt-section">
+                                    <div class="ttw-prompt-header" style="background:rgba(155,89,182,0.15);" data-target="ttw-categories-content">
+                                        <div style="display:flex;align-items:center;gap:8px;">
+                                            <span>🏷️</span><span style="font-weight:500;color:#9b59b6;">自定义提取分类</span>
+                                        </div>
+                                        <span class="ttw-collapse-icon">▶</span>
+                                    </div>
+                                    <div id="ttw-categories-content" class="ttw-prompt-content">
+                                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                                            <div class="ttw-setting-hint" style="font-size:11px;flex:1;">勾选要提取的分类</div>
+                                            <div style="display:flex;gap:6px;">
+                                                <button id="ttw-add-category" class="ttw-btn ttw-btn-small" style="background:#9b59b6;">➕ 添加</button>
+                                                <button id="ttw-reset-categories" class="ttw-btn ttw-btn-small">🔄 重置</button>
+                                            </div>
+                                        </div>
+                                        <div id="ttw-categories-list" class="ttw-categories-list"></div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -4197,10 +5614,21 @@ ${pairsWithContent}
                             <div style="display:flex;gap:8px;margin-left:auto;">
                                 <button id="ttw-view-processed" class="ttw-btn-small">📊 已处理</button>
                                 <button id="ttw-select-start" class="ttw-btn-small">📍 选择起始</button>
+                                <button id="ttw-multi-delete-btn" class="ttw-btn-small ttw-btn-warning">🗑️ 多选删除</button>
                             </div>
                         </div>
                         <div class="ttw-section-content">
                             <div class="ttw-setting-hint" style="margin-bottom:8px;">💡 点击章节可<strong>查看/编辑/复制</strong>，支持<strong>🎲重Roll</strong></div>
+                            <div id="ttw-multi-select-bar" style="display:none;margin-bottom:8px;padding:8px;background:rgba(231,76,60,0.15);border-radius:6px;border:1px solid rgba(231,76,60,0.3);">
+                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                    <span style="color:#e74c3c;font-weight:bold;">🗑️ 多选删除模式</span>
+                                    <div style="display:flex;gap:8px;">
+                                        <span id="ttw-selected-count" style="color:#888;">已选: 0</span>
+                                        <button id="ttw-confirm-multi-delete" class="ttw-btn ttw-btn-small ttw-btn-warning">确认删除</button>
+                                        <button id="ttw-cancel-multi-select" class="ttw-btn ttw-btn-small">取消</button>
+                                    </div>
+                                </div>
+                            </div>
                             <div id="ttw-memory-queue" class="ttw-memory-queue"></div>
                         </div>
                     </div>
@@ -4232,9 +5660,11 @@ ${pairsWithContent}
                         <div class="ttw-section-content">
                             <div id="ttw-result-preview" class="ttw-result-preview"></div>
                             <div class="ttw-result-actions">
+                                <button id="ttw-search-btn" class="ttw-btn">🔍 查找</button>
+                                <button id="ttw-replace-btn" class="ttw-btn">🔄 替换</button>
                                 <button id="ttw-view-worldbook" class="ttw-btn">📖 查看世界书</button>
                                 <button id="ttw-view-history" class="ttw-btn">📜 修改历史</button>
-                                <button id="ttw-consolidate-entries" class="ttw-btn" title="用AI整理角色条目，去除重复信息">🧹 整理条目</button>
+                                <button id="ttw-consolidate-entries" class="ttw-btn" title="用AI整理条目，去除重复信息">🧹 整理条目</button>
                                 <button id="ttw-alias-merge" class="ttw-btn" title="识别同一角色的不同称呼并合并">🔗 别名合并</button>
                                 <button id="ttw-export-json" class="ttw-btn">📥 导出JSON</button>
                                 <button id="ttw-export-volumes" class="ttw-btn" style="display:none;">📦 分卷导出</button>
@@ -4254,8 +5684,11 @@ ${pairsWithContent}
         bindModalEvents();
         loadSavedSettings();
         loadCategoryLightSettings();
+        loadCustomCategories().then(() => {
+            renderCategoriesList();
+            renderDefaultWorldbookEntriesUI();
+        });
         checkAndRestoreState();
-
         restoreExistingState();
     }
 
@@ -4340,6 +5773,8 @@ ${pairsWithContent}
             .ttw-memory-queue{max-height:200px;overflow-y:auto;}
             .ttw-memory-item{padding:8px 12px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:6px;font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer;transition:background 0.2s;}
             .ttw-memory-item:hover{background:rgba(0,0,0,0.4);}
+            .ttw-memory-item.multi-select-mode{cursor:default;}
+            .ttw-memory-item.selected-for-delete{background:rgba(231,76,60,0.3);border:1px solid rgba(231,76,60,0.5);}
             .ttw-progress-bar{width:100%;height:8px;background:rgba(0,0,0,0.3);border-radius:4px;overflow:hidden;margin-bottom:12px;}
             .ttw-progress-fill{height:100%;background:linear-gradient(90deg,#e67e22,#f39c12);border-radius:4px;transition:width 0.3s;width:0%;}
             .ttw-progress-text{font-size:13px;text-align:center;margin-bottom:12px;}
@@ -4358,6 +5793,22 @@ ${pairsWithContent}
             .ttw-btn-warning{background:rgba(255,107,53,0.5);border-color:#ff6b35;}
             .ttw-btn-small{padding:6px 12px;font-size:12px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:4px;background:rgba(255,255,255,0.1);color:#fff;cursor:pointer;transition:all 0.2s;}
             .ttw-btn-small:hover{background:rgba(255,255,255,0.2);}
+            .ttw-btn-tiny{padding:3px 6px;font-size:11px;border:none;background:rgba(255,255,255,0.1);color:#fff;cursor:pointer;border-radius:3px;}
+            .ttw-btn-tiny:hover{background:rgba(255,255,255,0.2);}
+            .ttw-btn-tiny:disabled{opacity:0.3;cursor:not-allowed;}
+            .ttw-categories-list{max-height:180px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:8px;}
+            .ttw-category-item{display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(0,0,0,0.15);border-radius:4px;margin-bottom:4px;}
+            .ttw-category-item input[type="checkbox"]{width:16px;height:16px;accent-color:#9b59b6;}
+            .ttw-category-name{flex:1;font-size:12px;}
+            .ttw-category-actions{display:flex;gap:4px;}
+            .ttw-default-entries-list{max-height:180px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:8px;}
+            .ttw-default-entry-item{padding:8px 10px;background:rgba(0,0,0,0.15);border-radius:4px;margin-bottom:6px;border-left:3px solid #27ae60;}
+            .ttw-default-entry-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;}
+            .ttw-default-entry-title{font-size:12px;font-weight:bold;color:#27ae60;}
+            .ttw-default-entry-actions{display:flex;gap:4px;}
+            .ttw-default-entry-info{font-size:11px;color:#888;}
+            .ttw-form-group{margin-bottom:12px;}
+            .ttw-form-group>label{display:block;margin-bottom:6px;font-size:12px;color:#ccc;}
             .ttw-merge-option{display:flex;align-items:center;gap:8px;padding:10px;background:rgba(0,0,0,0.2);border-radius:6px;cursor:pointer;}
             .ttw-merge-option input{width:18px;height:18px;}
             .ttw-roll-history-container{display:flex;gap:10px;height:400px;}
@@ -4381,6 +5832,8 @@ ${pairsWithContent}
             .ttw-light-toggle.blue:hover{background:rgba(52,152,219,0.5);}
             .ttw-light-toggle.green{background:rgba(39,174,96,0.3);color:#27ae60;}
             .ttw-light-toggle.green:hover{background:rgba(39,174,96,0.5);}
+            .ttw-config-btn{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:4px;cursor:pointer;font-size:12px;transition:all 0.2s;border:none;margin-left:4px;background:rgba(155,89,182,0.3);color:#9b59b6;}
+            .ttw-config-btn:hover{background:rgba(155,89,182,0.5);}
             .ttw-history-container{display:flex;gap:10px;height:400px;}
             .ttw-history-left{width:100px;min-width:100px;max-width:100px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;}
             .ttw-history-right{flex:1;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:8px;padding:12px;}
@@ -4398,6 +5851,9 @@ ${pairsWithContent}
             .ttw-setting-item>label{display:block;margin-bottom:6px;font-size:12px;opacity:0.9;}
             .ttw-setting-item input,.ttw-setting-item select{width:100%;padding:10px 12px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:6px;background:rgba(0,0,0,0.3);color:#fff;font-size:13px;box-sizing:border-box;}
             .ttw-setting-item select option{background:#2a2a2a;}
+            .ttw-placeholder-hint code{user-select:all;}
+            .ttw-consolidate-category-item{display:flex;align-items:center;gap:10px;padding:8px 12px;background:rgba(0,0,0,0.15);border-radius:6px;margin-bottom:6px;cursor:pointer;}
+            .ttw-consolidate-category-item input{width:18px;height:18px;accent-color:#3498db;}
             @media (max-width: 768px) {
                 .ttw-roll-history-container,.ttw-history-container{flex-direction:column;height:auto;}
                 .ttw-roll-history-left,.ttw-history-left{width:100%;max-width:100%;flex-direction:row;flex-wrap:wrap;height:auto;max-height:120px;}
@@ -4460,33 +5916,76 @@ ${pairsWithContent}
         document.getElementById('ttw-parallel-mode').addEventListener('change', (e) => { parallelConfig.mode = e.target.value; saveCurrentSettings(); });
         document.getElementById('ttw-volume-mode').addEventListener('change', (e) => { useVolumeMode = e.target.checked; const indicator = document.getElementById('ttw-volume-indicator'); if (indicator) indicator.style.display = useVolumeMode ? 'block' : 'none'; });
 
-        const defaultWbHeader = document.querySelector('[data-target="ttw-default-worldbook-content"]');
-        if (defaultWbHeader) {
-            defaultWbHeader.addEventListener('click', () => {
-                const content = document.getElementById('ttw-default-worldbook-content');
-                const icon = defaultWbHeader.querySelector('.ttw-collapse-icon');
-                if (content.style.display === 'none' || !content.style.display) { content.style.display = 'block'; icon.textContent = '▼'; }
-                else { content.style.display = 'none'; icon.textContent = '▶'; }
-            });
-        }
+        document.getElementById('ttw-rechunk-btn').addEventListener('click', rechunkMemories);
 
-        document.getElementById('ttw-apply-default-worldbook')?.addEventListener('click', () => {
-            saveCurrentSettings();
+        document.getElementById('ttw-add-category').addEventListener('click', showAddCategoryModal);
+        document.getElementById('ttw-reset-categories').addEventListener('click', async () => {
+            if (confirm('确定重置为默认分类配置吗？这将清除所有自定义分类。')) {
+                await resetToDefaultCategories();
+                renderCategoriesList();
+            }
+        });
+
+        // 默认世界书条目UI事件
+        document.getElementById('ttw-add-default-entry').addEventListener('click', showAddDefaultEntryModal);
+        document.getElementById('ttw-apply-default-entries').addEventListener('click', () => {
+            saveDefaultWorldbookEntriesUI();
             const applied = applyDefaultWorldbookEntries();
             if (applied) {
                 showResultSection(true);
                 updateWorldbookPreview();
                 alert('默认世界书条目已应用！');
             } else {
-                alert('没有有效的默认世界书条目或格式错误');
+                alert('没有默认世界书条目');
             }
         });
+
+        const categoriesHeader = document.querySelector('[data-target="ttw-categories-content"]');
+        if (categoriesHeader) {
+            categoriesHeader.addEventListener('click', () => {
+                const content = document.getElementById('ttw-categories-content');
+                const icon = categoriesHeader.querySelector('.ttw-collapse-icon');
+                if (content.style.display === 'none' || !content.style.display) {
+                    content.style.display = 'block';
+                    icon.textContent = '▼';
+                } else {
+                    content.style.display = 'none';
+                    icon.textContent = '▶';
+                }
+            });
+        }
+
+        document.getElementById('ttw-chapter-regex').addEventListener('change', (e) => {
+            chapterRegexSettings.pattern = e.target.value;
+            saveCurrentSettings();
+        });
+
+        document.querySelectorAll('.ttw-chapter-preset').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const regex = btn.dataset.regex;
+                document.getElementById('ttw-chapter-regex').value = regex;
+                chapterRegexSettings.pattern = regex;
+                saveCurrentSettings();
+            });
+        });
+
+        document.getElementById('ttw-test-chapter-regex').addEventListener('click', testChapterRegex);
+
+        const defaultEntriesHeader = document.querySelector('[data-target="ttw-default-entries-content"]');
+        if (defaultEntriesHeader) {
+            defaultEntriesHeader.addEventListener('click', () => {
+                const content = document.getElementById('ttw-default-entries-content');
+                const icon = defaultEntriesHeader.querySelector('.ttw-collapse-icon');
+                if (content.style.display === 'none' || !content.style.display) { content.style.display = 'block'; icon.textContent = '▼'; }
+                else { content.style.display = 'none'; icon.textContent = '▶'; }
+            });
+        }
 
         document.querySelectorAll('.ttw-prompt-header[data-target]').forEach(header => {
             header.addEventListener('click', (e) => {
                 if (e.target.type === 'checkbox') return;
                 const targetId = header.getAttribute('data-target');
-                if (targetId === 'ttw-default-worldbook-content') return;
+                if (targetId === 'ttw-default-entries-content' || targetId === 'ttw-categories-content') return;
                 const content = document.getElementById(targetId);
                 const icon = header.querySelector('.ttw-collapse-icon');
                 if (content.style.display === 'none' || !content.style.display) { content.style.display = 'block'; icon.textContent = '▼'; }
@@ -4494,7 +5993,7 @@ ${pairsWithContent}
             });
         });
 
-        ['ttw-worldbook-prompt', 'ttw-plot-prompt', 'ttw-style-prompt', 'ttw-default-worldbook'].forEach(id => {
+        ['ttw-worldbook-prompt', 'ttw-plot-prompt', 'ttw-style-prompt'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.addEventListener('input', saveCurrentSettings);
         });
@@ -4529,16 +6028,42 @@ ${pairsWithContent}
         document.getElementById('ttw-repair-btn').addEventListener('click', startRepairFailedMemories);
         document.getElementById('ttw-select-start').addEventListener('click', showStartFromSelector);
         document.getElementById('ttw-view-processed').addEventListener('click', showProcessedResults);
+
+        document.getElementById('ttw-multi-delete-btn').addEventListener('click', toggleMultiSelectMode);
+        document.getElementById('ttw-confirm-multi-delete').addEventListener('click', deleteSelectedMemories);
+        document.getElementById('ttw-cancel-multi-select').addEventListener('click', () => {
+            isMultiSelectMode = false;
+            selectedMemoryIndices.clear();
+            updateMemoryQueueUI();
+        });
+
         document.getElementById('ttw-toggle-stream').addEventListener('click', () => { const container = document.getElementById('ttw-stream-container'); container.style.display = container.style.display === 'none' ? 'block' : 'none'; });
         document.getElementById('ttw-clear-stream').addEventListener('click', () => updateStreamContent('', true));
+
+        // 新增：查找和替换按钮
+        document.getElementById('ttw-search-btn').addEventListener('click', showSearchModal);
+        document.getElementById('ttw-replace-btn').addEventListener('click', showReplaceModal);
+
         document.getElementById('ttw-view-worldbook').addEventListener('click', showWorldbookView);
         document.getElementById('ttw-view-history').addEventListener('click', showHistoryView);
-        document.getElementById('ttw-consolidate-entries').addEventListener('click', () => consolidateAllEntries('角色'));
+        document.getElementById('ttw-consolidate-entries').addEventListener('click', showConsolidateCategorySelector);
         document.getElementById('ttw-alias-merge').addEventListener('click', showAliasMergeUI);
         document.getElementById('ttw-export-json').addEventListener('click', exportWorldbook);
         document.getElementById('ttw-export-volumes').addEventListener('click', exportVolumes);
         document.getElementById('ttw-export-st').addEventListener('click', exportToSillyTavern);
         document.querySelector('[data-section="settings"]').addEventListener('click', () => { document.querySelector('.ttw-settings-section').classList.toggle('collapsed'); });
+    }
+
+    function toggleMultiSelectMode() {
+        isMultiSelectMode = !isMultiSelectMode;
+        selectedMemoryIndices.clear();
+
+        const multiSelectBar = document.getElementById('ttw-multi-select-bar');
+        if (multiSelectBar) {
+            multiSelectBar.style.display = isMultiSelectMode ? 'block' : 'none';
+        }
+
+        updateMemoryQueueUI();
     }
 
     function handleEscKey(e) {
@@ -4561,8 +6086,11 @@ ${pairsWithContent}
         settings.parallelConcurrency = parallelConfig.concurrency;
         settings.parallelMode = parallelConfig.mode;
         settings.categoryLightSettings = { ...categoryLightSettings };
-        settings.defaultWorldbookEntries = document.getElementById('ttw-default-worldbook')?.value || '';
         settings.forceChapterMarker = document.getElementById('ttw-force-chapter-marker')?.checked ?? true;
+        settings.chapterRegexPattern = document.getElementById('ttw-chapter-regex')?.value || chapterRegexSettings.pattern;
+        settings.defaultWorldbookEntriesUI = defaultWorldbookEntriesUI;
+        settings.categoryDefaultConfig = categoryDefaultConfig;
+        settings.entryPositionConfig = entryPositionConfig;
 
         settings.customApiProvider = document.getElementById('ttw-api-provider')?.value || 'gemini';
         settings.customApiKey = document.getElementById('ttw-api-key')?.value || '';
@@ -4591,17 +6119,31 @@ ${pairsWithContent}
                 parallelConfig.enabled = settings.parallelEnabled !== undefined ? settings.parallelEnabled : true;
                 parallelConfig.concurrency = settings.parallelConcurrency || 3;
                 parallelConfig.mode = settings.parallelMode || 'independent';
+                if (settings.chapterRegexPattern) {
+                    chapterRegexSettings.pattern = settings.chapterRegexPattern;
+                }
+                if (settings.defaultWorldbookEntriesUI) {
+                    defaultWorldbookEntriesUI = settings.defaultWorldbookEntriesUI;
+                }
+                if (settings.categoryDefaultConfig) {
+                    categoryDefaultConfig = settings.categoryDefaultConfig;
+                }
+                if (settings.entryPositionConfig) {
+                    entryPositionConfig = settings.entryPositionConfig;
+                }
             }
         } catch (e) { }
 
         updateSettingsUI();
+        updateChapterRegexUI();
     }
 
     function showPromptPreview() {
         const prompt = getSystemPrompt();
         const chapterForce = settings.forceChapterMarker ? getChapterForcePrompt(1) : '(已关闭)';
         const apiMode = settings.useTavernApi ? '酒馆API' : `自定义API (${settings.customApiProvider})`;
-        alert(`当前提示词预览:\n\nAPI模式: ${apiMode}\n并行模式: ${parallelConfig.enabled ? parallelConfig.mode : '关闭'}\n强制章节标记: ${settings.forceChapterMarker ? '开启' : '关闭'}\n\n【章节强制标记示例】\n${chapterForce}\n\n【系统提示词】\n${prompt.substring(0, 1500)}${prompt.length > 1500 ? '...' : ''}`);
+        const enabledCats = getEnabledCategories().map(c => c.name).join(', ');
+        alert(`当前提示词预览:\n\nAPI模式: ${apiMode}\n并行模式: ${parallelConfig.enabled ? parallelConfig.mode : '关闭'}\n强制章节标记: ${settings.forceChapterMarker ? '开启' : '关闭'}\n启用分类: ${enabledCats}\n\n【章节强制标记示例】\n${chapterForce}\n\n【系统提示词】\n${prompt.substring(0, 1500)}${prompt.length > 1500 ? '...' : ''}`);
     }
 
     async function checkAndRestoreState() {
@@ -4693,27 +6235,25 @@ ${pairsWithContent}
         const chunkSize = settings.chunkSize;
         const minChunkSize = Math.max(chunkSize * 0.3, 5000);
         memoryQueue = [];
-        const chapterRegex = /第[一二三四五六七八九十百千万0-9]+[章节卷集回]/g;
+
+        const chapterRegex = new RegExp(chapterRegexSettings.pattern, 'g');
         const matches = [...content.matchAll(chapterRegex)];
 
-        
-if (matches.length > 0) {
-    const chapters = [];
+        if (matches.length > 0) {
+            const chapters = [];
 
-    for (let i = 0; i < matches.length; i++) {
-        const startIndex = matches[i].index;
-        const endIndex = i < matches.length - 1 ? matches[i + 1].index : content.length;
-        let chapterContent = content.slice(startIndex, endIndex);
+            for (let i = 0; i < matches.length; i++) {
+                const startIndex = matches[i].index;
+                const endIndex = i < matches.length - 1 ? matches[i + 1].index : content.length;
+                let chapterContent = content.slice(startIndex, endIndex);
 
-        // 如果是第一章，把章节标记前的内容也加进去
-        if (i === 0 && startIndex > 0) {
-            const preContent = content.slice(0, startIndex);
-            chapterContent = preContent + chapterContent;
-        }
+                if (i === 0 && startIndex > 0) {
+                    const preContent = content.slice(0, startIndex);
+                    chapterContent = preContent + chapterContent;
+                }
 
-        chapters.push({ title: matches[i][0], content: chapterContent });
-    }
-
+                chapters.push({ title: matches[i][0], content: chapterContent });
+            }
 
             const mergedChapters = [];
             let pendingChapter = null;
@@ -4831,6 +6371,8 @@ if (matches.length > 0) {
         startFromIndex = 0;
         userSelectedStartIndex = null;
         currentFileHash = null;
+        isMultiSelectMode = false;
+        selectedMemoryIndices.clear();
 
         try {
             await MemoryHistoryDB.clearAllHistory();
@@ -4892,18 +6434,78 @@ if (matches.length > 0) {
         const container = document.getElementById('ttw-memory-queue');
         if (!container) return;
         container.innerHTML = '';
+
+        const multiSelectBar = document.getElementById('ttw-multi-select-bar');
+        if (multiSelectBar) {
+            multiSelectBar.style.display = isMultiSelectMode ? 'block' : 'none';
+        }
+
+        const selectedCountEl = document.getElementById('ttw-selected-count');
+        if (selectedCountEl) {
+            selectedCountEl.textContent = `已选: ${selectedMemoryIndices.size}`;
+        }
+
         memoryQueue.forEach((memory, index) => {
             const item = document.createElement('div');
             item.className = 'ttw-memory-item';
-            if (memory.processing) { item.style.borderLeft = '3px solid #3498db'; item.style.background = 'rgba(52,152,219,0.15)'; }
-            else if (memory.processed && !memory.failed) { item.style.opacity = '0.6'; }
-            else if (memory.failed) { item.style.borderLeft = '3px solid #e74c3c'; }
+
+            if (isMultiSelectMode) {
+                item.classList.add('multi-select-mode');
+                if (selectedMemoryIndices.has(index)) {
+                    item.classList.add('selected-for-delete');
+                }
+            }
+
+            if (memory.processing) {
+                item.style.borderLeft = '3px solid #3498db';
+                item.style.background = 'rgba(52,152,219,0.15)';
+            } else if (memory.processed && !memory.failed) {
+                item.style.opacity = '0.6';
+            } else if (memory.failed) {
+                item.style.borderLeft = '3px solid #e74c3c';
+            }
+
             let statusIcon = '⏳';
             if (memory.processing) statusIcon = '🔄';
             else if (memory.processed && !memory.failed) statusIcon = '✅';
             else if (memory.failed) statusIcon = '❗';
-            item.innerHTML = `<span>${statusIcon}</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">第${index + 1}章</span><small style="font-size:11px;color:#888;">${(memory.content.length / 1000).toFixed(1)}k</small>${memory.failed ? `<small style="color:#e74c3c;font-size:11px;">错误</small>` : ''}`;
-            item.addEventListener('click', () => showMemoryContentModal(index));
+
+            if (isMultiSelectMode) {
+                const isSelected = selectedMemoryIndices.has(index);
+                item.innerHTML = `
+                    <input type="checkbox" class="ttw-memory-checkbox" data-index="${index}" ${isSelected ? 'checked' : ''} style="width:16px;height:16px;accent-color:#e74c3c;">
+                    <span>${statusIcon}</span>
+                    <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">第${index + 1}章</span>
+                    <small style="font-size:11px;color:#888;">${(memory.content.length / 1000).toFixed(1)}k</small>
+                    ${memory.failed ? `<small style="color:#e74c3c;font-size:11px;">错误</small>` : ''}
+                `;
+
+                const checkbox = item.querySelector('.ttw-memory-checkbox');
+                checkbox.addEventListener('change', (e) => {
+                    e.stopPropagation();
+                    if (e.target.checked) {
+                        selectedMemoryIndices.add(index);
+                        item.classList.add('selected-for-delete');
+                    } else {
+                        selectedMemoryIndices.delete(index);
+                        item.classList.remove('selected-for-delete');
+                    }
+                    if (selectedCountEl) {
+                        selectedCountEl.textContent = `已选: ${selectedMemoryIndices.size}`;
+                    }
+                });
+
+                item.addEventListener('click', (e) => {
+                    if (e.target.type !== 'checkbox') {
+                        checkbox.checked = !checkbox.checked;
+                        checkbox.dispatchEvent(new Event('change'));
+                    }
+                });
+            } else {
+                item.innerHTML = `<span>${statusIcon}</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">第${index + 1}章</span><small style="font-size:11px;color:#888;">${(memory.content.length / 1000).toFixed(1)}k</small>${memory.failed ? `<small style="color:#e74c3c;font-size:11px;">错误</small>` : ''}`;
+                item.addEventListener('click', () => showMemoryContentModal(index));
+            }
+
             container.appendChild(item);
         });
     }
@@ -4917,6 +6519,7 @@ if (matches.length > 0) {
         }
         container.innerHTML = headerInfo + formatWorldbookAsCards(worldbookToShow);
         bindLightToggleEvents(container);
+        bindConfigButtonEvents(container);
     }
 
     function formatWorldbookAsCards(worldbook) {
@@ -4938,15 +6541,17 @@ if (matches.length > 0) {
 
             html += `<div style="margin-bottom:12px;border:1px solid #e67e22;border-radius:8px;overflow:hidden;">
                 <div style="background:linear-gradient(135deg,#e67e22,#d35400);padding:10px 14px;cursor:pointer;font-weight:bold;display:flex;justify-content:space-between;align-items:center;" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
-                    <span style="display:flex;align-items:center;">📁 ${category}<button class="ttw-light-toggle ${lightClass}" data-category="${category}" title="${lightTitle}" onclick="event.stopPropagation();">${lightIcon}</button></span>
+                    <span style="display:flex;align-items:center;">📁 ${category}<button class="ttw-light-toggle ${lightClass}" data-category="${category}" title="${lightTitle}" onclick="event.stopPropagation();">${lightIcon}</button><button class="ttw-config-btn" data-category="${category}" title="配置分类默认位置/深度" onclick="event.stopPropagation();">⚙️</button></span>
                     <span style="font-size:12px;">${entryCount} 条目</span>
                 </div>
                 <div style="background:#2d2d2d;display:none;">`;
             for (const entryName in entries) {
                 const entry = entries[entryName];
+                const config = getEntryConfig(category, entryName);
                 html += `<div style="margin:8px;border:1px solid #555;border-radius:6px;overflow:hidden;">
                     <div style="background:#3a3a3a;padding:8px 12px;cursor:pointer;display:flex;justify-content:space-between;border-left:3px solid #3498db;" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
-                        <span>📄 ${entryName}</span><span style="font-size:11px;">▼</span>
+                        <span style="display:flex;align-items:center;gap:6px;">📄 ${entryName}<button class="ttw-entry-config-btn ttw-config-btn" data-category="${category}" data-entry="${entryName}" title="配置位置/深度/顺序" onclick="event.stopPropagation();">⚙️</button></span>
+                        <span style="font-size:10px;color:#888;">${getPositionDisplayName(config.position)} | 深度${config.depth} | 顺序${config.order}</span>
                     </div>
                     <div style="display:none;background:#1c1c1c;padding:12px;">`;
                 if (entry && typeof entry === 'object') {
@@ -4958,7 +6563,12 @@ if (matches.length > 0) {
                         </div>`;
                     }
                     if (entry['内容']) {
-                        const content = String(entry['内容']).replace(/</g, '<').replace(/>/g, '>').replace(/\*\*(.+?)\*\*/g, '<strong style="color:#3498db;">$1</strong>').replace(/\n/g, '<br>');
+                        let content = String(entry['内容']).replace(/</g, '<').replace(/>/g, '>').replace(/\*\*(.+?)\*\*/g, '<strong style="color:#3498db;">$1</strong>').replace(/\n/g, '<br>');
+                        // 如果有搜索关键词，高亮显示
+                        if (searchHighlightKeyword) {
+                            const regex = new RegExp(searchHighlightKeyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+                            content = content.replace(regex, `<span style="background:#f1c40f;color:#000;padding:1px 2px;border-radius:2px;">${searchHighlightKeyword}</span>`);
+                        }
                         html += `<div style="padding:8px;background:#252525;border-left:3px solid #27ae60;border-radius:4px;line-height:1.6;">
                             <div style="color:#27ae60;font-size:11px;margin-bottom:4px;">📝 内容</div>
                             <div style="font-size:13px;">${content}</div>
@@ -4988,6 +6598,27 @@ if (matches.length > 0) {
         });
     }
 
+    function bindConfigButtonEvents(container) {
+        // 分类配置按钮
+        container.querySelectorAll('.ttw-config-btn[data-category]:not([data-entry])').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const category = btn.dataset.category;
+                showCategoryConfigModal(category);
+            });
+        });
+
+        // 条目配置按钮
+        container.querySelectorAll('.ttw-entry-config-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const category = btn.dataset.category;
+                const entryName = btn.dataset.entry;
+                showEntryConfigModal(category, entryName);
+            });
+        });
+    }
+
     function showWorldbookView() {
         const existingModal = document.getElementById('ttw-worldbook-view-modal');
         if (existingModal) existingModal.remove();
@@ -5003,13 +6634,14 @@ if (matches.length > 0) {
                 </div>
                 <div class="ttw-modal-body" id="ttw-worldbook-view-body">${formatWorldbookAsCards(worldbookToShow)}</div>
                 <div class="ttw-modal-footer">
-                    <div style="font-size:11px;color:#888;margin-right:auto;">💡 点击分类旁的灯图标切换蓝灯/绿灯状态</div>
+                    <div style="font-size:11px;color:#888;margin-right:auto;">💡 点击⚙️配置位置/深度/顺序，点击灯图标切换蓝灯/绿灯</div>
                     <button class="ttw-btn" id="ttw-close-worldbook-view">关闭</button>
                 </div>
             </div>
         `;
         document.body.appendChild(viewModal);
         bindLightToggleEvents(viewModal.querySelector('#ttw-worldbook-view-body'));
+        bindConfigButtonEvents(viewModal.querySelector('#ttw-worldbook-view-body'));
         viewModal.querySelector('.ttw-modal-close').addEventListener('click', () => viewModal.remove());
         viewModal.querySelector('#ttw-close-worldbook-view').addEventListener('click', () => viewModal.remove());
         viewModal.addEventListener('click', (e) => { if (e.target === viewModal) viewModal.remove(); });
@@ -5154,9 +6786,20 @@ if (matches.length > 0) {
         getSettings: () => settings,
         callCustomAPI,
         callSillyTavernAPI,
-        consolidateAllEntries,
-        showAliasMergeUI
+        showConsolidateCategorySelector,
+        showAliasMergeUI,
+        getCustomCategories: () => customWorldbookCategories,
+        getEnabledCategories,
+        getChapterRegexSettings: () => chapterRegexSettings,
+        rechunkMemories,
+        showSearchModal,
+        showReplaceModal,
+        getEntryConfig,
+        setEntryConfig,
+        setCategoryDefaultConfig,
+        getDefaultWorldbookEntriesUI: () => defaultWorldbookEntriesUI
     };
 
-    console.log('📚 TxtToWorldbook v2.7.2 已加载');
+    console.log('📚 TxtToWorldbook v2.9.2 已加载');
 })();
+
