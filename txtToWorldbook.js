@@ -1,3 +1,4 @@
+
 /**
  * TXT转世界书独立模块 v2.9.3
  * 新增: 查找高亮、批量替换、多选整理分类、条目位置/深度/顺序配置、默认世界书UI化
@@ -6331,10 +6332,10 @@ ${pairsWithContent}
         } else {
             settings.customApiModel = modelInput?.value || 'gemini-2.5-flash';
         }
+
         try { localStorage.setItem('txtToWorldbookSettings', JSON.stringify(settings)); } catch (e) { }
     }
-        try { localStorage.setItem('txtToWorldbookSettings', JSON.stringify(settings)); } catch (e) { }
-    }
+
 
     function loadSavedSettings() {
         try {
