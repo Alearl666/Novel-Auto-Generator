@@ -3644,34 +3644,127 @@ ${pairsWithContent}
             }
 
             const customPrompt = modal.querySelector('#ttw-search-suffix-prompt').value;
+            const useParallel = parallelConfig.enabled && memoryIndices.length > 1;
+            const parallelHint = useParallel ? `\n\n将使用并行处理（${parallelConfig.concurrency}并发）` : '';
 
-            if (!confirm(`确定要重Roll ${memoryIndices.length} 个章节吗？\n\n这将使用当前附加提示词重新生成这些章节的世界书条目。`)) {
+            if (!confirm(`确定要重Roll ${memoryIndices.length} 个章节吗？\n\n这将使用当前附加提示词重新生成这些章节的世界书条目。${parallelHint}`)) {
                 return;
             }
 
             const btn = modal.querySelector('#ttw-reroll-all-found');
+            const stopBtn = document.createElement('button');
+            stopBtn.className = 'ttw-btn ttw-btn-secondary';
+            stopBtn.textContent = '⏸️ 停止';
+            stopBtn.style.marginLeft = '8px';
+            btn.parentNode.insertBefore(stopBtn, btn.nextSibling);
+
             btn.disabled = true;
             btn.textContent = '🔄 重Roll中...';
 
             let successCount = 0;
             let failCount = 0;
+            let stopped = false;
 
-            for (const index of memoryIndices) {
-                try {
-                    updateStreamContent(`\n🎲 批量重Roll: 第${index + 1}章...\n`);
-                    await rerollMemory(index, customPrompt);
-                    successCount++;
-                    btn.textContent = `🔄 进度: ${successCount + failCount}/${memoryIndices.length}`;
-                } catch (error) {
-                    failCount++;
-                    updateStreamContent(`❌ 第${index + 1}章重Roll失败: ${error.message}\n`);
+            stopBtn.addEventListener('click', () => {
+                stopped = true;
+                stopProcessing();
+                stopBtn.textContent = '已停止';
+                stopBtn.disabled = true;
+            });
+
+            showProgressSection(true);
+            isProcessingStopped = false;
+            isRerolling = true;
+
+            if (useParallel) {
+                // 并行处理模式
+                updateStreamContent(`\n🚀 批量重Roll开始 (并行模式, ${parallelConfig.concurrency}并发)\n${'='.repeat(50)}\n`);
+
+                const semaphore = new Semaphore(parallelConfig.concurrency);
+                let completed = 0;
+
+                const processOne = async (index) => {
+                    if (stopped || isProcessingStopped) return null;
+
+                    try {
+                        await semaphore.acquire();
+                    } catch (e) {
+                        if (e.message === 'ABORTED') return null;
+                        throw e;
+                    }
+
+                    if (stopped || isProcessingStopped) {
+                        semaphore.release();
+                        return null;
+                    }
+
+                    try {
+                        updateStreamContent(`🎲 [并行] 第${index + 1}章 开始重Roll...\n`);
+                        const result = await processMemoryChunkIndependent(index, 0, customPrompt);
+
+                        if (result) {
+                            const memory = memoryQueue[index];
+                            memory.result = result;
+                            memory.processed = true;
+                            memory.failed = false;
+                            await mergeWorldbookDataWithHistory(generatedWorldbook, result, index, `${memory.title}-批量重Roll`);
+                            await MemoryHistoryDB.saveRollResult(index, result);
+                            successCount++;
+                            updateStreamContent(`✅ [并行] 第${index + 1}章 完成\n`);
+                        }
+
+                        completed++;
+                        btn.textContent = `🔄 进度: ${completed}/${memoryIndices.length}`;
+                        updateProgress((completed / memoryIndices.length) * 100, `批量重Roll中 (${completed}/${memoryIndices.length})`);
+
+                        return result;
+                    } catch (error) {
+                        completed++;
+                        failCount++;
+                        updateStreamContent(`❌ [并行] 第${index + 1}章 失败: ${error.message}\n`);
+                        btn.textContent = `🔄 进度: ${completed}/${memoryIndices.length}`;
+                        return null;
+                    } finally {
+                        semaphore.release();
+                    }
+                };
+
+                await Promise.allSettled(memoryIndices.map(index => processOne(index)));
+
+                updateStreamContent(`\n${'='.repeat(50)}\n📦 批量重Roll完成: 成功 ${successCount}, 失败 ${failCount}\n`);
+
+            } else {
+                // 串行处理模式
+                updateStreamContent(`\n🔄 批量重Roll开始 (串行模式)\n${'='.repeat(50)}\n`);
+
+                for (let i = 0; i < memoryIndices.length; i++) {
+                    if (stopped || isProcessingStopped) break;
+
+                    const index = memoryIndices[i];
+                    try {
+                        updateStreamContent(`\n🎲 [${i + 1}/${memoryIndices.length}] 第${index + 1}章...\n`);
+                        await rerollMemory(index, customPrompt);
+                        successCount++;
+                        btn.textContent = `🔄 进度: ${i + 1}/${memoryIndices.length}`;
+                        updateProgress(((i + 1) / memoryIndices.length) * 100, `批量重Roll中 (${i + 1}/${memoryIndices.length})`);
+                    } catch (error) {
+                        failCount++;
+                        updateStreamContent(`❌ 第${index + 1}章重Roll失败: ${error.message}\n`);
+                    }
                 }
+
+                updateStreamContent(`\n${'='.repeat(50)}\n📦 批量重Roll完成: 成功 ${successCount}, 失败 ${failCount}\n`);
             }
 
+            isRerolling = false;
             btn.disabled = false;
             btn.textContent = `🎲 重Roll所有匹配章节 (${memoryIndices.length}章)`;
+            stopBtn.remove();
 
-            alert(`批量重Roll完成！\n成功: ${successCount}\n失败: ${failCount}`);
+            updateProgress(100, `批量重Roll完成: 成功 ${successCount}, 失败 ${failCount}`);
+            updateMemoryQueueUI();
+
+            alert(`批量重Roll完成！\n成功: ${successCount}\n失败: ${failCount}${stopped ? '\n(已手动停止)' : ''}`);
 
             // 重新搜索刷新结果
             modal.querySelector('#ttw-do-search').click();
@@ -4701,6 +4794,9 @@ ${pairsWithContent}
 
         const forceChapterMarkerEl = document.getElementById('ttw-force-chapter-marker');
         if (forceChapterMarkerEl) forceChapterMarkerEl.checked = settings.forceChapterMarker;
+        const suffixPromptEl = document.getElementById('ttw-suffix-prompt');
+        if (suffixPromptEl) suffixPromptEl.value = settings.customSuffixPrompt || '';
+
 
         handleProviderChange();
     }
@@ -5788,6 +5884,20 @@ ${pairsWithContent}
                                         <div style="margin-top:8px;"><button class="ttw-btn ttw-btn-small ttw-reset-prompt" data-type="style">🔄 恢复默认</button></div>
                                     </div>
                                 </div>
+                                <!-- 发送给AI最后的提示词 -->
+                                <div class="ttw-prompt-section">
+                                    <div class="ttw-prompt-header" style="background:rgba(230,126,34,0.15);" data-target="ttw-suffix-content">
+                                        <div style="display:flex;align-items:center;gap:8px;">
+                                            <span>📌</span><span style="font-weight:500;color:#e67e22;">发送给AI最后的提示词</span>
+                                            <span class="ttw-badge ttw-badge-gray">可选</span>
+                                        </div>
+                                        <span class="ttw-collapse-icon">▶</span>
+                                    </div>
+                                    <div id="ttw-suffix-content" class="ttw-prompt-content">
+                                        <div class="ttw-setting-hint" style="margin-bottom:10px;">此内容会追加到每次发送给AI的消息最后，可用于强调特定要求、修复问题等。</div>
+                                        <textarea id="ttw-suffix-prompt" rows="4" placeholder="例如：请特别注意提取XX信息，修复乱码内容，注意区分同名角色..." class="ttw-textarea-small"></textarea>
+                                    </div>
+                                </div>
 
                                 <!-- 自定义提取分类 - 修改按钮布局 -->
                                 <div class="ttw-prompt-section">
@@ -6220,10 +6330,11 @@ ${pairsWithContent}
             });
         });
 
-        ['ttw-worldbook-prompt', 'ttw-plot-prompt', 'ttw-style-prompt'].forEach(id => {
+        ['ttw-worldbook-prompt', 'ttw-plot-prompt', 'ttw-style-prompt', 'ttw-suffix-prompt'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.addEventListener('input', saveCurrentSettings);
         });
+
 
         document.querySelectorAll('.ttw-reset-prompt').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -6318,6 +6429,8 @@ ${pairsWithContent}
         settings.defaultWorldbookEntriesUI = defaultWorldbookEntriesUI;
         settings.categoryDefaultConfig = categoryDefaultConfig;
         settings.entryPositionConfig = entryPositionConfig;
+
+        settings.customSuffixPrompt = document.getElementById('ttw-suffix-prompt')?.value || '';
 
         settings.customApiProvider = document.getElementById('ttw-api-provider')?.value || 'gemini';
         settings.customApiKey = document.getElementById('ttw-api-key')?.value || '';
