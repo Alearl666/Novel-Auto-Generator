@@ -3188,7 +3188,7 @@ ${generateDynamicJsonTemplate()}
         }
     }
 
-    async function verifyDuplicatesWithAI(suspectedGroups) {
+    async function verifyDuplicatesWithAI(suspectedGroups, useParallel = true, threshold = 5) {
         if (suspectedGroups.length === 0) return { pairResults: [], mergedGroups: [] };
 
         const characters = generatedWorldbook['角色'];
@@ -3207,27 +3207,31 @@ ${generateDynamicJsonTemplate()}
 
         if (allPairs.length === 0) return { pairResults: [], mergedGroups: [] };
 
-        const pairsWithContent = allPairs.map((pair, i) => {
-            const [nameA, nameB] = pair;
-            const entryA = characters[nameA];
-            const entryB = characters[nameB];
+        // 构建配对内容
+        const buildPairContent = (pairs, startIndex = 0) => {
+            return pairs.map((pair, i) => {
+                const [nameA, nameB] = pair;
+                const entryA = characters[nameA];
+                const entryB = characters[nameB];
 
-            const keywordsA = entryA?.['关键词']?.join(', ') || '无';
-            const keywordsB = entryB?.['关键词']?.join(', ') || '无';
-            const contentA = (entryA?.['内容'] || '').substring(0, 300);
-            const contentB = (entryB?.['内容'] || '').substring(0, 300);
+                const keywordsA = entryA?.['关键词']?.join(', ') || '无';
+                const keywordsB = entryB?.['关键词']?.join(', ') || '无';
+                const contentA = (entryA?.['内容'] || '').substring(0, 300);
+                const contentB = (entryB?.['内容'] || '').substring(0, 300);
 
-            return `配对${i + 1}: 「${nameA}」vs「${nameB}」
+                return `配对${startIndex + i + 1}: 「${nameA}」vs「${nameB}」
   【${nameA}】关键词: ${keywordsA}
   内容摘要: ${contentA}${contentA.length >= 300 ? '...' : ''}
   【${nameB}】关键词: ${keywordsB}
   内容摘要: ${contentB}${contentB.length >= 300 ? '...' : ''}`;
-        }).join('\n\n');
+            }).join('\n\n');
+        };
 
-        const prompt = getLanguagePrefix() + `你是角色识别专家。请对以下每一对角色进行判断，判断它们是否为同一人物。
+        const buildPrompt = (pairsContent, pairCount) => {
+            return getLanguagePrefix() + `你是角色识别专家。请对以下每一对角色进行判断，判断它们是否为同一人物。
 
 ## 待判断的角色配对
-${pairsWithContent}
+${pairsContent}
 
 ## 判断依据
 - 仔细阅读每个角色的关键词和内容摘要
@@ -3249,28 +3253,97 @@ ${pairsWithContent}
         {"pair": 2, "nameA": "角色A名", "nameB": "角色B名", "isSamePerson": false, "reason": "不是同一人的原因"}
     ]
 }`;
+        };
 
-        updateStreamContent('\n🤖 发送两两配对判断请求...\n');
-        const response = await callAPI(prompt);
-        const aiResult = parseAIResponse(response);
-
-        const uf = new UnionFind([...allNames]);
         const pairResults = [];
 
-        for (const result of aiResult.results || []) {
-            const pairIndex = (result.pair || 1) - 1;
-            if (pairIndex < 0 || pairIndex >= allPairs.length) continue;
+        if (useParallel && allPairs.length > threshold) {
+            // 并发模式：分批处理
+            updateStreamContent('\n🚀 并发模式处理配对判断...\n');
 
-            const [nameA, nameB] = allPairs[pairIndex];
-            pairResults.push({
-                nameA: result.nameA || nameA,
-                nameB: result.nameB || nameB,
-                isSamePerson: result.isSamePerson,
-                mainName: result.mainName,
-                reason: result.reason
-            });
+            // 将配对分组：每组接近threshold个
+            const batches = [];
+            for (let i = 0; i < allPairs.length; i += threshold) {
+                batches.push({
+                    pairs: allPairs.slice(i, Math.min(i + threshold, allPairs.length)),
+                    startIndex: i
+                });
+            }
 
+            updateStreamContent(`📦 分成 ${batches.length} 批，每批约 ${threshold} 对\n`);
+
+            const semaphore = new Semaphore(parallelConfig.concurrency);
+            let completed = 0;
+
+            const processBatch = async (batch, batchIndex) => {
+                await semaphore.acquire();
+                try {
+                    updateStreamContent(`🔄 [批次${batchIndex + 1}/${batches.length}] 处理 ${batch.pairs.length} 对...\n`);
+
+                    const pairsContent = buildPairContent(batch.pairs, batch.startIndex);
+                    const prompt = buildPrompt(pairsContent, batch.pairs.length);
+                    const response = await callAPI(prompt);
+                    const aiResult = parseAIResponse(response);
+
+                    for (const result of aiResult.results || []) {
+                        const localPairIndex = (result.pair || 1) - 1;
+                        const globalPairIndex = batch.startIndex + localPairIndex;
+
+                        if (globalPairIndex < 0 || globalPairIndex >= allPairs.length) continue;
+
+                        const [nameA, nameB] = allPairs[globalPairIndex];
+                        pairResults.push({
+                            nameA: result.nameA || nameA,
+                            nameB: result.nameB || nameB,
+                            isSamePerson: result.isSamePerson,
+                            mainName: result.mainName,
+                            reason: result.reason,
+                            _globalIndex: globalPairIndex
+                        });
+                    }
+
+                    completed++;
+                    updateStreamContent(`✅ [批次${batchIndex + 1}] 完成 (${completed}/${batches.length})\n`);
+                } catch (error) {
+                    updateStreamContent(`❌ [批次${batchIndex + 1}] 失败: ${error.message}\n`);
+                } finally {
+                    semaphore.release();
+                }
+            };
+
+            await Promise.allSettled(batches.map((batch, i) => processBatch(batch, i)));
+
+        } else {
+            // 单次请求模式
+            updateStreamContent('\n🤖 单次请求模式处理配对判断...\n');
+
+            const pairsContent = buildPairContent(allPairs, 0);
+            const prompt = buildPrompt(pairsContent, allPairs.length);
+            const response = await callAPI(prompt);
+            const aiResult = parseAIResponse(response);
+
+            for (const result of aiResult.results || []) {
+                const pairIndex = (result.pair || 1) - 1;
+                if (pairIndex < 0 || pairIndex >= allPairs.length) continue;
+
+                const [nameA, nameB] = allPairs[pairIndex];
+                pairResults.push({
+                    nameA: result.nameA || nameA,
+                    nameB: result.nameB || nameB,
+                    isSamePerson: result.isSamePerson,
+                    mainName: result.mainName,
+                    reason: result.reason,
+                    _globalIndex: pairIndex
+                });
+            }
+        }
+
+        // 使用并查集合并结果
+        const uf = new UnionFind([...allNames]);
+
+        for (const result of pairResults) {
             if (result.isSamePerson) {
+                const [nameA, nameB] = allPairs[result._globalIndex];
                 uf.union(nameA, nameB);
             }
         }
@@ -3310,6 +3383,7 @@ ${pairsWithContent}
             _allPairs: allPairs
         };
     }
+
 
 
     async function mergeConfirmedDuplicates(aiResult) {
@@ -3421,12 +3495,31 @@ ${pairsWithContent}
                         </div>
                     </div>
 
-                    <div style="margin-bottom:16px;padding:10px;background:rgba(230,126,34,0.1);border-radius:6px;font-size:11px;color:#f39c12;">
+                           <div style="margin-bottom:16px;padding:10px;background:rgba(230,126,34,0.1);border-radius:6px;font-size:11px;color:#f39c12;">
                         💡 <strong>两两判断模式</strong>：AI会对每一对角色分别判断是否同一人，然后自动合并确认的结果。<br>
                         例如：[A,B,C] 会拆成 (A,B) (A,C) (B,C) 三对分别判断，如果A=B且B=C，则A、B、C会被合并。
                     </div>
 
+                    <div style="margin-bottom:16px;padding:12px;background:rgba(52,152,219,0.15);border-radius:8px;">
+                        <div style="font-weight:bold;color:#3498db;margin-bottom:10px;">⚙️ 并发设置</div>
+                        <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;">
+                            <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
+                                <input type="checkbox" id="ttw-alias-parallel" ${parallelConfig.enabled ? 'checked' : ''}>
+                                <span>启用并发</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
+                                <span>配对数阈值:</span>
+                                <input type="number" id="ttw-alias-threshold" value="5" min="1" max="50" style="width:60px;padding:4px;border:1px solid #555;border-radius:4px;background:rgba(0,0,0,0.3);color:#fff;">
+                            </label>
+                        </div>
+                        <div style="font-size:11px;color:#888;margin-top:8px;">
+                            ≥阈值的配对数单独发送，＜阈值的合并发送（合并到接近阈值数量）
+                        </div>
+                    </div>
+
                     <div id="ttw-alias-result" style="display:none;margin-bottom:16px;">
+
+
                         <div style="padding:12px;background:rgba(155,89,182,0.15);border-radius:8px;margin-bottom:12px;">
                             <div style="font-weight:bold;color:#9b59b6;margin-bottom:8px;">🔍 配对判断结果</div>
                             <div id="ttw-pair-results" style="max-height:150px;overflow-y:auto;"></div>
@@ -3474,8 +3567,12 @@ ${pairsWithContent}
             stopBtn.style.display = 'inline-block';
 
             try {
-                updateStreamContent('\n🤖 第二阶段：两两配对判断...\n');
-                aiResult = await verifyDuplicatesWithAI(selectedGroups);
+                const useParallel = modal.querySelector('#ttw-alias-parallel')?.checked ?? parallelConfig.enabled;
+                const threshold = parseInt(modal.querySelector('#ttw-alias-threshold')?.value) || 5;
+
+                updateStreamContent(`\n🤖 第二阶段：两两配对判断...\n并发: ${useParallel ? '开启' : '关闭'}, 阈值: ${threshold}\n`);
+                aiResult = await verifyDuplicatesWithAI(selectedGroups, useParallel, threshold);
+
 
                 const resultDiv = modal.querySelector('#ttw-alias-result');
                 const pairResultsDiv = modal.querySelector('#ttw-pair-results');
@@ -3793,24 +3890,65 @@ ${pairsWithContent}
         const results = [];
         const memoryIndicesSet = new Set();
 
-        // 搜索世界书
+        // 优先搜索各章节的处理结果（这才是正确的来源）
+        for (let i = 0; i < memoryQueue.length; i++) {
+            const memory = memoryQueue[i];
+            if (!memory.result) continue;
+
+            for (const category in memory.result) {
+                for (const entryName in memory.result[category]) {
+                    const entry = memory.result[category][entryName];
+                    const keywordsStr = Array.isArray(entry['关键词']) ? entry['关键词'].join(', ') : '';
+                    const content = entry['内容'] || '';
+
+                    const matches = [];
+
+                    if (entryName.includes(keyword)) {
+                        matches.push({ field: '条目名', text: entryName });
+                    }
+                    if (keywordsStr.includes(keyword)) {
+                        matches.push({ field: '关键词', text: keywordsStr });
+                    }
+                    if (content.includes(keyword)) {
+                        const idx = content.indexOf(keyword);
+                        const start = Math.max(0, idx - 30);
+                        const end = Math.min(content.length, idx + keyword.length + 30);
+                        const context = (start > 0 ? '...' : '') + content.substring(start, end) + (end < content.length ? '...' : '');
+                        matches.push({ field: '内容', text: context });
+                    }
+
+                    if (matches.length > 0) {
+                        // 检查是否已有相同条目（来自其他记忆）
+                        const existingIndex = results.findIndex(r => r.category === category && r.entryName === entryName);
+
+                        if (existingIndex === -1) {
+                            results.push({
+                                category,
+                                entryName,
+                                memoryIndex: i,
+                                matches,
+                                fromMemoryResult: true
+                            });
+                        }
+                        // 无论是否已存在，都记录这个记忆索引
+                        memoryIndicesSet.add(i);
+                    }
+                }
+            }
+        }
+
+        // 再搜索合并后的世界书（用于补充那些可能在默认条目或导入的条目）
         for (const category in generatedWorldbook) {
             for (const entryName in generatedWorldbook[category]) {
+                // 跳过已经从记忆结果中找到的
+                const alreadyFound = results.some(r => r.category === category && r.entryName === entryName);
+                if (alreadyFound) continue;
+
                 const entry = generatedWorldbook[category][entryName];
                 const keywordsStr = Array.isArray(entry['关键词']) ? entry['关键词'].join(', ') : '';
                 const content = entry['内容'] || '';
 
                 const matches = [];
-                let foundInMemoryIndex = -1;
-
-                // 查找是哪个记忆产生的
-                for (let i = 0; i < memoryQueue.length; i++) {
-                    const memory = memoryQueue[i];
-                    if (memory.result && memory.result[category] && memory.result[category][entryName]) {
-                        foundInMemoryIndex = i;
-                        break;
-                    }
-                }
 
                 if (entryName.includes(keyword)) {
                     matches.push({ field: '条目名', text: entryName });
@@ -3827,49 +3965,26 @@ ${pairsWithContent}
                 }
 
                 if (matches.length > 0) {
-                    results.push({ category, entryName, matches, memoryIndex: foundInMemoryIndex });
+                    // 尝试从记忆结果中查找来源
+                    let foundInMemoryIndex = -1;
+                    for (let i = 0; i < memoryQueue.length; i++) {
+                        const memory = memoryQueue[i];
+                        if (memory.result && memory.result[category] && memory.result[category][entryName]) {
+                            foundInMemoryIndex = i;
+                            break;
+                        }
+                    }
+
+                    results.push({
+                        category,
+                        entryName,
+                        memoryIndex: foundInMemoryIndex,
+                        matches,
+                        fromMemoryResult: false // 标记这是从合并世界书找到的
+                    });
+
                     if (foundInMemoryIndex >= 0) {
                         memoryIndicesSet.add(foundInMemoryIndex);
-                    }
-                }
-            }
-        }
-
-        // 搜索各章节的处理结果
-        for (let i = 0; i < memoryQueue.length; i++) {
-            const memory = memoryQueue[i];
-            if (memory.result) {
-                for (const category in memory.result) {
-                    for (const entryName in memory.result[category]) {
-                        const entry = memory.result[category][entryName];
-                        const keywordsStr = Array.isArray(entry['关键词']) ? entry['关键词'].join(', ') : '';
-                        const content = entry['内容'] || '';
-
-                        if (entryName.includes(keyword) || keywordsStr.includes(keyword) || content.includes(keyword)) {
-                            // 检查是否已经在结果中
-                            const existingResult = results.find(r => r.category === category && r.entryName === entryName);
-                            if (!existingResult) {
-                                const matches = [];
-                                if (entryName.includes(keyword)) matches.push({ field: '条目名', text: entryName });
-                                if (keywordsStr.includes(keyword)) matches.push({ field: '关键词', text: keywordsStr });
-                                if (content.includes(keyword)) {
-                                    const idx = content.indexOf(keyword);
-                                    const start = Math.max(0, idx - 30);
-                                    const end = Math.min(content.length, idx + keyword.length + 30);
-                                    const context = (start > 0 ? '...' : '') + content.substring(start, end) + (end < content.length ? '...' : '');
-                                    matches.push({ field: '内容', text: context });
-                                }
-                                results.push({
-                                    category,
-                                    entryName,
-                                    memoryIndex: i,
-                                    matches
-                                });
-                            } else if (existingResult.memoryIndex < 0) {
-                                existingResult.memoryIndex = i;
-                            }
-                            memoryIndicesSet.add(i);
-                        }
                     }
                 }
             }
@@ -3891,8 +4006,11 @@ ${pairsWithContent}
         let html = `<div style="margin-bottom:12px;font-size:13px;color:#27ae60;">找到 ${results.length} 个匹配项，涉及 ${memoryIndicesSet.size} 个章节</div>`;
 
         results.forEach((result, idx) => {
-            const memoryLabel = result.memoryIndex >= 0 ? `记忆${result.memoryIndex + 1}` : '未知来源';
+            const memoryLabel = result.memoryIndex >= 0 ? `记忆${result.memoryIndex + 1}` : '默认/导入';
             const memoryColor = result.memoryIndex >= 0 ? '#3498db' : '#888';
+            const sourceTag = result.fromMemoryResult
+                ? '<span style="font-size:9px;color:#27ae60;margin-left:4px;">✓来源确认</span>'
+                : '<span style="font-size:9px;color:#f39c12;margin-left:4px;">⚠合并数据</span>';
 
             html += `
                 <div class="ttw-search-result-item" data-index="${idx}" style="background:rgba(0,0,0,0.2);border-radius:6px;padding:10px;margin-bottom:8px;border-left:3px solid #f1c40f;cursor:pointer;transition:background 0.2s;">
@@ -3900,6 +4018,7 @@ ${pairsWithContent}
                         <span style="font-weight:bold;color:#e67e22;">[${result.category}] ${highlightKeyword(result.entryName)}</span>
                         <div style="display:flex;align-items:center;gap:8px;">
                             <span style="font-size:11px;color:${memoryColor};background:rgba(52,152,219,0.2);padding:2px 6px;border-radius:3px;">📍 ${memoryLabel}</span>
+                            ${sourceTag}
                             ${result.memoryIndex >= 0 ? `<button class="ttw-btn-tiny ttw-reroll-single" data-memory-index="${result.memoryIndex}" title="重Roll此章节" onclick="event.stopPropagation();">🎲</button>` : ''}
                         </div>
                     </div>
@@ -3949,8 +4068,19 @@ ${pairsWithContent}
                 resultsContainer.querySelectorAll('.ttw-search-result-item').forEach(i => i.style.background = 'rgba(0,0,0,0.2)');
                 item.style.background = 'rgba(0,0,0,0.4)';
 
-                const entry = generatedWorldbook[result.category]?.[result.entryName];
-                const memoryLabel = result.memoryIndex >= 0 ? `记忆${result.memoryIndex + 1} (第${result.memoryIndex + 1}章)` : '未知来源';
+                // 优先从记忆结果获取，否则从合并世界书获取
+                let entry = null;
+                let dataSource = '';
+
+                if (result.memoryIndex >= 0 && memoryQueue[result.memoryIndex]?.result?.[result.category]?.[result.entryName]) {
+                    entry = memoryQueue[result.memoryIndex].result[result.category][result.entryName];
+                    dataSource = `来自: 记忆${result.memoryIndex + 1} 的处理结果`;
+                } else {
+                    entry = generatedWorldbook[result.category]?.[result.entryName];
+                    dataSource = '来自: 合并后的世界书（可能是默认条目或导入数据）';
+                }
+
+                const memoryLabel = result.memoryIndex >= 0 ? `记忆${result.memoryIndex + 1} (第${result.memoryIndex + 1}章)` : '默认/导入条目';
 
                 let contentHtml = '';
                 if (entry) {
@@ -3959,6 +4089,7 @@ ${pairsWithContent}
                     content = highlightKeyword(content).replace(/\n/g, '<br>');
 
                     contentHtml = `
+                        <div style="margin-bottom:8px;font-size:11px;color:#888;padding:6px;background:rgba(0,0,0,0.2);border-radius:4px;">${dataSource}</div>
                         <div style="margin-bottom:12px;padding:10px;background:rgba(155,89,182,0.1);border-radius:6px;">
                             <div style="color:#9b59b6;font-size:11px;margin-bottom:4px;">🔑 关键词</div>
                             <div style="font-size:12px;">${highlightKeyword(keywordsStr)}</div>
@@ -4012,6 +4143,7 @@ ${pairsWithContent}
 
         return { results, memoryIndices: memoryIndicesSet };
     }
+
 
 
     // ========== 新增：替换功能 ==========
