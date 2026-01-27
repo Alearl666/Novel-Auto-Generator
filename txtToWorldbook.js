@@ -4002,31 +4002,36 @@ ${pairsContent}
         // 生成HTML
         let html = `<div style="margin-bottom:12px;font-size:13px;color:#27ae60;">找到 ${results.length} 个匹配项，涉及 ${memoryIndicesSet.size} 个章节</div>`;
 
-        results.forEach((result, idx) => {
+        for (let idx = 0; idx < results.length; idx++) {
+            const result = results[idx];
             const memoryLabel = result.memoryIndex >= 0 ? `记忆${result.memoryIndex + 1}` : '默认/导入';
             const memoryColor = result.memoryIndex >= 0 ? '#3498db' : '#888';
             const sourceTag = result.fromMemoryResult
                 ? '<span style="font-size:9px;color:#27ae60;margin-left:4px;">✓当前结果</span>'
                 : '<span style="font-size:9px;color:#f39c12;margin-left:4px;">⚠合并数据</span>';
 
-            html += `
-                <div class="ttw-search-result-item" data-result-index="${idx}" style="background:rgba(0,0,0,0.2);border-radius:6px;padding:10px;margin-bottom:8px;border-left:3px solid #f1c40f;cursor:pointer;transition:background 0.2s;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                        <span style="font-weight:bold;color:#e67e22;">[${result.category}] ${highlightKw(result.entryName)}</span>
-                        <div style="display:flex;align-items:center;gap:8px;">
-                            <span style="font-size:11px;color:${memoryColor};background:rgba(52,152,219,0.2);padding:2px 6px;border-radius:3px;">📍 ${memoryLabel}</span>
-                            ${sourceTag}
-                            ${result.memoryIndex >= 0 ? `<button class="ttw-btn-tiny ttw-reroll-single" data-memory-idx="${result.memoryIndex}" title="重Roll此章节">🎲</button>` : ''}
-                        </div>
-                    </div>
-                    <div style="font-size:12px;color:#ccc;">
-                        ${result.matches.slice(0, 2).map(m => `<span style="color:#888;">${m.field}:</span> ${highlightKw(m.text).substring(0, 80)}${m.text.length > 80 ? '...' : ''}`).join('<br>')}
-                    </div>
-                </div>
-            `;
-        });
+            const matchTexts = result.matches.slice(0, 2).map(m => {
+                const fieldText = m.field || '';
+                const matchText = (m.text || '').substring(0, 80);
+                return '<span style="color:#888;">' + fieldText + ':</span> ' + highlightKw(matchText) + (m.text && m.text.length > 80 ? '...' : '');
+            }).join('<br>');
+
+            html += '<div class="ttw-search-result-item" data-result-index="' + idx + '" style="background:rgba(0,0,0,0.2);border-radius:6px;padding:10px;margin-bottom:8px;border-left:3px solid #f1c40f;cursor:pointer;transition:background 0.2s;">';
+            html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">';
+            html += '<span style="font-weight:bold;color:#e67e22;">[' + result.category + '] ' + highlightKw(result.entryName) + '</span>';
+            html += '<div style="display:flex;align-items:center;gap:8px;">';
+            html += '<span style="font-size:11px;color:' + memoryColor + ';background:rgba(52,152,219,0.2);padding:2px 6px;border-radius:3px;">📍 ' + memoryLabel + '</span>';
+            html += sourceTag;
+            if (result.memoryIndex >= 0) {
+                html += '<button class="ttw-btn-tiny ttw-reroll-single" data-memory-idx="' + result.memoryIndex + '" title="重Roll此章节">🎲</button>';
+            }
+            html += '</div></div>';
+            html += '<div style="font-size:12px;color:#ccc;">' + matchTexts + '</div>';
+            html += '</div>';
+        }
 
         resultsContainer.innerHTML = html;
+
 
         // ====== 关键修复：在innerHTML之后绑定事件 ======
 
