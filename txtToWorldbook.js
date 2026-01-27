@@ -4058,10 +4058,11 @@ ${pairsContent}
             });
         });
 
+  
         // 绑定点击查看详情
-        resultsContainer.querySelectorAll('.ttw-search-result-item').forEach((item, itemIndex) => {
-            item.addEventListener('click', function() {
-                const idx = parseInt(this.dataset.index);
+        resultsContainer.querySelectorAll('.ttw-search-result-item').forEach((item) => {
+            item.addEventListener('click', () => {
+                const idx = parseInt(item.dataset.index);
                 const currentResult = results[idx]; // 每次点击时重新获取
 
                 if (!currentResult) return; // 防御性检查
@@ -4069,8 +4070,7 @@ ${pairsContent}
                 const detailDiv = modal.querySelector('#ttw-search-detail');
 
                 resultsContainer.querySelectorAll('.ttw-search-result-item').forEach(i => i.style.background = 'rgba(0,0,0,0.2)');
-                this.style.background = 'rgba(0,0,0,0.4)';
-
+                item.style.background = 'rgba(0,0,0,0.4)';
 
 
                 // 优先从记忆结果获取，否则从合并世界书获取
@@ -7438,4 +7438,3 @@ ${pairsContent}
 
     console.log('📚 TxtToWorldbook v2.9.5 已加载');
 })();
-
