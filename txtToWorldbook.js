@@ -1,6 +1,6 @@
 
 /**
- * TXT转世界书独立模块 v2.9.4
+ * TXT转世界书独立模块 v2.9.4.1
  * 新增: 查找高亮、批量替换、多选整理分类、条目位置/深度/顺序配置、默认世界书UI化
  */
 
@@ -4058,21 +4058,19 @@ ${pairsContent}
             });
         });
 
-        // 绑定点击查看详情 - 在循环中立即捕获每个result
-        resultsContainer.querySelectorAll('.ttw-search-result-item').forEach((item, itemIndex) => {
-            const idx = parseInt(item.dataset.index);
-            const result = results[idx]; // 在循环中立即捕获result
-
-            if (!result) return; // 防御性检查
-
+        // 绑定点击查看详情
+        resultsContainer.querySelectorAll('.ttw-search-result-item').forEach((item) => {
             item.addEventListener('click', () => {
+                const idx = parseInt(item.dataset.index);
+                const currentResult = results[idx]; // 每次点击时重新获取
+
+                if (!currentResult) return; // 防御性检查
+
                 const detailDiv = modal.querySelector('#ttw-search-detail');
 
                 resultsContainer.querySelectorAll('.ttw-search-result-item').forEach(i => i.style.background = 'rgba(0,0,0,0.2)');
                 item.style.background = 'rgba(0,0,0,0.4)';
 
-                // 使用已捕获的result
-                const currentResult = result;
 
                 // 优先从记忆结果获取，否则从合并世界书获取
                 let entry = null;
@@ -4315,11 +4313,10 @@ ${pairsContent}
         });
     }
 
-    function previewReplace(findText, replaceWith, inWorldbook, inResults) {
+     function previewReplace(findText, replaceWith, inWorldbook, inResults) {
         const regex = new RegExp(findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
         let count = 0;
-        const samples = [];
-        const maxSamples = 5;
+        const allMatches = [];
 
         if (inWorldbook) {
             for (const category in generatedWorldbook) {
@@ -4328,35 +4325,47 @@ ${pairsContent}
 
                     // 检查关键词
                     if (Array.isArray(entry['关键词'])) {
-                        for (const kw of entry['关键词']) {
+                        entry['关键词'].forEach((kw, kwIndex) => {
                             if (kw.includes(findText)) {
                                 count++;
-                                if (samples.length < maxSamples) {
-                                    samples.push({
-                                        location: `世界书/${category}/${entryName}/关键词`,
-                                        before: kw,
-                                        after: kw.replace(regex, replaceWith)
-                                    });
-                                }
+                                allMatches.push({
+                                    source: 'worldbook',
+                                    category,
+                                    entryName,
+                                    field: 'keyword',
+                                    fieldIndex: kwIndex,
+                                    location: `世界书/${category}/${entryName}/关键词[${kwIndex}]`,
+                                    locationShort: `[${category}] ${entryName} - 关键词`,
+                                    before: kw,
+                                    after: kw.replace(regex, replaceWith)
+                                });
                             }
-                        }
+                        });
                     }
 
                     // 检查内容
                     if (entry['内容'] && entry['内容'].includes(findText)) {
                         const matches = entry['内容'].match(regex);
-                        count += matches ? matches.length : 0;
-                        if (samples.length < maxSamples) {
-                            const idx = entry['内容'].indexOf(findText);
-                            const start = Math.max(0, idx - 20);
-                            const end = Math.min(entry['内容'].length, idx + findText.length + 20);
-                            const context = entry['内容'].substring(start, end);
-                            samples.push({
-                                location: `世界书/${category}/${entryName}/内容`,
-                                before: context,
-                                after: context.replace(regex, replaceWith)
-                            });
-                        }
+                        const matchCount = matches ? matches.length : 0;
+                        count += matchCount;
+
+                        // 找到第一个匹配的上下文作为预览
+                        const idx = entry['内容'].indexOf(findText);
+                        const start = Math.max(0, idx - 20);
+                        const end = Math.min(entry['内容'].length, idx + findText.length + 20);
+                        const context = (start > 0 ? '...' : '') + entry['内容'].substring(start, end) + (end < entry['内容'].length ? '...' : '');
+
+                        allMatches.push({
+                            source: 'worldbook',
+                            category,
+                            entryName,
+                            field: 'content',
+                            fieldIndex: -1,
+                            location: `世界书/${category}/${entryName}/内容 (${matchCount}处)`,
+                            locationShort: `[${category}] ${entryName} - 内容(${matchCount}处)`,
+                            before: context,
+                            after: context.replace(regex, replaceWith)
+                        });
                     }
                 }
             }
@@ -4372,24 +4381,56 @@ ${pairsContent}
                         const entry = memory.result[category][entryName];
 
                         if (Array.isArray(entry['关键词'])) {
-                            for (const kw of entry['关键词']) {
+                            entry['关键词'].forEach((kw, kwIndex) => {
                                 if (kw.includes(findText)) {
                                     count++;
+                                    allMatches.push({
+                                        source: 'memory',
+                                        memoryIndex: i,
+                                        category,
+                                        entryName,
+                                        field: 'keyword',
+                                        fieldIndex: kwIndex,
+                                        location: `记忆${i + 1}/${category}/${entryName}/关键词[${kwIndex}]`,
+                                        locationShort: `记忆${i + 1} [${category}] ${entryName} - 关键词`,
+                                        before: kw,
+                                        after: kw.replace(regex, replaceWith)
+                                    });
                                 }
-                            }
+                            });
                         }
 
                         if (entry['内容'] && entry['内容'].includes(findText)) {
                             const matches = entry['内容'].match(regex);
-                            count += matches ? matches.length : 0;
+                            const matchCount = matches ? matches.length : 0;
+                            count += matchCount;
+
+                            const idx = entry['内容'].indexOf(findText);
+                            const start = Math.max(0, idx - 20);
+                            const end = Math.min(entry['内容'].length, idx + findText.length + 20);
+                            const context = (start > 0 ? '...' : '') + entry['内容'].substring(start, end) + (end < entry['内容'].length ? '...' : '');
+
+                            allMatches.push({
+                                source: 'memory',
+                                memoryIndex: i,
+                                category,
+                                entryName,
+                                field: 'content',
+                                fieldIndex: -1,
+                                location: `记忆${i + 1}/${category}/${entryName}/内容 (${matchCount}处)`,
+                                locationShort: `记忆${i + 1} [${category}] ${entryName} - 内容(${matchCount}处)`,
+                                before: context,
+                                after: context.replace(regex, replaceWith)
+                            });
                         }
                     }
                 }
             }
         }
 
-        return { count, samples };
+        return { count, allMatches };
     }
+
 
     function executeSingleReplace(findText, replaceWith, matchInfo) {
         const regex = new RegExp(findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
@@ -4757,7 +4798,11 @@ ${pairsContent}
         alert(`已导出 ${worldbookVolumes.length} 卷`);
     }
 
-    async function exportTaskState() {
+      async function exportTaskState() {
+        // 尝试从UI获取文件名
+        const fileNameEl = document.getElementById('ttw-file-name');
+        const displayedFileName = fileNameEl ? fileNameEl.textContent : null;
+
         const state = {
             version: '2.9.0',
             timestamp: Date.now(),
@@ -4773,10 +4818,20 @@ ${pairsContent}
             chapterRegexSettings,
             defaultWorldbookEntriesUI,
             categoryDefaultConfig,
-            entryPositionConfig
+            entryPositionConfig,
+            originalFileName: currentFile ? currentFile.name : displayedFileName // 保存原始文件名
         };
         const timeString = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[:/\s]/g, '').replace(/,/g, '-');
-        const fileName = currentFile ? `${currentFile.name.replace(/\.[^/.]+$/, '')}-任务状态-${timeString}.json` : `任务状态-${timeString}.json`;
+
+        // 优先用currentFile，其次用保存的原始文件名，最后用显示的文件名
+        let baseName = '任务状态';
+        if (currentFile) {
+            baseName = currentFile.name.replace(/\.[^/.]+$/, '');
+        } else if (displayedFileName && displayedFileName !== '已加载的文件' && displayedFileName !== '已恢复的任务') {
+            baseName = displayedFileName.replace(/\.[^/.]+$/, '');
+        }
+        const fileName = `${baseName}-任务状态-${timeString}.json`;
+
         const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -4812,6 +4867,12 @@ ${pairsContent}
                 if (state.defaultWorldbookEntriesUI) defaultWorldbookEntriesUI = state.defaultWorldbookEntriesUI;
                 if (state.categoryDefaultConfig) categoryDefaultConfig = state.categoryDefaultConfig;
                 if (state.entryPositionConfig) entryPositionConfig = state.entryPositionConfig;
+                // 恢复文件名显示
+                const fileNameEl = document.getElementById('ttw-file-name');
+                if (fileNameEl && state.originalFileName) {
+                    fileNameEl.textContent = state.originalFileName;
+                }
+
 
                 if (Object.keys(generatedWorldbook).length === 0) {
                     rebuildWorldbookFromMemories();
