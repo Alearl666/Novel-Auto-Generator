@@ -1,6 +1,6 @@
 
 /**
- * TXT转世界书独立模块 v2.9.4.1
+ * TXT转世界书独立模块 v2.9.5
  * 新增: 查找高亮、批量替换、多选整理分类、条目位置/深度/顺序配置、默认世界书UI化
  */
 
@@ -4059,9 +4059,9 @@ ${pairsContent}
         });
 
         // 绑定点击查看详情
-        resultsContainer.querySelectorAll('.ttw-search-result-item').forEach((item) => {
-            item.addEventListener('click', () => {
-                const idx = parseInt(item.dataset.index);
+        resultsContainer.querySelectorAll('.ttw-search-result-item').forEach((item, itemIndex) => {
+            item.addEventListener('click', function() {
+                const idx = parseInt(this.dataset.index);
                 const currentResult = results[idx]; // 每次点击时重新获取
 
                 if (!currentResult) return; // 防御性检查
@@ -4069,7 +4069,8 @@ ${pairsContent}
                 const detailDiv = modal.querySelector('#ttw-search-detail');
 
                 resultsContainer.querySelectorAll('.ttw-search-result-item').forEach(i => i.style.background = 'rgba(0,0,0,0.2)');
-                item.style.background = 'rgba(0,0,0,0.4)';
+                this.style.background = 'rgba(0,0,0,0.4)';
+
 
 
                 // 优先从记忆结果获取，否则从合并世界书获取
@@ -5492,7 +5493,7 @@ ${pairsContent}
         helpModal.innerHTML = `
             <div class="ttw-modal" style="max-width:650px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">❓ TXT转世界书 v2.9.4  帮助</span>
+                    <span class="ttw-modal-title">❓ TXT转世界书 v2.9.5  帮助</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
@@ -5501,7 +5502,7 @@ ${pairsContent}
                         <p style="color:#ccc;line-height:1.6;margin:0;">将TXT小说转换为SillyTavern世界书格式，自动提取角色、地点、组织等信息。</p>
                     </div>
                     <div style="margin-bottom:16px;">
-                        <h4 style="color:#9b59b6;margin:0 0 10px;">🏷️ v2.9.4  更新</h4>
+                        <h4 style="color:#9b59b6;margin:0 0 10px;">🏷️ v2.9.5  更新</h4>
                         <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
                             <li><strong>🔍 查找功能</strong>：查找处理结果中的特定字符并高亮</li>
                             <li><strong>🔄 批量替换</strong>：替换所有处理结果中的词语</li>
@@ -5964,7 +5965,7 @@ ${pairsContent}
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v2.9.4 </span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v2.9.5 </span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -7435,6 +7436,6 @@ ${pairsContent}
         getDefaultWorldbookEntriesUI: () => defaultWorldbookEntriesUI
     };
 
-    console.log('📚 TxtToWorldbook v2.9.4 已加载');
+    console.log('📚 TxtToWorldbook v2.9.5 已加载');
 })();
 
