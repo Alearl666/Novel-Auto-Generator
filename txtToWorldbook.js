@@ -1,6 +1,6 @@
 
 /**
- * TXT转世界书独立模块 v2.9.5
+ * TXT转世界书独立模块 v2.9.51
  * 新增: 查找高亮、批量替换、多选整理分类、条目位置/深度/顺序配置、默认世界书UI化
  */
 
@@ -3886,19 +3886,17 @@ ${pairsContent}
     }
 
 
-       function performSearchEnhanced(keyword, resultsContainer, modal) {
+
+
+    function performSearchEnhanced(keyword, resultsContainer, modal) {
         const results = [];
         const memoryIndicesSet = new Set();
 
-        // 【重要】只搜索每个记忆当前使用的result，不搜索roll历史
-        // memory.result 是用户当前选用的处理结果
+        // 搜索每个记忆当前使用的result
         for (let i = 0; i < memoryQueue.length; i++) {
             const memory = memoryQueue[i];
-
-            // 跳过没有结果或失败的记忆
             if (!memory.result || memory.failed) continue;
 
-            // 只搜索当前使用的result
             const currentResult = memory.result;
 
             for (const category in currentResult) {
@@ -3926,9 +3924,6 @@ ${pairsContent}
                     }
 
                     if (matches.length > 0) {
-                        // 同一条目可能在多个记忆中出现（因内容不同），都记录下来
-                        // 但用唯一标识避免完全重复
-                        const uniqueKey = `${i}-${category}-${entryName}`;
                         const alreadyExists = results.some(r =>
                             r.memoryIndex === i && r.category === category && r.entryName === entryName
                         );
@@ -3939,8 +3934,7 @@ ${pairsContent}
                                 entryName,
                                 memoryIndex: i,
                                 matches,
-                                fromMemoryResult: true,
-                                uniqueKey
+                                fromMemoryResult: true
                             });
                         }
                         memoryIndicesSet.add(i);
@@ -3949,10 +3943,9 @@ ${pairsContent}
             }
         }
 
-        // 再搜索合并后的世界书（用于找到默认条目或导入的、不属于任何记忆的条目）
+        // 搜索合并后的世界书
         for (const category in generatedWorldbook) {
             for (const entryName in generatedWorldbook[category]) {
-                // 检查这个条目是否已经从某个记忆的result中找到了
                 const alreadyFoundInMemory = results.some(r => r.category === category && r.entryName === entryName);
                 if (alreadyFoundInMemory) continue;
 
@@ -3982,7 +3975,7 @@ ${pairsContent}
                     results.push({
                         category,
                         entryName,
-                        memoryIndex: -1, // 表示不属于特定记忆
+                        memoryIndex: -1,
                         matches,
                         fromMemoryResult: false
                     });
@@ -3990,7 +3983,7 @@ ${pairsContent}
             }
         }
 
-        // 保存找到的记忆索引到容器属性
+        // 保存找到的记忆索引
         resultsContainer.dataset.memoryIndices = JSON.stringify([...memoryIndicesSet]);
 
         if (results.length === 0) {
@@ -3998,11 +3991,15 @@ ${pairsContent}
             return { results: [], memoryIndices: memoryIndicesSet };
         }
 
-        const highlightKeyword = (text) => {
-            return text.replace(new RegExp(keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'),
+        // 高亮函数
+        const highlightKw = (text) => {
+            if (!text) return '';
+            const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            return text.replace(new RegExp(escaped, 'g'),
                 `<span style="background:#f1c40f;color:#000;padding:1px 2px;border-radius:2px;">${keyword}</span>`);
         };
 
+        // 生成HTML
         let html = `<div style="margin-bottom:12px;font-size:13px;color:#27ae60;">找到 ${results.length} 个匹配项，涉及 ${memoryIndicesSet.size} 个章节</div>`;
 
         results.forEach((result, idx) => {
@@ -4013,17 +4010,17 @@ ${pairsContent}
                 : '<span style="font-size:9px;color:#f39c12;margin-left:4px;">⚠合并数据</span>';
 
             html += `
-                <div class="ttw-search-result-item" data-index="${idx}" style="background:rgba(0,0,0,0.2);border-radius:6px;padding:10px;margin-bottom:8px;border-left:3px solid #f1c40f;cursor:pointer;transition:background 0.2s;">
+                <div class="ttw-search-result-item" data-result-index="${idx}" style="background:rgba(0,0,0,0.2);border-radius:6px;padding:10px;margin-bottom:8px;border-left:3px solid #f1c40f;cursor:pointer;transition:background 0.2s;">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                        <span style="font-weight:bold;color:#e67e22;">[${result.category}] ${highlightKeyword(result.entryName)}</span>
+                        <span style="font-weight:bold;color:#e67e22;">[${result.category}] ${highlightKw(result.entryName)}</span>
                         <div style="display:flex;align-items:center;gap:8px;">
                             <span style="font-size:11px;color:${memoryColor};background:rgba(52,152,219,0.2);padding:2px 6px;border-radius:3px;">📍 ${memoryLabel}</span>
                             ${sourceTag}
-                            ${result.memoryIndex >= 0 ? `<button class="ttw-btn-tiny ttw-reroll-single" data-memory-index="${result.memoryIndex}" title="重Roll此章节" onclick="event.stopPropagation();">🎲</button>` : ''}
+                            ${result.memoryIndex >= 0 ? `<button class="ttw-btn-tiny ttw-reroll-single" data-memory-idx="${result.memoryIndex}" title="重Roll此章节">🎲</button>` : ''}
                         </div>
                     </div>
                     <div style="font-size:12px;color:#ccc;">
-                        ${result.matches.slice(0, 2).map(m => `<span style="color:#888;">${m.field}:</span> ${highlightKeyword(m.text).substring(0, 80)}${m.text.length > 80 ? '...' : ''}`).join('<br>')}
+                        ${result.matches.slice(0, 2).map(m => `<span style="color:#888;">${m.field}:</span> ${highlightKw(m.text).substring(0, 80)}${m.text.length > 80 ? '...' : ''}`).join('<br>')}
                     </div>
                 </div>
             `;
@@ -4031,73 +4028,89 @@ ${pairsContent}
 
         resultsContainer.innerHTML = html;
 
-        // 绑定单个重Roll按钮事件
+        // ====== 关键修复：在innerHTML之后绑定事件 ======
+
+        // 绑定单个重Roll按钮
         resultsContainer.querySelectorAll('.ttw-reroll-single').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
+            btn.onclick = async function(e) {
                 e.stopPropagation();
-                const memoryIndex = parseInt(btn.dataset.memoryIndex);
-                const customPrompt = modal.querySelector('#ttw-search-suffix-prompt').value;
+                const memoryIndex = parseInt(this.dataset.memoryIdx);
+                const customPrompt = modal.querySelector('#ttw-search-suffix-prompt')?.value || '';
 
                 if (!confirm(`确定要重Roll 第${memoryIndex + 1}章 吗？`)) return;
 
-                btn.disabled = true;
-                btn.textContent = '🔄';
+                this.disabled = true;
+                this.textContent = '🔄';
 
                 try {
                     await rerollMemory(memoryIndex, customPrompt);
                     alert(`第${memoryIndex + 1}章 重Roll完成！`);
-                    // 重新搜索刷新结果
-                    modal.querySelector('#ttw-do-search').click();
+                    modal.querySelector('#ttw-do-search')?.click();
                     updateWorldbookPreview();
                 } catch (error) {
                     alert(`重Roll失败: ${error.message}`);
                 } finally {
-                    btn.disabled = false;
-                    btn.textContent = '🎲';
+                    this.disabled = false;
+                    this.textContent = '🎲';
                 }
-            });
+            };
         });
 
-  
-        // 绑定点击查看详情
-        resultsContainer.querySelectorAll('.ttw-search-result-item').forEach((item) => {
-            item.addEventListener('click', () => {
-                const idx = parseInt(item.dataset.index);
-                const currentResult = results[idx]; // 每次点击时重新获取
+        // 绑定条目点击 - 显示详情
+        resultsContainer.querySelectorAll('.ttw-search-result-item').forEach(item => {
+            item.onclick = function(e) {
+                // 如果点击的是按钮，不处理
+                if (e.target.closest('.ttw-reroll-single')) return;
 
-                if (!currentResult) return; // 防御性检查
+                const idx = parseInt(this.dataset.resultIndex);
+                const result = results[idx];
+
+                if (!result) {
+                    console.error('找不到result, idx=', idx, 'results.length=', results.length);
+                    return;
+                }
 
                 const detailDiv = modal.querySelector('#ttw-search-detail');
+                if (!detailDiv) return;
 
-                resultsContainer.querySelectorAll('.ttw-search-result-item').forEach(i => i.style.background = 'rgba(0,0,0,0.2)');
-                item.style.background = 'rgba(0,0,0,0.4)';
+                // 更新选中样式
+                resultsContainer.querySelectorAll('.ttw-search-result-item').forEach(i => {
+                    i.style.background = 'rgba(0,0,0,0.2)';
+                });
+                this.style.background = 'rgba(0,0,0,0.4)';
 
-
-                // 优先从记忆结果获取，否则从合并世界书获取
+                // 获取条目数据
                 let entry = null;
                 let dataSource = '';
 
-                if (currentResult.memoryIndex >= 0 && memoryQueue[currentResult.memoryIndex]?.result?.[currentResult.category]?.[currentResult.entryName]) {
-                    entry = memoryQueue[currentResult.memoryIndex].result[currentResult.category][currentResult.entryName];
-                    dataSource = `来自: 记忆${currentResult.memoryIndex + 1} 的当前处理结果`;
-                } else {
-                    entry = generatedWorldbook[currentResult.category]?.[currentResult.entryName];
-                    dataSource = '来自: 合并后的世界书（可能是默认条目或导入数据）';
+                if (result.memoryIndex >= 0) {
+                    const mem = memoryQueue[result.memoryIndex];
+                    if (mem && mem.result && mem.result[result.category]) {
+                        entry = mem.result[result.category][result.entryName];
+                        dataSource = `来自: 记忆${result.memoryIndex + 1} 的当前处理结果`;
+                    }
                 }
 
-                const memoryLabel = currentResult.memoryIndex >= 0 ? `记忆${currentResult.memoryIndex + 1} (第${currentResult.memoryIndex + 1}章)` : '默认/导入条目';
+                if (!entry) {
+                    entry = generatedWorldbook[result.category]?.[result.entryName];
+                    dataSource = '来自: 合并后的世界书';
+                }
+
+                const memoryLabel = result.memoryIndex >= 0
+                    ? `记忆${result.memoryIndex + 1} (第${result.memoryIndex + 1}章)`
+                    : '默认/导入条目';
 
                 let contentHtml = '';
                 if (entry) {
                     const keywordsStr = Array.isArray(entry['关键词']) ? entry['关键词'].join(', ') : '';
                     let content = (entry['内容'] || '').replace(/</g, '<').replace(/>/g, '>');
-                    content = highlightKeyword(content).replace(/\n/g, '<br>');
+                    content = highlightKw(content).replace(/\n/g, '<br>');
 
                     contentHtml = `
                         <div style="margin-bottom:8px;font-size:11px;color:#888;padding:6px;background:rgba(0,0,0,0.2);border-radius:4px;">${dataSource}</div>
                         <div style="margin-bottom:12px;padding:10px;background:rgba(155,89,182,0.1);border-radius:6px;">
                             <div style="color:#9b59b6;font-size:11px;margin-bottom:4px;">🔑 关键词</div>
-                            <div style="font-size:12px;">${highlightKeyword(keywordsStr)}</div>
+                            <div style="font-size:12px;">${highlightKw(keywordsStr)}</div>
                         </div>
                         <div style="padding:10px;background:rgba(39,174,96,0.1);border-radius:6px;max-height:250px;overflow-y:auto;">
                             <div style="color:#27ae60;font-size:11px;margin-bottom:4px;">📝 内容</div>
@@ -4110,46 +4123,45 @@ ${pairsContent}
 
                 detailDiv.innerHTML = `
                     <div style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid #444;">
-                        <h4 style="color:#e67e22;margin:0 0 8px;font-size:14px;">[${currentResult.category}] ${currentResult.entryName}</h4>
+                        <h4 style="color:#e67e22;margin:0 0 8px;font-size:14px;">[${result.category}] ${result.entryName}</h4>
                         <div style="display:flex;justify-content:space-between;align-items:center;">
                             <span style="font-size:12px;color:#3498db;">📍 来源: ${memoryLabel}</span>
-                            ${currentResult.memoryIndex >= 0 ? `<button class="ttw-btn ttw-btn-small ttw-btn-warning" id="ttw-detail-reroll">🎲 重Roll此章节</button>` : ''}
+                            ${result.memoryIndex >= 0 ? `<button class="ttw-btn ttw-btn-small ttw-btn-warning" id="ttw-detail-reroll-btn" data-mem-idx="${result.memoryIndex}">🎲 重Roll此章节</button>` : ''}
                         </div>
                     </div>
                     ${contentHtml}
                 `;
 
-                // 绑定详情页的重Roll按钮
-                const detailRerollBtn = detailDiv.querySelector('#ttw-detail-reroll');
-                if (detailRerollBtn && currentResult.memoryIndex >= 0) {
-                    detailRerollBtn.addEventListener('click', async () => {
-                        const customPrompt = modal.querySelector('#ttw-search-suffix-prompt').value;
-                        const memIdx = currentResult.memoryIndex;
+                // 绑定详情页重Roll按钮
+                const detailRerollBtn = detailDiv.querySelector('#ttw-detail-reroll-btn');
+                if (detailRerollBtn) {
+                    detailRerollBtn.onclick = async function() {
+                        const memIdx = parseInt(this.dataset.memIdx);
+                        const customPrompt = modal.querySelector('#ttw-search-suffix-prompt')?.value || '';
 
                         if (!confirm(`确定要重Roll 第${memIdx + 1}章 吗？`)) return;
 
-                        detailRerollBtn.disabled = true;
-                        detailRerollBtn.textContent = '🔄 重Roll中...';
+                        this.disabled = true;
+                        this.textContent = '🔄 重Roll中...';
 
                         try {
                             await rerollMemory(memIdx, customPrompt);
                             alert(`第${memIdx + 1}章 重Roll完成！`);
-                            modal.querySelector('#ttw-do-search').click();
+                            modal.querySelector('#ttw-do-search')?.click();
                             updateWorldbookPreview();
                         } catch (error) {
                             alert(`重Roll失败: ${error.message}`);
                         } finally {
-                            detailRerollBtn.disabled = false;
-                            detailRerollBtn.textContent = '🎲 重Roll此章节';
+                            this.disabled = false;
+                            this.textContent = '🎲 重Roll此章节';
                         }
-                    });
+                    };
                 }
-            });
+            };
         });
 
         return { results, memoryIndices: memoryIndicesSet };
     }
-
 
 
 
