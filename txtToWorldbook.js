@@ -1,6 +1,6 @@
 
 /**
- * TXT转世界书独立模块 v2.9.3
+ * TXT转世界书独立模块 v2.9.4
  * 新增: 查找高亮、批量替换、多选整理分类、条目位置/深度/顺序配置、默认世界书UI化
  */
 
@@ -3886,18 +3886,26 @@ ${pairsContent}
     }
 
 
-    function performSearchEnhanced(keyword, resultsContainer, modal) {
+       function performSearchEnhanced(keyword, resultsContainer, modal) {
         const results = [];
         const memoryIndicesSet = new Set();
 
-        // 优先搜索各章节的处理结果（这才是正确的来源）
+        // 【重要】只搜索每个记忆当前使用的result，不搜索roll历史
+        // memory.result 是用户当前选用的处理结果
         for (let i = 0; i < memoryQueue.length; i++) {
             const memory = memoryQueue[i];
-            if (!memory.result) continue;
 
-            for (const category in memory.result) {
-                for (const entryName in memory.result[category]) {
-                    const entry = memory.result[category][entryName];
+            // 跳过没有结果或失败的记忆
+            if (!memory.result || memory.failed) continue;
+
+            // 只搜索当前使用的result
+            const currentResult = memory.result;
+
+            for (const category in currentResult) {
+                for (const entryName in currentResult[category]) {
+                    const entry = currentResult[category][entryName];
+                    if (!entry || typeof entry !== 'object') continue;
+
                     const keywordsStr = Array.isArray(entry['关键词']) ? entry['关键词'].join(', ') : '';
                     const content = entry['内容'] || '';
 
@@ -3918,33 +3926,39 @@ ${pairsContent}
                     }
 
                     if (matches.length > 0) {
-                        // 检查是否已有相同条目（来自其他记忆）
-                        const existingIndex = results.findIndex(r => r.category === category && r.entryName === entryName);
+                        // 同一条目可能在多个记忆中出现（因内容不同），都记录下来
+                        // 但用唯一标识避免完全重复
+                        const uniqueKey = `${i}-${category}-${entryName}`;
+                        const alreadyExists = results.some(r =>
+                            r.memoryIndex === i && r.category === category && r.entryName === entryName
+                        );
 
-                        if (existingIndex === -1) {
+                        if (!alreadyExists) {
                             results.push({
                                 category,
                                 entryName,
                                 memoryIndex: i,
                                 matches,
-                                fromMemoryResult: true
+                                fromMemoryResult: true,
+                                uniqueKey
                             });
                         }
-                        // 无论是否已存在，都记录这个记忆索引
                         memoryIndicesSet.add(i);
                     }
                 }
             }
         }
 
-        // 再搜索合并后的世界书（用于补充那些可能在默认条目或导入的条目）
+        // 再搜索合并后的世界书（用于找到默认条目或导入的、不属于任何记忆的条目）
         for (const category in generatedWorldbook) {
             for (const entryName in generatedWorldbook[category]) {
-                // 跳过已经从记忆结果中找到的
-                const alreadyFound = results.some(r => r.category === category && r.entryName === entryName);
-                if (alreadyFound) continue;
+                // 检查这个条目是否已经从某个记忆的result中找到了
+                const alreadyFoundInMemory = results.some(r => r.category === category && r.entryName === entryName);
+                if (alreadyFoundInMemory) continue;
 
                 const entry = generatedWorldbook[category][entryName];
+                if (!entry || typeof entry !== 'object') continue;
+
                 const keywordsStr = Array.isArray(entry['关键词']) ? entry['关键词'].join(', ') : '';
                 const content = entry['内容'] || '';
 
@@ -3965,27 +3979,13 @@ ${pairsContent}
                 }
 
                 if (matches.length > 0) {
-                    // 尝试从记忆结果中查找来源
-                    let foundInMemoryIndex = -1;
-                    for (let i = 0; i < memoryQueue.length; i++) {
-                        const memory = memoryQueue[i];
-                        if (memory.result && memory.result[category] && memory.result[category][entryName]) {
-                            foundInMemoryIndex = i;
-                            break;
-                        }
-                    }
-
                     results.push({
                         category,
                         entryName,
-                        memoryIndex: foundInMemoryIndex,
+                        memoryIndex: -1, // 表示不属于特定记忆
                         matches,
-                        fromMemoryResult: false // 标记这是从合并世界书找到的
+                        fromMemoryResult: false
                     });
-
-                    if (foundInMemoryIndex >= 0) {
-                        memoryIndicesSet.add(foundInMemoryIndex);
-                    }
                 }
             }
         }
@@ -4009,7 +4009,7 @@ ${pairsContent}
             const memoryLabel = result.memoryIndex >= 0 ? `记忆${result.memoryIndex + 1}` : '默认/导入';
             const memoryColor = result.memoryIndex >= 0 ? '#3498db' : '#888';
             const sourceTag = result.fromMemoryResult
-                ? '<span style="font-size:9px;color:#27ae60;margin-left:4px;">✓来源确认</span>'
+                ? '<span style="font-size:9px;color:#27ae60;margin-left:4px;">✓当前结果</span>'
                 : '<span style="font-size:9px;color:#f39c12;margin-left:4px;">⚠合并数据</span>';
 
             html += `
@@ -4058,29 +4058,35 @@ ${pairsContent}
             });
         });
 
-        // 绑定点击查看详情
-        resultsContainer.querySelectorAll('.ttw-search-result-item').forEach(item => {
+        // 绑定点击查看详情 - 在循环中立即捕获每个result
+        resultsContainer.querySelectorAll('.ttw-search-result-item').forEach((item, itemIndex) => {
+            const idx = parseInt(item.dataset.index);
+            const result = results[idx]; // 在循环中立即捕获result
+
+            if (!result) return; // 防御性检查
+
             item.addEventListener('click', () => {
-                const idx = parseInt(item.dataset.index);
-                const result = results[idx];
                 const detailDiv = modal.querySelector('#ttw-search-detail');
 
                 resultsContainer.querySelectorAll('.ttw-search-result-item').forEach(i => i.style.background = 'rgba(0,0,0,0.2)');
                 item.style.background = 'rgba(0,0,0,0.4)';
 
+                // 使用已捕获的result
+                const currentResult = result;
+
                 // 优先从记忆结果获取，否则从合并世界书获取
                 let entry = null;
                 let dataSource = '';
 
-                if (result.memoryIndex >= 0 && memoryQueue[result.memoryIndex]?.result?.[result.category]?.[result.entryName]) {
-                    entry = memoryQueue[result.memoryIndex].result[result.category][result.entryName];
-                    dataSource = `来自: 记忆${result.memoryIndex + 1} 的处理结果`;
+                if (currentResult.memoryIndex >= 0 && memoryQueue[currentResult.memoryIndex]?.result?.[currentResult.category]?.[currentResult.entryName]) {
+                    entry = memoryQueue[currentResult.memoryIndex].result[currentResult.category][currentResult.entryName];
+                    dataSource = `来自: 记忆${currentResult.memoryIndex + 1} 的当前处理结果`;
                 } else {
-                    entry = generatedWorldbook[result.category]?.[result.entryName];
+                    entry = generatedWorldbook[currentResult.category]?.[currentResult.entryName];
                     dataSource = '来自: 合并后的世界书（可能是默认条目或导入数据）';
                 }
 
-                const memoryLabel = result.memoryIndex >= 0 ? `记忆${result.memoryIndex + 1} (第${result.memoryIndex + 1}章)` : '默认/导入条目';
+                const memoryLabel = currentResult.memoryIndex >= 0 ? `记忆${currentResult.memoryIndex + 1} (第${currentResult.memoryIndex + 1}章)` : '默认/导入条目';
 
                 let contentHtml = '';
                 if (entry) {
@@ -4105,10 +4111,10 @@ ${pairsContent}
 
                 detailDiv.innerHTML = `
                     <div style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid #444;">
-                        <h4 style="color:#e67e22;margin:0 0 8px;font-size:14px;">[${result.category}] ${result.entryName}</h4>
+                        <h4 style="color:#e67e22;margin:0 0 8px;font-size:14px;">[${currentResult.category}] ${currentResult.entryName}</h4>
                         <div style="display:flex;justify-content:space-between;align-items:center;">
                             <span style="font-size:12px;color:#3498db;">📍 来源: ${memoryLabel}</span>
-                            ${result.memoryIndex >= 0 ? `<button class="ttw-btn ttw-btn-small ttw-btn-warning" id="ttw-detail-reroll">🎲 重Roll此章节</button>` : ''}
+                            ${currentResult.memoryIndex >= 0 ? `<button class="ttw-btn ttw-btn-small ttw-btn-warning" id="ttw-detail-reroll">🎲 重Roll此章节</button>` : ''}
                         </div>
                     </div>
                     ${contentHtml}
@@ -4116,18 +4122,19 @@ ${pairsContent}
 
                 // 绑定详情页的重Roll按钮
                 const detailRerollBtn = detailDiv.querySelector('#ttw-detail-reroll');
-                if (detailRerollBtn) {
+                if (detailRerollBtn && currentResult.memoryIndex >= 0) {
                     detailRerollBtn.addEventListener('click', async () => {
                         const customPrompt = modal.querySelector('#ttw-search-suffix-prompt').value;
+                        const memIdx = currentResult.memoryIndex;
 
-                        if (!confirm(`确定要重Roll 第${result.memoryIndex + 1}章 吗？`)) return;
+                        if (!confirm(`确定要重Roll 第${memIdx + 1}章 吗？`)) return;
 
                         detailRerollBtn.disabled = true;
                         detailRerollBtn.textContent = '🔄 重Roll中...';
 
                         try {
-                            await rerollMemory(result.memoryIndex, customPrompt);
-                            alert(`第${result.memoryIndex + 1}章 重Roll完成！`);
+                            await rerollMemory(memIdx, customPrompt);
+                            alert(`第${memIdx + 1}章 重Roll完成！`);
                             modal.querySelector('#ttw-do-search').click();
                             updateWorldbookPreview();
                         } catch (error) {
@@ -4143,6 +4150,7 @@ ${pairsContent}
 
         return { results, memoryIndices: memoryIndicesSet };
     }
+
 
 
 
@@ -4180,8 +4188,9 @@ ${pairsContent}
                             <span>替换各章节处理结果中的内容</span>
                         </label>
                     </div>
-                    <div id="ttw-replace-preview" style="display:none;max-height:200px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:12px;margin-bottom:16px;">
+                    <div id="ttw-replace-preview" style="display:none;max-height:400px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:12px;margin-bottom:16px;">
                     </div>
+
                 </div>
                 <div class="ttw-modal-footer">
                     <button class="ttw-btn" id="ttw-preview-replace">👁️ 预览</button>
@@ -4212,20 +4221,68 @@ ${pairsContent}
             const previewDiv = modal.querySelector('#ttw-replace-preview');
             previewDiv.style.display = 'block';
 
+            // 移除高度限制，允许滚动查看全部
+            previewDiv.style.maxHeight = '350px';
+
             if (preview.count === 0) {
-                previewDiv.innerHTML = `<div style="color:#888;text-align:center;">未找到"${findText}"</div>`;
+                previewDiv.innerHTML = `<div style="color:#888;text-align:center;padding:20px;">未找到"${findText}"</div>`;
             } else {
-                previewDiv.innerHTML = `
-                    <div style="color:#27ae60;margin-bottom:8px;">将替换 ${preview.count} 处</div>
-                    ${preview.samples.map(s => `
-                        <div style="font-size:11px;margin-bottom:6px;padding:6px;background:rgba(0,0,0,0.2);border-radius:4px;">
-                            <div style="color:#888;">[${s.location}]</div>
-                            <div style="color:#e74c3c;text-decoration:line-through;">${s.before}</div>
-                            <div style="color:#27ae60;">${s.after}</div>
+                const highlightText = (text) => {
+                    return text.replace(new RegExp(findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'),
+                        `<span style="background:#f1c40f;color:#000;padding:1px 2px;border-radius:2px;">${findText}</span>`);
+                };
+
+                let itemsHtml = preview.allMatches.map((match, idx) => `
+                    <div class="ttw-replace-item" data-index="${idx}" style="font-size:11px;margin-bottom:8px;padding:8px;background:rgba(0,0,0,0.2);border-radius:4px;border-left:3px solid #e67e22;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                            <div style="color:#888;font-size:10px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${match.location}">${match.locationShort}</div>
+                            <button class="ttw-btn-tiny ttw-replace-single-btn" data-index="${idx}" style="background:rgba(230,126,34,0.5);flex-shrink:0;margin-left:8px;">替换此项</button>
                         </div>
-                    `).join('')}
-                    ${preview.count > preview.samples.length ? `<div style="color:#888;text-align:center;">...还有 ${preview.count - preview.samples.length} 处</div>` : ''}
+                        <div style="color:#e74c3c;text-decoration:line-through;word-break:break-all;margin-bottom:4px;">${highlightText(match.before.replace(/</g, '<').replace(/>/g, '>'))}</div>
+                        <div style="color:#27ae60;word-break:break-all;">${match.after.replace(/</g, '<').replace(/>/g, '>')}</div>
+                    </div>
+                `).join('');
+
+                previewDiv.innerHTML = `
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid #444;">
+                        <span style="color:#27ae60;font-weight:bold;">找到 ${preview.allMatches.length} 处匹配</span>
+                        <span style="color:#888;font-size:11px;">点击"替换此项"可单独替换</span>
+                    </div>
+                    <div style="max-height:280px;overflow-y:auto;">
+                        ${itemsHtml}
+                    </div>
                 `;
+
+                // 绑定单项替换按钮事件
+                previewDiv.querySelectorAll('.ttw-replace-single-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const matchIndex = parseInt(btn.dataset.index);
+                        const matchInfo = preview.allMatches[matchIndex];
+
+                        if (!matchInfo) return;
+
+                        const action = replaceWith ? `替换为"${replaceWith}"` : '删除';
+                        if (!confirm(`确定要${action}此处的"${findText}"吗？\n\n位置: ${matchInfo.location}`)) return;
+
+                        const success = executeSingleReplace(findText, replaceWith, matchInfo);
+
+                        if (success) {
+                            // 移除已替换的项
+                            const itemDiv = btn.closest('.ttw-replace-item');
+                            if (itemDiv) {
+                                itemDiv.style.opacity = '0.3';
+                                itemDiv.style.pointerEvents = 'none';
+                                btn.textContent = '✓ 已替换';
+                                btn.disabled = true;
+                            }
+
+                            updateWorldbookPreview();
+                        } else {
+                            alert('替换失败，可能条目已被修改');
+                        }
+                    });
+                });
             }
         });
 
@@ -4333,6 +4390,50 @@ ${pairsContent}
 
         return { count, samples };
     }
+
+    function executeSingleReplace(findText, replaceWith, matchInfo) {
+        const regex = new RegExp(findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+
+        if (matchInfo.source === 'worldbook') {
+            const entry = generatedWorldbook[matchInfo.category]?.[matchInfo.entryName];
+            if (!entry) return false;
+
+            if (matchInfo.field === 'keyword' && Array.isArray(entry['关键词'])) {
+                const newValue = entry['关键词'][matchInfo.fieldIndex].replace(regex, replaceWith);
+                if (newValue) {
+                    entry['关键词'][matchInfo.fieldIndex] = newValue;
+                } else {
+                    entry['关键词'].splice(matchInfo.fieldIndex, 1);
+                }
+                return true;
+            } else if (matchInfo.field === 'content') {
+                entry['内容'] = entry['内容'].replace(regex, replaceWith);
+                return true;
+            }
+        } else if (matchInfo.source === 'memory') {
+            const memory = memoryQueue[matchInfo.memoryIndex];
+            if (!memory?.result) return false;
+
+            const entry = memory.result[matchInfo.category]?.[matchInfo.entryName];
+            if (!entry) return false;
+
+            if (matchInfo.field === 'keyword' && Array.isArray(entry['关键词'])) {
+                const newValue = entry['关键词'][matchInfo.fieldIndex].replace(regex, replaceWith);
+                if (newValue) {
+                    entry['关键词'][matchInfo.fieldIndex] = newValue;
+                } else {
+                    entry['关键词'].splice(matchInfo.fieldIndex, 1);
+                }
+                return true;
+            } else if (matchInfo.field === 'content') {
+                entry['内容'] = entry['内容'].replace(regex, replaceWith);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
 
     function executeReplace(findText, replaceWith, inWorldbook, inResults) {
         const regex = new RegExp(findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
@@ -5330,7 +5431,7 @@ ${pairsContent}
         helpModal.innerHTML = `
             <div class="ttw-modal" style="max-width:650px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">❓ TXT转世界书 v2.9.3  帮助</span>
+                    <span class="ttw-modal-title">❓ TXT转世界书 v2.9.4  帮助</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
@@ -5339,7 +5440,7 @@ ${pairsContent}
                         <p style="color:#ccc;line-height:1.6;margin:0;">将TXT小说转换为SillyTavern世界书格式，自动提取角色、地点、组织等信息。</p>
                     </div>
                     <div style="margin-bottom:16px;">
-                        <h4 style="color:#9b59b6;margin:0 0 10px;">🏷️ v2.9.3  更新</h4>
+                        <h4 style="color:#9b59b6;margin:0 0 10px;">🏷️ v2.9.4  更新</h4>
                         <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
                             <li><strong>🔍 查找功能</strong>：查找处理结果中的特定字符并高亮</li>
                             <li><strong>🔄 批量替换</strong>：替换所有处理结果中的词语</li>
@@ -5802,7 +5903,7 @@ ${pairsContent}
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v2.9.3 </span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v2.9.4 </span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -7273,6 +7374,6 @@ ${pairsContent}
         getDefaultWorldbookEntriesUI: () => defaultWorldbookEntriesUI
     };
 
-    console.log('📚 TxtToWorldbook v2.9.3 已加载');
+    console.log('📚 TxtToWorldbook v2.9.4 已加载');
 })();
 
