@@ -4057,21 +4057,41 @@ ${pairsContent}
         });
 
         // 绑定条目点击 - 显示详情
-        resultsContainer.querySelectorAll('.ttw-search-result-item').forEach(item => {
+        const allItems = resultsContainer.querySelectorAll('.ttw-search-result-item');
+        console.log('📌 绑定点击事件，共', allItems.length, '个条目');
+
+        allItems.forEach((item, loopIndex) => {
+            const resultIndex = parseInt(item.dataset.resultIndex);
+            console.log(`📌 绑定第${loopIndex}个item, data-result-index=${resultIndex}`);
+
             item.onclick = function(e) {
+                console.log('🖱️ 点击触发！loopIndex=', loopIndex, 'resultIndex=', resultIndex);
+                console.log('🖱️ this.dataset.resultIndex=', this.dataset.resultIndex);
+                console.log('🖱️ results数组长度=', results.length);
+
                 // 如果点击的是按钮，不处理
-                if (e.target.closest('.ttw-reroll-single')) return;
+                if (e.target.closest('.ttw-reroll-single')) {
+                    console.log('🖱️ 点击的是按钮，跳过');
+                    return;
+                }
 
                 const idx = parseInt(this.dataset.resultIndex);
+                console.log('🖱️ 解析的idx=', idx);
+
                 const result = results[idx];
+                console.log('🖱️ 获取的result=', result);
 
                 if (!result) {
-                    console.error('找不到result, idx=', idx, 'results.length=', results.length);
+                    console.error('❌ 找不到result! idx=', idx, 'results=', results);
+                    alert('调试：找不到result，idx=' + idx + '，results长度=' + results.length);
                     return;
                 }
 
                 const detailDiv = modal.querySelector('#ttw-search-detail');
-                if (!detailDiv) return;
+                if (!detailDiv) {
+                    console.error('❌ 找不到detailDiv!');
+                    return;
+                }
 
                 // 更新选中样式
                 resultsContainer.querySelectorAll('.ttw-search-result-item').forEach(i => {
@@ -4095,6 +4115,8 @@ ${pairsContent}
                     entry = generatedWorldbook[result.category]?.[result.entryName];
                     dataSource = '来自: 合并后的世界书';
                 }
+
+                console.log('🖱️ 获取的entry=', entry);
 
                 const memoryLabel = result.memoryIndex >= 0
                     ? `记忆${result.memoryIndex + 1} (第${result.memoryIndex + 1}章)`
@@ -4132,6 +4154,8 @@ ${pairsContent}
                     ${contentHtml}
                 `;
 
+                console.log('✅ 详情已更新');
+
                 // 绑定详情页重Roll按钮
                 const detailRerollBtn = detailDiv.querySelector('#ttw-detail-reroll-btn');
                 if (detailRerollBtn) {
@@ -4159,6 +4183,7 @@ ${pairsContent}
                 }
             };
         });
+
 
         return { results, memoryIndices: memoryIndicesSet };
     }
