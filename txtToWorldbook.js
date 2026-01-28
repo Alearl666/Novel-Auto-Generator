@@ -233,7 +233,7 @@
         defaultWorldbookEntriesUI: [],
         categoryDefaultConfig: {},
         entryPositionConfig: {},
-        customSuffixPrompt: ''
+        customSuffixPrompt: '',
         allowRecursion: false,
 
     };
