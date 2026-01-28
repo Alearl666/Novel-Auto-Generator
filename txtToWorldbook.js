@@ -234,6 +234,8 @@
         categoryDefaultConfig: {},
         entryPositionConfig: {},
         customSuffixPrompt: ''
+        allowRecursion: false,
+
     };
 
     let settings = { ...defaultSettings };
@@ -4037,7 +4039,7 @@ ${pairsContent}
 
         // 绑定单个重Roll按钮
         resultsContainer.querySelectorAll('.ttw-reroll-single').forEach(btn => {
-            btn.onclick = async function(e) {
+            btn.onclick = async function (e) {
                 e.stopPropagation();
                 const memoryIndex = parseInt(this.dataset.memoryIdx);
                 const customPrompt = modal.querySelector('#ttw-search-suffix-prompt')?.value || '';
@@ -4069,7 +4071,7 @@ ${pairsContent}
             const resultIndex = parseInt(item.dataset.resultIndex);
             console.log(`📌 绑定第${loopIndex}个item, data-result-index=${resultIndex}`);
 
-            item.onclick = function(e) {
+            item.onclick = function (e) {
                 console.log('🖱️ 点击触发！loopIndex=', loopIndex, 'resultIndex=', resultIndex);
                 console.log('🖱️ this.dataset.resultIndex=', this.dataset.resultIndex);
                 console.log('🖱️ results数组长度=', results.length);
@@ -4164,7 +4166,7 @@ ${pairsContent}
                 // 绑定详情页重Roll按钮
                 const detailRerollBtn = detailDiv.querySelector('#ttw-detail-reroll-btn');
                 if (detailRerollBtn) {
-                    detailRerollBtn.onclick = async function() {
+                    detailRerollBtn.onclick = async function () {
                         const memIdx = parseInt(this.dataset.memIdx);
                         const customPrompt = modal.querySelector('#ttw-search-suffix-prompt')?.value || '';
 
@@ -4356,7 +4358,7 @@ ${pairsContent}
         });
     }
 
-     function previewReplace(findText, replaceWith, inWorldbook, inResults) {
+    function previewReplace(findText, replaceWith, inWorldbook, inResults) {
         const regex = new RegExp(findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
         let count = 0;
         const allMatches = [];
@@ -4763,8 +4765,8 @@ ${pairsContent}
                         order: config.order,
                         position: config.position,
                         disable: false,
-                        excludeRecursion: false,
-                        preventRecursion: false,
+                        excludeRecursion: !settings.allowRecursion,
+                        preventRecursion: !settings.allowRecursion,
                         delayUntilRecursion: false,
                         probability: 100,
                         depth: config.depth,
@@ -4841,7 +4843,7 @@ ${pairsContent}
         alert(`已导出 ${worldbookVolumes.length} 卷`);
     }
 
-      async function exportTaskState() {
+    async function exportTaskState() {
         // 尝试从UI获取文件名
         const fileNameEl = document.getElementById('ttw-file-name');
         const displayedFileName = fileNameEl ? fileNameEl.textContent : null;
@@ -5136,6 +5138,9 @@ ${pairsContent}
 
 
         handleProviderChange();
+        const allowRecursionEl = document.getElementById('ttw-allow-recursion');
+        if (allowRecursionEl) allowRecursionEl.checked = settings.allowRecursion;
+
     }
 
     function updateChapterRegexUI() {
@@ -6137,6 +6142,16 @@ ${pairsContent}
                                         <div class="ttw-setting-hint">开启后会在提示词中强制AI将每个记忆块视为对应章节</div>
                                     </div>
                                 </label>
+
+                                <label class="ttw-checkbox-label ttw-checkbox-with-hint" style="background:rgba(52,152,219,0.15);border:1px solid rgba(52,152,219,0.3);">
+    <input type="checkbox" id="ttw-allow-recursion">
+    <div>
+        <span style="color:#3498db;">🔄 允许条目递归</span>
+        <div class="ttw-setting-hint">勾选后条目可被其他条目激活，并可触发进一步递归</div>
+    </div>
+</label>
+
+                                
                             </div>
                             <div id="ttw-volume-indicator" class="ttw-volume-indicator"></div>
 
@@ -6581,7 +6596,8 @@ ${pairsContent}
             const el = document.getElementById(id);
             if (el) el.addEventListener('change', saveCurrentSettings);
         });
-        ['ttw-incremental-mode', 'ttw-volume-mode', 'ttw-enable-plot', 'ttw-enable-style', 'ttw-force-chapter-marker'].forEach(id => {
+        ['ttw-incremental-mode', 'ttw-volume-mode', 'ttw-enable-plot', 'ttw-enable-style', 'ttw-force-chapter-marker', 'ttw-allow-recursion'].forEach(id => {
+
             const el = document.getElementById(id);
             if (el) el.addEventListener('change', saveCurrentSettings);
         });
@@ -6784,6 +6800,8 @@ ${pairsContent}
         }
 
         try { localStorage.setItem('txtToWorldbookSettings', JSON.stringify(settings)); } catch (e) { }
+        settings.allowRecursion = document.getElementById('ttw-allow-recursion')?.checked ?? false;
+
     }
 
 
