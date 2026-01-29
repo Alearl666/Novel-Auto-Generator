@@ -152,6 +152,13 @@
 
     // ========== 新增：分类默认位置/深度配置 ==========
     let categoryDefaultConfig = {};
+    // 新增：剧情大纲导出默认配置
+    let plotOutlineExportConfig = {
+        position: 0,
+        depth: 4,
+        order: 100,
+        autoIncrementOrder: true
+    };
 
     // ========== 并行处理配置 ==========
     let parallelConfig = {
@@ -817,6 +824,15 @@
         if (entryPositionConfig[key]) {
             return entryPositionConfig[key];
         }
+        // 特殊处理：剧情大纲
+        if (category === '剧情大纲') {
+            return {
+                position: plotOutlineExportConfig.position || 0,
+                depth: plotOutlineExportConfig.depth || 4,
+                order: plotOutlineExportConfig.order || 100,
+                autoIncrementOrder: plotOutlineExportConfig.autoIncrementOrder || false
+            };
+        }
         // 优先从分类配置获取
         if (categoryDefaultConfig[category]) {
             return { ...categoryDefaultConfig[category] };
@@ -834,8 +850,14 @@
         return { position: 0, depth: 4, order: 100, autoIncrementOrder: false };
     }
 
+
     // 新增：获取分类是否自动递增顺序
+    // 获取分类是否自动递增顺序
     function getCategoryAutoIncrement(category) {
+        // 特殊处理：剧情大纲
+        if (category === '剧情大纲') {
+            return plotOutlineExportConfig.autoIncrementOrder || false;
+        }
         if (categoryDefaultConfig[category]?.autoIncrementOrder !== undefined) {
             return categoryDefaultConfig[category].autoIncrementOrder;
         }
@@ -843,14 +865,19 @@
         return catConfig?.autoIncrementOrder || false;
     }
 
-    // 新增：获取分类的起始顺序
+    // 获取分类的起始顺序
     function getCategoryBaseOrder(category) {
+        // 特殊处理：剧情大纲
+        if (category === '剧情大纲') {
+            return plotOutlineExportConfig.order || 100;
+        }
         if (categoryDefaultConfig[category]?.order !== undefined) {
             return categoryDefaultConfig[category].order;
         }
         const catConfig = customWorldbookCategories.find(c => c.name === category);
         return catConfig?.defaultOrder || 100;
     }
+
 
 
     function setEntryConfig(category, entryName, config) {
@@ -4712,13 +4739,109 @@ ${pairsContent}
             alert('配置已保存');
         });
     }
+    // 新增：显示剧情大纲导出配置弹窗
+    function showPlotOutlineConfigModal() {
+        const existingModal = document.getElementById('ttw-plot-config-modal');
+        if (existingModal) existingModal.remove();
+
+        const config = plotOutlineExportConfig;
+
+        const modal = document.createElement('div');
+        modal.id = 'ttw-plot-config-modal';
+        modal.className = 'ttw-modal-container';
+
+        modal.innerHTML = `
+            <div class="ttw-modal" style="max-width:500px;">
+                <div class="ttw-modal-header">
+                    <span class="ttw-modal-title">⚙️ 剧情大纲 - 导出时的默认配置</span>
+                    <button class="ttw-modal-close" type="button">✕</button>
+                </div>
+                <div class="ttw-modal-body">
+                    <div style="margin-bottom:16px;padding:12px;background:rgba(155,89,182,0.15);border-radius:8px;">
+                        <div style="font-size:12px;color:#ccc;">设置"剧情大纲"分类在导出为SillyTavern格式时的默认位置/深度/顺序。此配置会随"导出配置"一起保存。</div>
+                    </div>
+
+                    <div class="ttw-form-group">
+                        <label>默认位置 (Position)</label>
+                        <select id="ttw-plot-config-position" class="ttw-select">
+                            <option value="0" ${(config.position || 0) === 0 ? 'selected' : ''}>在角色定义之前</option>
+                            <option value="1" ${config.position === 1 ? 'selected' : ''}>在角色定义之后</option>
+                            <option value="2" ${config.position === 2 ? 'selected' : ''}>在作者注释之前</option>
+                            <option value="3" ${config.position === 3 ? 'selected' : ''}>在作者注释之后</option>
+                            <option value="4" ${config.position === 4 ? 'selected' : ''}>自定义深度</option>
+                        </select>
+                    </div>
+
+                    <div class="ttw-form-group">
+                        <label>默认深度 (Depth) - 仅Position=4时有效</label>
+                        <input type="number" id="ttw-plot-config-depth" class="ttw-input" value="${config.depth || 4}" min="0" max="999">
+                    </div>
+
+                    <div class="ttw-form-group">
+                        <label>默认起始顺序 (Order)</label>
+                        <input type="number" id="ttw-plot-config-order" class="ttw-input" value="${config.order || 100}" min="0" max="9999">
+                    </div>
+
+                    <div style="margin-top:12px;">
+                        <label class="ttw-checkbox-label" style="padding:10px;background:rgba(39,174,96,0.15);border-radius:6px;">
+                            <input type="checkbox" id="ttw-plot-config-auto-increment" ${config.autoIncrementOrder ? 'checked' : ''}>
+                            <div>
+                                <span style="color:#27ae60;font-weight:bold;">📈 顺序自动递增</span>
+                                <div class="ttw-setting-hint">勾选后剧情大纲下的条目顺序会从起始值开始递增（100,101,102...）</div>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+                <div class="ttw-modal-footer">
+                    <button class="ttw-btn" id="ttw-cancel-plot-config">取消</button>
+                    <button class="ttw-btn ttw-btn-primary" id="ttw-save-plot-config">💾 保存</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
+        modal.querySelector('#ttw-cancel-plot-config').addEventListener('click', () => modal.remove());
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+        modal.querySelector('#ttw-save-plot-config').addEventListener('click', () => {
+            plotOutlineExportConfig = {
+                position: parseInt(modal.querySelector('#ttw-plot-config-position').value) || 0,
+                depth: parseInt(modal.querySelector('#ttw-plot-config-depth').value) || 4,
+                order: parseInt(modal.querySelector('#ttw-plot-config-order').value) || 100,
+                autoIncrementOrder: modal.querySelector('#ttw-plot-config-auto-increment').checked
+            };
+
+            // 同步到 categoryDefaultConfig
+            setCategoryDefaultConfig('剧情大纲', plotOutlineExportConfig);
+
+            saveCurrentSettings();
+            modal.remove();
+            alert('剧情大纲导出配置已保存！');
+        });
+    }
 
     // ========== 新增：分类配置弹窗 ==========
     function showCategoryConfigModal(category) {
         const existingModal = document.getElementById('ttw-category-config-modal');
         if (existingModal) existingModal.remove();
 
-        const config = categoryDefaultConfig[category] || { position: 0, depth: 4, order: 100 };
+        // 获取当前配置，优先从categoryDefaultConfig，其次从customWorldbookCategories
+        let config = categoryDefaultConfig[category];
+        if (!config) {
+            const catConfig = customWorldbookCategories.find(c => c.name === category);
+            if (catConfig) {
+                config = {
+                    position: catConfig.defaultPosition || 0,
+                    depth: catConfig.defaultDepth || 4,
+                    order: catConfig.defaultOrder || 100,
+                    autoIncrementOrder: catConfig.autoIncrementOrder || false
+                };
+            } else {
+                config = { position: 0, depth: 4, order: 100, autoIncrementOrder: false };
+            }
+        }
 
         const modal = document.createElement('div');
         modal.id = 'ttw-category-config-modal';
@@ -4738,23 +4861,32 @@ ${pairsContent}
                     <div class="ttw-form-group">
                         <label>默认位置 (Position)</label>
                         <select id="ttw-cat-position" class="ttw-select">
-    <option value="0" ${config.position === 0 ? 'selected' : ''}>在角色定义之前</option>
-    <option value="1" ${config.position === 1 ? 'selected' : ''}>在角色定义之后</option>
-    <option value="2" ${config.position === 2 ? 'selected' : ''}>在作者注释之前</option>
-    <option value="3" ${config.position === 3 ? 'selected' : ''}>在作者注释之后</option>
-    <option value="4" ${config.position === 4 ? 'selected' : ''}>自定义深度</option>
-</select>
-
+                            <option value="0" ${(config.position || 0) === 0 ? 'selected' : ''}>在角色定义之前</option>
+                            <option value="1" ${config.position === 1 ? 'selected' : ''}>在角色定义之后</option>
+                            <option value="2" ${config.position === 2 ? 'selected' : ''}>在作者注释之前</option>
+                            <option value="3" ${config.position === 3 ? 'selected' : ''}>在作者注释之后</option>
+                            <option value="4" ${config.position === 4 ? 'selected' : ''}>自定义深度</option>
+                        </select>
                     </div>
 
                     <div class="ttw-form-group">
                         <label>默认深度 (Depth)</label>
-                        <input type="number" id="ttw-cat-depth" class="ttw-input" value="${config.depth}" min="0" max="999">
+                        <input type="number" id="ttw-cat-depth" class="ttw-input" value="${config.depth || 4}" min="0" max="999">
                     </div>
 
                     <div class="ttw-form-group">
-                        <label>默认顺序 (Order)</label>
-                        <input type="number" id="ttw-cat-order" class="ttw-input" value="${config.order}" min="0" max="9999">
+                        <label>默认起始顺序 (Order)</label>
+                        <input type="number" id="ttw-cat-order" class="ttw-input" value="${config.order || 100}" min="0" max="9999">
+                    </div>
+
+                    <div style="margin-top:12px;">
+                        <label class="ttw-checkbox-label" style="padding:10px;background:rgba(39,174,96,0.15);border-radius:6px;">
+                            <input type="checkbox" id="ttw-cat-auto-increment" ${config.autoIncrementOrder ? 'checked' : ''}>
+                            <div>
+                                <span style="color:#27ae60;font-weight:bold;">📈 顺序自动递增</span>
+                                <div class="ttw-setting-hint">勾选后同分类下的条目顺序会从起始值开始递增（100,101,102...）</div>
+                            </div>
+                        </label>
                     </div>
 
                     <div style="margin-top:16px;padding:12px;background:rgba(230,126,34,0.1);border-radius:6px;">
@@ -4781,9 +4913,10 @@ ${pairsContent}
             const position = parseInt(modal.querySelector('#ttw-cat-position').value);
             const depth = parseInt(modal.querySelector('#ttw-cat-depth').value) || 4;
             const order = parseInt(modal.querySelector('#ttw-cat-order').value) || 100;
+            const autoIncrementOrder = modal.querySelector('#ttw-cat-auto-increment').checked;
             const applyToExisting = modal.querySelector('#ttw-apply-to-existing').checked;
 
-            setCategoryDefaultConfig(category, { position, depth, order });
+            setCategoryDefaultConfig(category, { position, depth, order, autoIncrementOrder });
 
             if (applyToExisting && generatedWorldbook[category]) {
                 for (const entryName in generatedWorldbook[category]) {
@@ -4791,10 +4924,23 @@ ${pairsContent}
                 }
             }
 
+            // 如果是修改自定义分类，同步更新
+            const catIndex = customWorldbookCategories.findIndex(c => c.name === category);
+            if (catIndex !== -1) {
+                customWorldbookCategories[catIndex].defaultPosition = position;
+                customWorldbookCategories[catIndex].defaultDepth = depth;
+                customWorldbookCategories[catIndex].defaultOrder = order;
+                customWorldbookCategories[catIndex].autoIncrementOrder = autoIncrementOrder;
+                saveCustomCategories();
+            }
+
             modal.remove();
+            updateWorldbookPreview();
             alert('配置已保存');
         });
     }
+
+
 
     // ========== 导出功能 - 修改为使用条目配置 ==========
     function convertToSillyTavernFormat(worldbook) {
@@ -5123,6 +5269,10 @@ ${pairsContent}
                 if (data.entryPositionConfig) {
                     entryPositionConfig = data.entryPositionConfig;
                 }
+                // 新增：导入剧情大纲导出配置
+                if (data.plotOutlineExportConfig) {
+                    plotOutlineExportConfig = data.plotOutlineExportConfig;
+                }
 
                 if (data.prompts) {
                     if (data.prompts.worldbookPrompt !== undefined) {
@@ -5158,6 +5308,7 @@ ${pairsContent}
         };
         input.click();
     }
+
 
     function updateSettingsUI() {
         const chunkSizeEl = document.getElementById('ttw-chunk-size');
@@ -6357,9 +6508,13 @@ ${pairsContent}
                                     </div>
                                     <div id="ttw-plot-content" class="ttw-prompt-content">
                                         <textarea id="ttw-plot-prompt" rows="4" placeholder="留空使用默认..." class="ttw-textarea-small"></textarea>
-                                        <div style="margin-top:8px;"><button class="ttw-btn ttw-btn-small ttw-reset-prompt" data-type="plot">🔄 恢复默认</button></div>
+                                        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
+                                            <button class="ttw-btn ttw-btn-small ttw-reset-prompt" data-type="plot">🔄 恢复默认</button>
+                                            <button class="ttw-btn ttw-btn-small" id="ttw-plot-export-config" style="background:rgba(155,89,182,0.3);">⚙️ 导出时的默认配置</button>
+                                        </div>
                                     </div>
                                 </div>
+
                                 <div class="ttw-prompt-section">
                                     <div class="ttw-prompt-header ttw-prompt-header-green" data-target="ttw-style-content">
                                         <div style="display:flex;align-items:center;gap:8px;">
@@ -6838,6 +6993,7 @@ ${pairsContent}
         });
 
         document.getElementById('ttw-preview-prompt').addEventListener('click', showPromptPreview);
+        document.getElementById('ttw-plot-export-config').addEventListener('click', showPlotOutlineConfigModal);
         document.getElementById('ttw-import-json').addEventListener('click', importAndMergeWorldbook);
         document.getElementById('ttw-import-task').addEventListener('click', importTaskState);
         document.getElementById('ttw-export-task').addEventListener('click', exportTaskState);
@@ -6942,6 +7098,8 @@ ${pairsContent}
         try { localStorage.setItem('txtToWorldbookSettings', JSON.stringify(settings)); } catch (e) { }
         settings.allowRecursion = document.getElementById('ttw-allow-recursion')?.checked ?? false;
 
+        settings.plotOutlineExportConfig = plotOutlineExportConfig;
+
     }
 
 
@@ -6967,6 +7125,10 @@ ${pairsContent}
                 if (settings.entryPositionConfig) {
                     entryPositionConfig = settings.entryPositionConfig;
                 }
+                if (settings.plotOutlineExportConfig) {
+                    plotOutlineExportConfig = settings.plotOutlineExportConfig;
+                }
+
             }
         } catch (e) { }
 
