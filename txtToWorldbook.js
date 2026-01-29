@@ -5166,7 +5166,19 @@ ${pairsContent}
 
     function exportWorldbook() {
         const timeString = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[:/\s]/g, '').replace(/,/g, '-');
-        let fileName = currentFile ? `${currentFile.name.replace(/\.[^/.]+$/, '')}-世界书-${timeString}` : `世界书-${timeString}`;
+
+        // 【修复】优先用currentFile，其次用UI显示的文件名
+        let baseName = '世界书';
+        if (currentFile) {
+            baseName = currentFile.name.replace(/\.[^/.]+$/, '');
+        } else {
+            const fileNameEl = document.getElementById('ttw-file-name');
+            if (fileNameEl && fileNameEl.textContent && fileNameEl.textContent !== '已加载的文件' && fileNameEl.textContent !== '已恢复的任务') {
+                baseName = fileNameEl.textContent.replace(/\.[^/.]+$/, '');
+            }
+        }
+
+        const fileName = `${baseName}-世界书-${timeString}`;
         const exportData = useVolumeMode ? { volumes: worldbookVolumes, currentVolume: generatedWorldbook, merged: getAllVolumesWorldbook() } : generatedWorldbook;
         const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
@@ -5177,12 +5189,25 @@ ${pairsContent}
         URL.revokeObjectURL(url);
     }
 
+
     function exportToSillyTavern() {
         const timeString = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[:/\s]/g, '').replace(/,/g, '-');
         try {
             const worldbookToExport = useVolumeMode ? getAllVolumesWorldbook() : generatedWorldbook;
             const sillyTavernWorldbook = convertToSillyTavernFormat(worldbookToExport);
-            let fileName = currentFile ? `${currentFile.name.replace(/\.[^/.]+$/, '')}-酒馆书-${timeString}` : `酒馆书-${timeString}`;
+
+            // 【修复】优先用currentFile，其次用UI显示的文件名
+            let baseName = '酒馆书';
+            if (currentFile) {
+                baseName = currentFile.name.replace(/\.[^/.]+$/, '');
+            } else {
+                const fileNameEl = document.getElementById('ttw-file-name');
+                if (fileNameEl && fileNameEl.textContent && fileNameEl.textContent !== '已加载的文件' && fileNameEl.textContent !== '已恢复的任务') {
+                    baseName = fileNameEl.textContent.replace(/\.[^/.]+$/, '');
+                }
+            }
+
+            const fileName = `${baseName}-酒馆书-${timeString}`;
             const blob = new Blob([JSON.stringify(sillyTavernWorldbook, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -5195,6 +5220,7 @@ ${pairsContent}
             alert('转换失败：' + error.message);
         }
     }
+
 
     function exportVolumes() {
         if (worldbookVolumes.length === 0) { alert('没有分卷数据'); return; }
