@@ -5000,17 +5000,17 @@ ${pairsContent}
                         delayUntilRecursion: false,
                         probability: 100,
                         depth: config.depth !== undefined ? config.depth : 4,
-
-                        // ======= 【修复区域】=======
-                        group: category,           // 保留分类名用于显示和合并
-                        groupOverride: true,       // 允许同组多条目同时激活！
+                        comment: `${category} - ${itemName}`,  // 保留comment显示分类名
+                        group: "",  // ← 改成空字符串，让每个条目独立匹配
+                        groupOverride: false,
+                        groupOverride: false,
                         groupWeight: 100,
-                        useGroupScoring: false,    // 禁用分组评分竞争
-                        // ===========================
-
-                        scanDepth: null,
+                        // 修复1：明确设置扫描深度，确保能扫到最近的消息
+                        scanDepth: null,  // 使用酒馆全局设置
+                        // 修复2：关闭全词匹配（中文环境必须关闭！）
                         caseSensitive: false,
                         matchWholeWords: false,
+                        useGroupScoring: null,
                         automationId: '',
                         role: 0,
                         vectorized: false,
@@ -5018,7 +5018,6 @@ ${pairsContent}
                         cooldown: null,
                         delay: null
                     });
-
                 }
             }
         }
