@@ -5001,6 +5001,7 @@ ${pairsContent}
                         probability: 100,
                         depth: config.depth !== undefined ? config.depth : 4,
                         group: category,
+                        groupOverride: true, // 同条目同时触发
                         groupOverride: false,
                         groupWeight: 100,
                         // 修复1：明确设置扫描深度，确保能扫到最近的消息
@@ -7546,10 +7547,17 @@ ${pairsContent}
             for (const entryName in entries) {
                 const entry = entries[entryName];
                 const config = getEntryConfig(category, entryName);
-                html += `<div style="margin:8px;border:1px solid #555;border-radius:6px;overflow:hidden;">
-                    <div style="background:#3a3a3a;padding:8px 12px;cursor:pointer;display:flex;justify-content:space-between;border-left:3px solid #3498db;" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
-                        <span style="display:flex;align-items:center;gap:6px;">📄 ${entryName}<button class="ttw-entry-config-btn ttw-config-btn" data-category="${category}" data-entry="${entryName}" title="配置位置/深度/顺序" onclick="event.stopPropagation();">⚙️</button></span>
-                        <span style="font-size:10px;color:#888;">${getPositionDisplayName(config.position)} | 深度${config.depth} | 顺序${config.order}</span>
+                const autoIncrement = getCategoryAutoIncrement(category);
+                const baseOrder = getCategoryBaseOrder(category);
+                let displayOrder = config.order;
+                if (autoIncrement) {
+                    const entriesInCategory = Object.keys(entries);
+                    const entryIndex = entriesInCategory.indexOf(entryName);
+                    displayOrder = baseOrder + entryIndex;
+                }
+                html += `<div style="background:#3a3a3a;...
+    <span style="font-size:10px;color:#888;">${getPositionDisplayName(config.position)} | 深度${config.depth} | 顺序${displayOrder}${autoIncrement ? ' ↗' : ''}</span>
+
                     </div>
                     <div style="display:none;background:#1c1c1c;padding:12px;">`;
                 if (entry && typeof entry === 'object') {
