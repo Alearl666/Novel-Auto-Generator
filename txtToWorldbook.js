@@ -4986,7 +4986,7 @@ ${pairsContent}
                         uid: entryId++,
                         key: [...new Set(keywords)],
                         keysecondary: [],
-                        comment: `${category} - ${itemName}`,
+                        comment: `${category} - ${itemName}`,  // 显示分类-名称，合并时看这个
                         content: String(itemData.内容).trim(),
                         constant: !isGreenLight,
                         selective: isGreenLight,
@@ -5000,17 +5000,17 @@ ${pairsContent}
                         delayUntilRecursion: false,
                         probability: 100,
                         depth: config.depth !== undefined ? config.depth : 4,
-                        comment: `${category} - ${itemName}`,  // 保留comment显示分类名
-                        group: "",  // ← 改成空字符串，让每个条目独立匹配
-                        groupOverride: false,
+
+                        // ======= 【修复】=======
+                        group: `${category}_${itemName}`,  // 每个条目独立group！
                         groupOverride: false,
                         groupWeight: 100,
-                        // 修复1：明确设置扫描深度，确保能扫到最近的消息
-                        scanDepth: null,  // 使用酒馆全局设置
-                        // 修复2：关闭全词匹配（中文环境必须关闭！）
+                        useGroupScoring: null,
+                        // =======================
+
+                        scanDepth: null,
                         caseSensitive: false,
                         matchWholeWords: false,
-                        useGroupScoring: null,
                         automationId: '',
                         role: 0,
                         vectorized: false,
@@ -5018,6 +5018,7 @@ ${pairsContent}
                         cooldown: null,
                         delay: null
                     });
+
                 }
             }
         }
