@@ -1,6 +1,6 @@
 
 /**
- * TXT转世界书独立模块 v2.9.6
+ * TXT转世界书独立模块 v2.9.7
  * 新增: 查找高亮、批量替换、多选整理分类、条目位置/深度/顺序配置、默认世界书UI化、新增默认勾选2递归选项
  */
 
@@ -49,8 +49,13 @@
             isBuiltin: true,
             entryExample: "角色真实姓名",
             keywordsExample: ["真实姓名", "称呼1", "称呼2", "绰号"],
-            contentGuide: "基于原文的角色描述，包含但不限于**名称**:（必须要）、**性别**:、**MBTI(必须要，如变化请说明背景)**:、**貌龄**:、**年龄**:、**身份**:、**背景**:、**性格**:、**外貌**:、**技能**:、**重要事件**:、**话语示例**:、**弱点**:、**背景故事**:等（实际嵌套或者排列方式按合理的逻辑）"
+            contentGuide: "基于原文的角色描述，包含但不限于**名称**:（必须要）、**性别**:、**MBTI(必须要，如变化请说明背景)**:、**貌龄**:、**年龄**:、**身份**:、**背景**:、**性格**:、**外貌**:、**技能**:、**重要事件**:、**话语示例**:、**弱点**:、**背景故事**:等（实际嵌套或者排列方式按合理的逻辑）",
+            defaultPosition: 0,
+            defaultDepth: 4,
+            defaultOrder: 100,
+            autoIncrementOrder: false
         },
+
         {
             name: "地点",
             enabled: true,
@@ -58,6 +63,10 @@
             entryExample: "地点真实名称",
             keywordsExample: ["地点名", "别称", "俗称"],
             contentGuide: "基于原文的地点描述，包含但不限于**名称**:（必须要）、**位置**:、**特征**:、**重要事件**:等（实际嵌套或者排列方式按合理的逻辑）"
+            defaultPosition: 0,
+            defaultDepth: 4,
+            defaultOrder: 100,
+            autoIncrementOrder: false
         },
         {
             name: "组织",
@@ -66,6 +75,10 @@
             entryExample: "组织真实名称",
             keywordsExample: ["组织名", "简称", "代号"],
             contentGuide: "基于原文的组织描述，包含但不限于**名称**:（必须要）、**性质**:、**成员**:、**目标**:等（实际嵌套或者排列方式按合理的逻辑）"
+            defaultPosition: 0,
+            defaultDepth: 4,
+            defaultOrder: 100,
+            autoIncrementOrder: false
         },
         {
             name: "道具",
@@ -74,6 +87,10 @@
             entryExample: "道具名称",
             keywordsExample: ["道具名", "别名"],
             contentGuide: "基于原文的道具描述，包含但不限于**名称**:、**类型**:、**功能**:、**来源**:、**持有者**:等"
+            defaultPosition: 0,
+            defaultDepth: 4,
+            defaultOrder: 100,
+            autoIncrementOrder: false
         },
         {
             name: "玩法",
@@ -82,6 +99,10 @@
             entryExample: "玩法名称",
             keywordsExample: ["玩法名", "规则名"],
             contentGuide: "基于原文的玩法/规则描述，包含但不限于**名称**:、**规则说明**:、**参与条件**:、**奖惩机制**:等"
+            defaultPosition: 0,
+            defaultDepth: 4,
+            defaultOrder: 100,
+            autoIncrementOrder: false
         },
         {
             name: "章节剧情",
@@ -90,6 +111,10 @@
             entryExample: "第X章",
             keywordsExample: ["章节名", "章节号"],
             contentGuide: "该章节的剧情概要，包含但不限于**章节标题**:、**主要事件**:、**出场角色**:、**关键转折**:、**伏笔线索**:等"
+            defaultPosition: 0,
+            defaultDepth: 4,
+            defaultOrder: 100,
+            autoIncrementOrder: false
         },
         {
             name: "角色内心",
@@ -98,6 +123,10 @@
             entryExample: "角色名-内心世界",
             keywordsExample: ["角色名", "内心", "心理"],
             contentGuide: "角色的内心想法和心理活动，包含但不限于**原文内容**:、**内心独白**:、**情感变化**:、**动机分析**:、**心理矛盾**:等"
+            defaultPosition: 0,
+            defaultDepth: 4,
+            defaultOrder: 100,
+            autoIncrementOrder: false
         }
     ];
 
@@ -788,12 +817,41 @@
         if (entryPositionConfig[key]) {
             return entryPositionConfig[key];
         }
-        // 返回分类默认配置或全局默认
+        // 优先从分类配置获取
         if (categoryDefaultConfig[category]) {
             return { ...categoryDefaultConfig[category] };
         }
-        return { position: 0, depth: 4, order: 100 };
+        // 从自定义分类获取默认配置
+        const catConfig = customWorldbookCategories.find(c => c.name === category);
+        if (catConfig) {
+            return {
+                position: catConfig.defaultPosition || 0,
+                depth: catConfig.defaultDepth || 4,
+                order: catConfig.defaultOrder || 100,
+                autoIncrementOrder: catConfig.autoIncrementOrder || false
+            };
+        }
+        return { position: 0, depth: 4, order: 100, autoIncrementOrder: false };
     }
+
+    // 新增：获取分类是否自动递增顺序
+    function getCategoryAutoIncrement(category) {
+        if (categoryDefaultConfig[category]?.autoIncrementOrder !== undefined) {
+            return categoryDefaultConfig[category].autoIncrementOrder;
+        }
+        const catConfig = customWorldbookCategories.find(c => c.name === category);
+        return catConfig?.autoIncrementOrder || false;
+    }
+
+    // 新增：获取分类的起始顺序
+    function getCategoryBaseOrder(category) {
+        if (categoryDefaultConfig[category]?.order !== undefined) {
+            return categoryDefaultConfig[category].order;
+        }
+        const catConfig = customWorldbookCategories.find(c => c.name === category);
+        return catConfig?.defaultOrder || 100;
+    }
+
 
     function setEntryConfig(category, entryName, config) {
         const key = `${category}::${entryName}`;
@@ -803,10 +861,16 @@
     }
 
     function setCategoryDefaultConfig(category, config) {
-        categoryDefaultConfig[category] = { ...config };
+        categoryDefaultConfig[category] = {
+            position: config.position !== undefined ? config.position : 0,
+            depth: config.depth !== undefined ? config.depth : 4,
+            order: config.order !== undefined ? config.order : 100,
+            autoIncrementOrder: config.autoIncrementOrder || false
+        };
         settings.categoryDefaultConfig = categoryDefaultConfig;
         saveCurrentSettings();
     }
+
 
     // ========== API调用 - 酒馆API ==========
     async function callSillyTavernAPI(prompt, taskId = null) {
@@ -4737,20 +4801,40 @@ ${pairsContent}
         const entries = [];
         let entryId = 0;
 
+        // 按分类统计条目索引，用于顺序递增
+        const categoryEntryIndex = {};
+
         for (const [category, categoryData] of Object.entries(worldbook)) {
             if (typeof categoryData !== 'object' || categoryData === null) continue;
 
             const isGreenLight = getCategoryLightState(category);
+            const autoIncrement = getCategoryAutoIncrement(category);
+            const baseOrder = getCategoryBaseOrder(category);
+
+            // 初始化分类计数器
+            if (!categoryEntryIndex[category]) {
+                categoryEntryIndex[category] = 0;
+            }
 
             for (const [itemName, itemData] of Object.entries(categoryData)) {
                 if (typeof itemData !== 'object' || itemData === null) continue;
                 if (itemData.关键词 && itemData.内容) {
                     let keywords = Array.isArray(itemData.关键词) ? itemData.关键词 : [itemData.关键词];
-                    keywords = keywords.map(k => String(k).trim().replace(/[-_\s]+/g, '')).filter(k => k.length > 0 && k.length <= 20);
+                    // 修复：不要过度清理关键词，保留原始格式以便匹配
+                    keywords = keywords.map(k => String(k).trim()).filter(k => k.length > 0 && k.length <= 50);
                     if (keywords.length === 0) keywords.push(itemName);
 
                     // 获取条目配置
                     const config = getEntryConfig(category, itemName);
+
+                    // 计算实际顺序：如果启用自动递增，则使用 baseOrder + index
+                    let actualOrder;
+                    if (autoIncrement) {
+                        actualOrder = baseOrder + categoryEntryIndex[category];
+                        categoryEntryIndex[category]++;
+                    } else {
+                        actualOrder = config.order !== undefined ? config.order : baseOrder;
+                    }
 
                     entries.push({
                         uid: entryId++,
@@ -4762,20 +4846,22 @@ ${pairsContent}
                         selective: isGreenLight,
                         selectiveLogic: 0,
                         addMemo: true,
-                        order: config.order,
-                        position: config.position,
+                        order: actualOrder,
+                        position: config.position !== undefined ? config.position : 0,
                         disable: false,
                         excludeRecursion: !settings.allowRecursion,
                         preventRecursion: !settings.allowRecursion,
                         delayUntilRecursion: false,
                         probability: 100,
-                        depth: config.depth,
+                        depth: config.depth !== undefined ? config.depth : 4,
                         group: category,
                         groupOverride: false,
                         groupWeight: 100,
-                        scanDepth: null,
+                        // 修复1：明确设置扫描深度，确保能扫到最近的消息
+                        scanDepth: 10,
+                        // 修复2：关闭全词匹配（中文环境必须关闭！）
                         caseSensitive: false,
-                        matchWholeWords: true,
+                        matchWholeWords: false,
                         useGroupScoring: null,
                         automationId: '',
                         role: 0,
@@ -4793,6 +4879,7 @@ ${pairsContent}
             originalData: { name: '小说转换的世界书', description: '由TXT转世界书功能生成', version: 1, author: 'TxtToWorldbook' }
         };
     }
+
 
     function exportWorldbook() {
         const timeString = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[:/\s]/g, '').replace(/,/g, '-');
@@ -5229,19 +5316,23 @@ ${pairsContent}
             isBuiltin: false,
             entryExample: '',
             keywordsExample: [],
-            contentGuide: ''
+            contentGuide: '',
+            defaultPosition: 0,
+            defaultDepth: 4,
+            defaultOrder: 100,
+            autoIncrementOrder: false
         };
 
         const modal = document.createElement('div');
         modal.id = 'ttw-category-modal';
         modal.className = 'ttw-modal-container';
         modal.innerHTML = `
-            <div class="ttw-modal" style="max-width:500px;">
+            <div class="ttw-modal" style="max-width:550px;">
                 <div class="ttw-modal-header">
                     <span class="ttw-modal-title">${isEdit ? '✏️ 编辑分类' : '➕ 添加分类'}</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
-                <div class="ttw-modal-body">
+                <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
                     <div class="ttw-form-group">
                         <label>分类名称 *</label>
                         <input type="text" id="ttw-cat-name" value="${cat.name}" placeholder="如：道具、玩法" class="ttw-input">
@@ -5258,6 +5349,37 @@ ${pairsContent}
                         <label>内容提取指南</label>
                         <textarea id="ttw-cat-content-guide" rows="4" class="ttw-textarea-small" placeholder="描述AI应该提取哪些信息...">${cat.contentGuide}</textarea>
                     </div>
+
+                    <div style="margin-top:16px;padding:12px;background:rgba(155,89,182,0.15);border:1px solid rgba(155,89,182,0.3);border-radius:8px;">
+                        <div style="font-weight:bold;color:#9b59b6;margin-bottom:12px;">⚙️ 导出时的默认配置</div>
+                        <div class="ttw-form-group">
+                            <label>默认位置 (Position)</label>
+                            <select id="ttw-cat-default-position" class="ttw-select">
+                                <option value="0" ${(cat.defaultPosition || 0) === 0 ? 'selected' : ''}>在角色定义之前</option>
+                                <option value="1" ${cat.defaultPosition === 1 ? 'selected' : ''}>在角色定义之后</option>
+                                <option value="2" ${cat.defaultPosition === 2 ? 'selected' : ''}>在作者注释之前</option>
+                                <option value="3" ${cat.defaultPosition === 3 ? 'selected' : ''}>在作者注释之后</option>
+                                <option value="4" ${cat.defaultPosition === 4 ? 'selected' : ''}>自定义深度</option>
+                            </select>
+                        </div>
+                        <div class="ttw-form-group">
+                            <label>默认深度 (Depth) - 仅Position=4时有效</label>
+                            <input type="number" id="ttw-cat-default-depth" class="ttw-input" value="${cat.defaultDepth || 4}" min="0" max="999">
+                        </div>
+                        <div class="ttw-form-group">
+                            <label>默认起始顺序 (Order)</label>
+                            <input type="number" id="ttw-cat-default-order" class="ttw-input" value="${cat.defaultOrder || 100}" min="0" max="9999">
+                        </div>
+                        <div style="margin-top:10px;">
+                            <label class="ttw-checkbox-label" style="padding:8px;background:rgba(39,174,96,0.15);border-radius:6px;">
+                                <input type="checkbox" id="ttw-cat-auto-increment" ${cat.autoIncrementOrder ? 'checked' : ''}>
+                                <div>
+                                    <span style="color:#27ae60;font-weight:bold;">📈 顺序自动递增</span>
+                                    <div class="ttw-setting-hint">勾选后同分类下的条目顺序会从起始值开始递增（100,101,102...）</div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
                 </div>
                 <div class="ttw-modal-footer">
                     <button class="ttw-btn" id="ttw-cancel-cat">取消</button>
@@ -5265,6 +5387,7 @@ ${pairsContent}
                 </div>
             </div>
         `;
+
 
         document.body.appendChild(modal);
 
@@ -5282,6 +5405,10 @@ ${pairsContent}
             const entryExample = document.getElementById('ttw-cat-entry-example').value.trim();
             const keywordsStr = document.getElementById('ttw-cat-keywords').value.trim();
             const contentGuide = document.getElementById('ttw-cat-content-guide').value.trim();
+            const defaultPosition = parseInt(document.getElementById('ttw-cat-default-position').value) || 0;
+            const defaultDepth = parseInt(document.getElementById('ttw-cat-default-depth').value) || 4;
+            const defaultOrder = parseInt(document.getElementById('ttw-cat-default-order').value) || 100;
+            const autoIncrementOrder = document.getElementById('ttw-cat-auto-increment').checked;
 
             const keywordsExample = keywordsStr ? keywordsStr.split(/[,，]/).map(k => k.trim()).filter(k => k) : [];
 
@@ -5291,7 +5418,11 @@ ${pairsContent}
                 isBuiltin: isEdit ? cat.isBuiltin : false,
                 entryExample: entryExample || name + '名称',
                 keywordsExample: keywordsExample.length > 0 ? keywordsExample : [name + '名'],
-                contentGuide: contentGuide || `基于原文的${name}描述`
+                contentGuide: contentGuide || `基于原文的${name}描述`,
+                defaultPosition,
+                defaultDepth,
+                defaultOrder,
+                autoIncrementOrder
             };
 
             if (isEdit) {
@@ -5300,10 +5431,19 @@ ${pairsContent}
                 customWorldbookCategories.push(newCat);
             }
 
+            // 同步更新 categoryDefaultConfig
+            setCategoryDefaultConfig(name, {
+                position: defaultPosition,
+                depth: defaultDepth,
+                order: defaultOrder,
+                autoIncrementOrder
+            });
+
             await saveCustomCategories();
             renderCategoriesList();
             modal.remove();
         });
+
     }
 
     // ========== 新增：默认世界书条目UI ==========
@@ -5540,7 +5680,7 @@ ${pairsContent}
         helpModal.innerHTML = `
             <div class="ttw-modal" style="max-width:650px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">❓ TXT转世界书 v2.9.6  帮助</span>
+                    <span class="ttw-modal-title">❓ TXT转世界书 v2.9.7  帮助</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
                 <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
@@ -5549,7 +5689,7 @@ ${pairsContent}
                         <p style="color:#ccc;line-height:1.6;margin:0;">将TXT小说转换为SillyTavern世界书格式，自动提取角色、地点、组织等信息。</p>
                     </div>
                     <div style="margin-bottom:16px;">
-                        <h4 style="color:#9b59b6;margin:0 0 10px;">🏷️ v2.9.6  更新</h4>
+                        <h4 style="color:#9b59b6;margin:0 0 10px;">🏷️ v2.9.7  更新</h4>
                         <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
                             <li><strong>🔍 查找功能</strong>：查找处理结果中的特定字符并高亮</li>
                             <li><strong>🔄 批量替换</strong>：替换所有处理结果中的词语</li>
@@ -7496,5 +7636,5 @@ ${pairsContent}
         getDefaultWorldbookEntriesUI: () => defaultWorldbookEntriesUI
     };
 
-    console.log('📚 TxtToWorldbook v2.9.6 已加载');
+    console.log('📚 TxtToWorldbook v2.9.7 已加载');
 })();
