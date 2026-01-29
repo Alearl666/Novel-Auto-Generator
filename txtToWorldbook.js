@@ -2551,9 +2551,12 @@ ${generateDynamicJsonTemplate()}
             ? stData.entries
             : Object.values(stData.entries);
 
+        const usedNames = {};
+
         for (const entry of entriesArray) {
             if (!entry || typeof entry !== 'object') continue;
 
+            // ===== 【只改这部分：分类解析逻辑】=====
             let category = '未分类';
             let name = '';
 
@@ -2568,7 +2571,7 @@ ${generateDynamicJsonTemplate()}
                 }
             }
 
-            // comment解析不出来，再用group
+            // comment解析不出来，用group（去掉_后缀）
             if (category === '未分类' && entry.group) {
                 const underscoreIndex = entry.group.indexOf('_');
                 if (underscoreIndex > 0) {
@@ -2581,14 +2584,24 @@ ${generateDynamicJsonTemplate()}
             if (!name) {
                 name = `条目_${entry.uid || Math.random().toString(36).substr(2, 9)}`;
             }
+            // ===== 分类解析结束 =====
 
             if (!result[category]) {
                 result[category] = {};
+                usedNames[category] = new Set();
             }
 
-            // 【关键修复】不加后缀！直接用原名，允许后续覆盖或合并处理
-            // 如果导入JSON内部有重复，后面的会覆盖前面的（这是合理的）
-            result[category][name] = {
+            // ===== 【保留原代码的后缀逻辑】=====
+            let finalName = name;
+            let counter = 1;
+            while (usedNames[category].has(finalName)) {
+                finalName = `${name}_${counter}`;
+                counter++;
+            }
+            usedNames[category].add(finalName);
+            // ===== 后缀逻辑结束 =====
+
+            result[category][finalName] = {
                 '关键词': Array.isArray(entry.key) ? entry.key : (entry.key ? [entry.key] : []),
                 '内容': entry.content || ''
             };
