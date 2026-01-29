@@ -7549,24 +7549,29 @@ ${pairsContent}
                 const config = getEntryConfig(category, entryName);
                 const autoIncrement = getCategoryAutoIncrement(category);
                 const baseOrder = getCategoryBaseOrder(category);
+
+                // 计算实际显示顺序
                 let displayOrder = config.order;
                 if (autoIncrement) {
                     const entriesInCategory = Object.keys(entries);
                     const entryIndex = entriesInCategory.indexOf(entryName);
                     displayOrder = baseOrder + entryIndex;
                 }
-                html += `<div style="background:#3a3a3a;...
-    <span style="font-size:10px;color:#888;">${getPositionDisplayName(config.position)} | 深度${config.depth} | 顺序${displayOrder}${autoIncrement ? ' ↗' : ''}</span>
 
-                    </div>
-                    <div style="display:none;background:#1c1c1c;padding:12px;">`;
+                html += `<div style="margin:8px;border:1px solid #555;border-radius:6px;overflow:hidden;">
+        <div style="background:#3a3a3a;padding:8px 12px;cursor:pointer;display:flex;justify-content:space-between;border-left:3px solid #3498db;" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+            <span style="display:flex;align-items:center;gap:6px;">📄 ${entryName}<button class="ttw-entry-config-btn ttw-config-btn" data-category="${category}" data-entry="${entryName}" title="配置位置/深度/顺序" onclick="event.stopPropagation();">⚙️</button></span>
+            <span style="font-size:10px;color:#888;">${getPositionDisplayName(config.position)} | 深度${config.depth} | 顺序${displayOrder}${autoIncrement ? ' ↗' : ''}</span>
+        </div>
+        <div style="display:none;background:#1c1c1c;padding:12px;">`;
+
                 if (entry && typeof entry === 'object') {
                     if (entry['关键词']) {
                         const keywords = Array.isArray(entry['关键词']) ? entry['关键词'].join(', ') : entry['关键词'];
                         html += `<div style="margin-bottom:8px;padding:8px;background:#252525;border-left:3px solid #9b59b6;border-radius:4px;">
-                            <div style="color:#9b59b6;font-size:11px;margin-bottom:4px;">🔑 关键词</div>
-                            <div style="font-size:13px;">${keywords}</div>
-                        </div>`;
+                <div style="color:#9b59b6;font-size:11px;margin-bottom:4px;">🔑 关键词</div>
+                <div style="font-size:13px;">${keywords}</div>
+            </div>`;
                     }
                     if (entry['内容']) {
                         let content = String(entry['内容']).replace(/</g, '<').replace(/>/g, '>').replace(/\*\*(.+?)\*\*/g, '<strong style="color:#3498db;">$1</strong>').replace(/\n/g, '<br>');
@@ -7576,9 +7581,9 @@ ${pairsContent}
                             content = content.replace(regex, `<span style="background:#f1c40f;color:#000;padding:1px 2px;border-radius:2px;">${searchHighlightKeyword}</span>`);
                         }
                         html += `<div style="padding:8px;background:#252525;border-left:3px solid #27ae60;border-radius:4px;line-height:1.6;">
-                            <div style="color:#27ae60;font-size:11px;margin-bottom:4px;">📝 内容</div>
-                            <div style="font-size:13px;">${content}</div>
-                        </div>`;
+                <div style="color:#27ae60;font-size:11px;margin-bottom:4px;">📝 内容</div>
+                <div style="font-size:13px;">${content}</div>
+            </div>`;
                     }
                 }
                 html += `</div></div>`;
