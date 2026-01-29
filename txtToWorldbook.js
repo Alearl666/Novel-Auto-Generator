@@ -2556,33 +2556,31 @@ ${generateDynamicJsonTemplate()}
         for (const entry of entriesArray) {
             if (!entry || typeof entry !== 'object') continue;
 
-            // 【核心修改】优先从comment解析分类
             let category = '未分类';
             let name = '';
 
+            // 优先从comment解析："分类名 - 条目名"
             if (entry.comment) {
-                // comment格式："分类名 - 条目名"
                 const parts = entry.comment.split(' - ');
                 if (parts.length >= 2) {
-                    category = parts[0].trim();  // 取第一部分作为分类
-                    name = parts.slice(1).join(' - ').trim();  // 剩余部分作为名称
+                    category = parts[0].trim();
+                    name = parts.slice(1).join(' - ').trim();
                 } else {
                     name = entry.comment.trim();
                 }
             }
 
-            // 如果comment解析不出分类，再用group
+            // comment解析不出来，再用group（但要去掉后缀）
             if (category === '未分类' && entry.group) {
-                // 处理 "分类_条目名" 格式的group
-                const groupParts = entry.group.split('_');
-                if (groupParts.length >= 2) {
-                    category = groupParts[0];  // 取下划线前的部分作为分类
+                // group可能是 "剧情大纲_第2章" 格式，只取下划线前第一部分
+                const underscoreIndex = entry.group.indexOf('_');
+                if (underscoreIndex > 0) {
+                    category = entry.group.substring(0, underscoreIndex);
                 } else {
                     category = entry.group;
                 }
             }
 
-            // 如果还没名字，生成一个
             if (!name) {
                 name = `条目_${entry.uid || Math.random().toString(36).substr(2, 9)}`;
             }
@@ -2592,7 +2590,6 @@ ${generateDynamicJsonTemplate()}
                 usedNames[category] = new Set();
             }
 
-            // 处理重名
             let finalName = name;
             let counter = 1;
             while (usedNames[category].has(finalName)) {
@@ -2607,9 +2604,10 @@ ${generateDynamicJsonTemplate()}
             };
         }
 
-        console.log(`ST格式转换完成: ${Object.keys(result).length} 个分类, ${Object.values(result).reduce((sum, cat) => sum + Object.keys(cat).length, 0)} 个条目`);
+        console.log(`ST格式转换完成: ${Object.keys(result).length} 个分类`);
         return result;
     }
+
 
 
     function findDuplicateEntries(existing, imported) {
