@@ -2551,16 +2551,13 @@ ${generateDynamicJsonTemplate()}
             ? stData.entries
             : Object.values(stData.entries);
 
-        const usedNames = {};
-
         for (const entry of entriesArray) {
             if (!entry || typeof entry !== 'object') continue;
 
-            // ===== 【只改这部分：分类解析逻辑】=====
             let category = '未分类';
             let name = '';
 
-            // 优先从comment解析："分类名 - 条目名"
+            // 从comment解析："分类名 - 条目名"
             if (entry.comment) {
                 const parts = entry.comment.split(' - ');
                 if (parts.length >= 2) {
@@ -2571,7 +2568,7 @@ ${generateDynamicJsonTemplate()}
                 }
             }
 
-            // comment解析不出来，用group（去掉_后缀）
+            // comment解析不出来，用group
             if (category === '未分类' && entry.group) {
                 const underscoreIndex = entry.group.indexOf('_');
                 if (underscoreIndex > 0) {
@@ -2584,32 +2581,35 @@ ${generateDynamicJsonTemplate()}
             if (!name) {
                 name = `条目_${entry.uid || Math.random().toString(36).substr(2, 9)}`;
             }
-            // ===== 分类解析结束 =====
 
             if (!result[category]) {
                 result[category] = {};
-                usedNames[category] = new Set();
             }
 
-            // ===== 【保留原代码的后缀逻辑】=====
-            let finalName = name;
-            let counter = 1;
-            while (usedNames[category].has(finalName)) {
-                finalName = `${name}_${counter}`;
-                counter++;
-            }
-            usedNames[category].add(finalName);
-            // ===== 后缀逻辑结束 =====
+            const newKeywords = Array.isArray(entry.key) ? entry.key : (entry.key ? [entry.key] : []);
+            const newContent = entry.content || '';
 
-            result[category][finalName] = {
-                '关键词': Array.isArray(entry.key) ? entry.key : (entry.key ? [entry.key] : []),
-                '内容': entry.content || ''
-            };
+            // 【修复】如果导入数据内部有同名条目，先内部合并
+            if (result[category][name]) {
+                const existing = result[category][name];
+                // 合并关键词（去重）
+                existing['关键词'] = [...new Set([...existing['关键词'], ...newKeywords])];
+                // 合并内容（如果新内容不是已有内容的子串）
+                if (newContent && !existing['内容'].includes(newContent.substring(0, 50))) {
+                    existing['内容'] = existing['内容'] + '\n\n---\n\n' + newContent;
+                }
+            } else {
+                result[category][name] = {
+                    '关键词': newKeywords,
+                    '内容': newContent
+                };
+            }
         }
 
         console.log(`ST格式转换完成: ${Object.values(result).reduce((sum, cat) => sum + Object.keys(cat).length, 0)} 个条目`);
         return result;
     }
+
 
 
 
