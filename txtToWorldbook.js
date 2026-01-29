@@ -2517,9 +2517,13 @@ ${generateDynamicJsonTemplate()}
                 const importedData = JSON.parse(content);
 
                 let worldbookToMerge = {};
+                let internalDuplicates = [];
 
                 if (importedData.entries) {
-                    worldbookToMerge = convertSTFormatToInternal(importedData);
+                    // ST格式，需要检测内部重复
+                    const result = convertSTFormatToInternal(importedData, true);
+                    worldbookToMerge = result.worldbook;
+                    internalDuplicates = result.duplicates;
                 } else if (importedData.merged) {
                     worldbookToMerge = importedData.merged;
                 } else {
@@ -2529,10 +2533,11 @@ ${generateDynamicJsonTemplate()}
                 pendingImportData = {
                     worldbook: worldbookToMerge,
                     fileName: file.name,
-                    timestamp: Date.now()
+                    timestamp: Date.now(),
+                    internalDuplicates: internalDuplicates
                 };
 
-                showMergeOptionsModal(worldbookToMerge, file.name);
+                showMergeOptionsModal(worldbookToMerge, file.name, internalDuplicates);
 
             } catch (error) {
                 console.error('导入失败:', error);
@@ -2543,9 +2548,12 @@ ${generateDynamicJsonTemplate()}
         input.click();
     }
 
-    function convertSTFormatToInternal(stData) {
+
+    function convertSTFormatToInternal(stData, collectDuplicates = false) {
         const result = {};
-        if (!stData.entries) return result;
+        const internalDuplicates = []; // 记录内部重复
+
+        if (!stData.entries) return collectDuplicates ? { worldbook: result, duplicates: internalDuplicates } : result;
 
         const entriesArray = Array.isArray(stData.entries)
             ? stData.entries
@@ -2586,29 +2594,32 @@ ${generateDynamicJsonTemplate()}
                 result[category] = {};
             }
 
-            const newKeywords = Array.isArray(entry.key) ? entry.key : (entry.key ? [entry.key] : []);
-            const newContent = entry.content || '';
+            const newEntry = {
+                '关键词': Array.isArray(entry.key) ? entry.key : (entry.key ? [entry.key] : []),
+                '内容': entry.content || ''
+            };
 
-            // 【修复】如果导入数据内部有同名条目，先内部合并
+            // 【关键】如果已存在同名条目，记录为内部重复
             if (result[category][name]) {
-                const existing = result[category][name];
-                // 合并关键词（去重）
-                existing['关键词'] = [...new Set([...existing['关键词'], ...newKeywords])];
-                // 合并内容（如果新内容不是已有内容的子串）
-                if (newContent && !existing['内容'].includes(newContent.substring(0, 50))) {
-                    existing['内容'] = existing['内容'] + '\n\n---\n\n' + newContent;
-                }
+                internalDuplicates.push({
+                    category,
+                    name,
+                    existing: result[category][name],  // 第一个遇到的
+                    imported: newEntry                  // 后面遇到的
+                });
             } else {
-                result[category][name] = {
-                    '关键词': newKeywords,
-                    '内容': newContent
-                };
+                result[category][name] = newEntry;
             }
         }
 
-        console.log(`ST格式转换完成: ${Object.values(result).reduce((sum, cat) => sum + Object.keys(cat).length, 0)} 个条目`);
+        console.log(`ST格式转换完成: ${Object.values(result).reduce((sum, cat) => sum + Object.keys(cat).length, 0)} 个条目, ${internalDuplicates.length} 个内部重复`);
+
+        if (collectDuplicates) {
+            return { worldbook: result, duplicates: internalDuplicates };
+        }
         return result;
     }
+
 
 
 
@@ -2659,10 +2670,11 @@ ${generateDynamicJsonTemplate()}
         return grouped;
     }
 
-    function showMergeOptionsModal(importedWorldbook, fileName) {
+    function showMergeOptionsModal(importedWorldbook, fileName, internalDuplicates = []) {
         if (!importedWorldbook && pendingImportData) {
             importedWorldbook = pendingImportData.worldbook;
             fileName = pendingImportData.fileName;
+            internalDuplicates = pendingImportData.internalDuplicates || [];
         }
 
         if (!importedWorldbook) {
@@ -2673,46 +2685,53 @@ ${generateDynamicJsonTemplate()}
         const existingModal = document.getElementById('ttw-merge-modal');
         if (existingModal) existingModal.remove();
 
-        const duplicates = findDuplicateEntries(generatedWorldbook, importedWorldbook);
+        // 与现有世界书的重复检测
+        const duplicatesWithExisting = findDuplicateEntries(generatedWorldbook, importedWorldbook);
         const newEntries = findNewEntries(generatedWorldbook, importedWorldbook);
 
+        // 合并：内部重复 + 与现有世界书的重复
+        const allDuplicates = [...internalDuplicates, ...duplicatesWithExisting];
+
         const groupedNew = groupEntriesByCategory(newEntries);
-        const groupedDup = groupEntriesByCategory(duplicates);
+        const groupedDup = groupEntriesByCategory(allDuplicates);
 
         const modal = document.createElement('div');
         modal.id = 'ttw-merge-modal';
         modal.className = 'ttw-modal-container';
 
+        // 计算条目总数
+        const totalEntries = Object.values(importedWorldbook).reduce((sum, cat) => sum + Object.keys(cat).length, 0);
+
         let newEntriesListHtml = '';
         if (newEntries.length > 0) {
             newEntriesListHtml = `
-                <div style="margin-bottom:16px;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                        <span style="font-weight:bold;color:#27ae60;">📥 新条目 (${newEntries.length})</span>
-                        <label style="font-size:12px;"><input type="checkbox" id="ttw-select-all-new" checked> 全选</label>
-                    </div>
-                    <div style="max-height:200px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:8px;">
-            `;
+            <div style="margin-bottom:16px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                    <span style="font-weight:bold;color:#27ae60;">📥 新条目 (${newEntries.length})</span>
+                    <label style="font-size:12px;"><input type="checkbox" id="ttw-select-all-new" checked> 全选</label>
+                </div>
+                <div style="max-height:200px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:8px;">
+        `;
 
             for (const category in groupedNew) {
                 const items = groupedNew[category];
                 newEntriesListHtml += `
-                    <div class="ttw-merge-category-group" style="margin-bottom:10px;">
-                        <label style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:rgba(39,174,96,0.2);border-radius:4px;cursor:pointer;font-weight:bold;font-size:12px;">
-                            <input type="checkbox" class="ttw-new-category-cb" data-category="${category}" checked>
-                            <span style="color:#27ae60;">${category}</span>
-                            <span style="color:#888;font-weight:normal;">(${items.length})</span>
-                        </label>
-                        <div style="margin-left:16px;margin-top:4px;">
-                `;
+                <div class="ttw-merge-category-group" style="margin-bottom:10px;">
+                    <label style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:rgba(39,174,96,0.2);border-radius:4px;cursor:pointer;font-weight:bold;font-size:12px;">
+                        <input type="checkbox" class="ttw-new-category-cb" data-category="${category}" checked>
+                        <span style="color:#27ae60;">${category}</span>
+                        <span style="color:#888;font-weight:normal;">(${items.length})</span>
+                    </label>
+                    <div style="margin-left:16px;margin-top:4px;">
+            `;
                 items.forEach((item, localIdx) => {
                     const globalIdx = newEntries.indexOf(item);
                     newEntriesListHtml += `
-                        <label style="display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:11px;cursor:pointer;">
-                            <input type="checkbox" class="ttw-new-entry-cb" data-index="${globalIdx}" data-category="${category}" checked>
-                            <span>${item.name}</span>
-                        </label>
-                    `;
+                    <label style="display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:11px;cursor:pointer;">
+                        <input type="checkbox" class="ttw-new-entry-cb" data-index="${globalIdx}" data-category="${category}" checked>
+                        <span>${item.name}</span>
+                    </label>
+                `;
                 });
                 newEntriesListHtml += `</div></div>`;
             }
@@ -2720,125 +2739,134 @@ ${generateDynamicJsonTemplate()}
         }
 
         let dupEntriesListHtml = '';
-        if (duplicates.length > 0) {
+        if (allDuplicates.length > 0) {
             dupEntriesListHtml = `
-                <div style="margin-bottom:16px;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                        <span style="font-weight:bold;color:#e67e22;">🔀 重复条目 (${duplicates.length})</span>
-                        <label style="font-size:12px;"><input type="checkbox" id="ttw-select-all-dup" checked> 全选</label>
-                    </div>
-                    <div style="max-height:200px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:8px;">
-            `;
+            <div style="margin-bottom:16px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                    <span style="font-weight:bold;color:#e67e22;">🔀 重复条目 (${allDuplicates.length})</span>
+                    <label style="font-size:12px;"><input type="checkbox" id="ttw-select-all-dup" checked> 全选</label>
+                </div>
+                <div style="max-height:200px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:8px;">
+        `;
 
             for (const category in groupedDup) {
                 const items = groupedDup[category];
                 dupEntriesListHtml += `
-                    <div class="ttw-merge-category-group" style="margin-bottom:10px;">
-                        <label style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:rgba(230,126,34,0.2);border-radius:4px;cursor:pointer;font-weight:bold;font-size:12px;">
-                            <input type="checkbox" class="ttw-dup-category-cb" data-category="${category}" checked>
-                            <span style="color:#e67e22;">${category}</span>
-                            <span style="color:#888;font-weight:normal;">(${items.length})</span>
-                        </label>
-                        <div style="margin-left:16px;margin-top:4px;">
-                `;
+                <div class="ttw-merge-category-group" style="margin-bottom:10px;">
+                    <label style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:rgba(230,126,34,0.2);border-radius:4px;cursor:pointer;font-weight:bold;font-size:12px;">
+                        <input type="checkbox" class="ttw-dup-category-cb" data-category="${category}" checked>
+                        <span style="color:#e67e22;">${category}</span>
+                        <span style="color:#888;font-weight:normal;">(${items.length})</span>
+                    </label>
+                    <div style="margin-left:16px;margin-top:4px;">
+            `;
                 items.forEach((item, localIdx) => {
-                    const globalIdx = duplicates.indexOf(item);
+                    const globalIdx = allDuplicates.indexOf(item);
+                    const isInternal = internalDuplicates.includes(item);
+                    const badge = isInternal ? '<span style="font-size:9px;color:#9b59b6;margin-left:4px;">(内部重复)</span>' : '';
                     dupEntriesListHtml += `
-                        <label style="display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:11px;cursor:pointer;">
-                            <input type="checkbox" class="ttw-dup-entry-cb" data-index="${globalIdx}" data-category="${category}" checked>
-                            <span>${item.name}</span>
-                        </label>
-                    `;
+                    <label style="display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:11px;cursor:pointer;">
+                        <input type="checkbox" class="ttw-dup-entry-cb" data-index="${globalIdx}" data-category="${category}" checked>
+                        <span>${item.name}${badge}</span>
+                    </label>
+                `;
                 });
                 dupEntriesListHtml += `</div></div>`;
             }
             dupEntriesListHtml += `</div></div>`;
         }
 
+        const internalDupCount = internalDuplicates.length;
+        const externalDupCount = duplicatesWithExisting.length;
+
         modal.innerHTML = `
-            <div class="ttw-modal" style="max-width:800px;">
-                <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📥 导入世界书: ${fileName}</span>
-                    <button class="ttw-modal-close" type="button">✕</button>
-                </div>
-                <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
-                    <div style="margin-bottom:16px;padding:12px;background:rgba(52,152,219,0.15);border-radius:8px;">
-                        <div style="font-weight:bold;color:#3498db;margin-bottom:8px;">📊 导入分析</div>
-                        <div style="font-size:13px;color:#ccc;">
-                            • 新条目: <span style="color:#27ae60;font-weight:bold;">${newEntries.length}</span> 个<br>
-                            • 重复条目: <span style="color:#e67e22;font-weight:bold;">${duplicates.length}</span> 个
-                        </div>
-                    </div>
-
-                    ${newEntriesListHtml}
-                    ${dupEntriesListHtml}
-
-                    ${duplicates.length > 0 ? `
-                    <div style="margin-bottom:16px;">
-                        <div style="font-weight:bold;color:#e67e22;margin-bottom:10px;">🔀 重复条目合并方式</div>
-                        <div style="display:flex;flex-direction:column;gap:8px;">
-                            <label class="ttw-merge-option">
-                                <input type="radio" name="merge-mode" value="ai" checked>
-                                <div>
-                                    <div style="font-weight:bold;">🤖 AI智能合并 (支持并发)</div>
-                                    <div style="font-size:11px;color:#888;">使用AI合并相同名称的条目，保留所有信息</div>
-                                </div>
-                            </label>
-                            <label class="ttw-merge-option">
-                                <input type="radio" name="merge-mode" value="replace">
-                                <div>
-                                    <div style="font-weight:bold;">📝 覆盖原有</div>
-                                    <div style="font-size:11px;color:#888;">用导入的内容直接覆盖原有条目</div>
-                                </div>
-                            </label>
-                            <label class="ttw-merge-option">
-                                <input type="radio" name="merge-mode" value="keep">
-                                <div>
-                                    <div style="font-weight:bold;">🔒 保留原有</div>
-                                    <div style="font-size:11px;color:#888;">保留原有条目，跳过重复的</div>
-                                </div>
-                            </label>
-                            <label class="ttw-merge-option">
-                                <input type="radio" name="merge-mode" value="rename">
-                                <div>
-                                    <div style="font-weight:bold;">📋 重命名添加</div>
-                                    <div style="font-size:11px;color:#888;">将重复条目添加为新名称（如 角色名_导入）</div>
-                                </div>
-                            </label>
-                            <label class="ttw-merge-option">
-                                <input type="radio" name="merge-mode" value="append">
-                                <div>
-                                    <div style="font-weight:bold;">➕ 内容叠加</div>
-                                    <div style="font-size:11px;color:#888;">将新内容追加到原有条目后面</div>
-                                </div>
-                            </label>
-                        </div>
-                    </div>
-
-                    <div id="ttw-ai-merge-options" style="margin-bottom:16px;padding:12px;background:rgba(155,89,182,0.15);border-radius:8px;">
-                        <div style="font-weight:bold;color:#9b59b6;margin-bottom:10px;">🤖 AI合并设置</div>
-                        <div style="margin-bottom:10px;">
-                            <label style="display:flex;align-items:center;gap:8px;font-size:12px;">
-                                <span>并发数:</span>
-                                <input type="number" id="ttw-merge-concurrency" value="${parallelConfig.concurrency}" min="1" max="10" style="width:60px;padding:4px;border:1px solid #555;border-radius:4px;background:rgba(0,0,0,0.3);color:#fff;">
-                            </label>
-                        </div>
-                        <textarea id="ttw-merge-prompt" rows="4" style="width:100%;padding:10px;border:1px solid #555;border-radius:6px;background:rgba(0,0,0,0.3);color:#fff;font-size:12px;resize:vertical;" placeholder="留空使用默认提示词...">${settings.customMergePrompt || ''}</textarea>
-                        <div style="margin-top:8px;">
-                            <button class="ttw-btn ttw-btn-small" id="ttw-preview-merge-prompt">👁️ 预览默认提示词</button>
-                        </div>
-                    </div>
-                    ` : ''}
-                </div>
-                <div class="ttw-modal-footer">
-                    <button class="ttw-btn" id="ttw-cancel-merge">取消</button>
-                    <button class="ttw-btn ttw-btn-primary" id="ttw-confirm-merge">✅ 开始合并</button>
-                </div>
+        <div class="ttw-modal" style="max-width:800px;">
+            <div class="ttw-modal-header">
+                <span class="ttw-modal-title">📥 导入世界书: ${fileName}</span>
+                <button class="ttw-modal-close" type="button">✕</button>
             </div>
-        `;
+            <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
+                <div style="margin-bottom:16px;padding:12px;background:rgba(52,152,219,0.15);border-radius:8px;">
+                    <div style="font-weight:bold;color:#3498db;margin-bottom:8px;">📊 导入分析</div>
+                    <div style="font-size:13px;color:#ccc;">
+                        • 总条目: <span style="color:#3498db;font-weight:bold;">${totalEntries}</span> 个<br>
+                        • 新条目: <span style="color:#27ae60;font-weight:bold;">${newEntries.length}</span> 个<br>
+                        • 重复条目: <span style="color:#e67e22;font-weight:bold;">${allDuplicates.length}</span> 个
+                        ${internalDupCount > 0 ? `<span style="color:#9b59b6;font-size:11px;">(其中 ${internalDupCount} 个为文件内部重复)</span>` : ''}
+                        ${externalDupCount > 0 ? `<span style="color:#888;font-size:11px;">(${externalDupCount} 个与现有世界书重复)</span>` : ''}
+                    </div>
+                </div>
+
+                ${newEntriesListHtml}
+                ${dupEntriesListHtml}
+
+                ${allDuplicates.length > 0 ? `
+                <div style="margin-bottom:16px;">
+                    <div style="font-weight:bold;color:#e67e22;margin-bottom:10px;">🔀 重复条目处理方式</div>
+                    <div style="display:flex;flex-direction:column;gap:8px;">
+                        <label class="ttw-merge-option">
+                            <input type="radio" name="merge-mode" value="ai" checked>
+                            <div>
+                                <div style="font-weight:bold;">🤖 AI智能合并 (支持并发)</div>
+                                <div style="font-size:11px;color:#888;">使用AI合并相同名称的条目，保留所有信息</div>
+                            </div>
+                        </label>
+                        <label class="ttw-merge-option">
+                            <input type="radio" name="merge-mode" value="replace">
+                            <div>
+                                <div style="font-weight:bold;">📝 使用后者覆盖</div>
+                                <div style="font-size:11px;color:#888;">用后面的条目覆盖前面的条目</div>
+                            </div>
+                        </label>
+                        <label class="ttw-merge-option">
+                            <input type="radio" name="merge-mode" value="keep">
+                            <div>
+                                <div style="font-weight:bold;">🔒 保留前者</div>
+                                <div style="font-size:11px;color:#888;">保留第一个条目，丢弃后面的重复条目</div>
+                            </div>
+                        </label>
+                        <label class="ttw-merge-option">
+                            <input type="radio" name="merge-mode" value="rename">
+                            <div>
+                                <div style="font-weight:bold;">📋 重命名保留</div>
+                                <div style="font-size:11px;color:#888;">将重复条目添加为新名称（如 角色名_2）</div>
+                            </div>
+                        </label>
+                        <label class="ttw-merge-option">
+                            <input type="radio" name="merge-mode" value="append">
+                            <div>
+                                <div style="font-weight:bold;">➕ 内容叠加</div>
+                                <div style="font-size:11px;color:#888;">将重复条目的内容追加到原条目后面</div>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+
+                <div id="ttw-ai-merge-options" style="margin-bottom:16px;padding:12px;background:rgba(155,89,182,0.15);border-radius:8px;">
+                    <div style="font-weight:bold;color:#9b59b6;margin-bottom:10px;">🤖 AI合并设置</div>
+                    <div style="margin-bottom:10px;">
+                        <label style="display:flex;align-items:center;gap:8px;font-size:12px;">
+                            <span>并发数:</span>
+                            <input type="number" id="ttw-merge-concurrency" value="${parallelConfig.concurrency}" min="1" max="10" style="width:60px;padding:4px;border:1px solid #555;border-radius:4px;background:rgba(0,0,0,0.3);color:#fff;">
+                        </label>
+                    </div>
+                    <textarea id="ttw-merge-prompt" rows="4" style="width:100%;padding:10px;border:1px solid #555;border-radius:6px;background:rgba(0,0,0,0.3);color:#fff;font-size:12px;resize:vertical;" placeholder="留空使用默认提示词...">${settings.customMergePrompt || ''}</textarea>
+                    <div style="margin-top:8px;">
+                        <button class="ttw-btn ttw-btn-small" id="ttw-preview-merge-prompt">👁️ 预览默认提示词</button>
+                    </div>
+                </div>
+                ` : ''}
+            </div>
+            <div class="ttw-modal-footer">
+                <button class="ttw-btn" id="ttw-cancel-merge">取消</button>
+                <button class="ttw-btn ttw-btn-primary" id="ttw-confirm-merge">✅ 确认导入</button>
+            </div>
+        </div>
+    `;
 
         document.body.appendChild(modal);
 
+        // 事件绑定
         const selectAllNewCb = modal.querySelector('#ttw-select-all-new');
         if (selectAllNewCb) {
             selectAllNewCb.addEventListener('change', (e) => {
@@ -2873,32 +2901,6 @@ ${generateDynamicJsonTemplate()}
             });
         });
 
-        modal.querySelectorAll('.ttw-new-entry-cb').forEach(cb => {
-            cb.addEventListener('change', () => {
-                const category = cb.dataset.category;
-                const allInCategory = modal.querySelectorAll(`.ttw-new-entry-cb[data-category="${category}"]`);
-                const checkedInCategory = modal.querySelectorAll(`.ttw-new-entry-cb[data-category="${category}"]:checked`);
-                const categoryCb = modal.querySelector(`.ttw-new-category-cb[data-category="${category}"]`);
-                if (categoryCb) {
-                    categoryCb.checked = checkedInCategory.length === allInCategory.length;
-                    categoryCb.indeterminate = checkedInCategory.length > 0 && checkedInCategory.length < allInCategory.length;
-                }
-            });
-        });
-
-        modal.querySelectorAll('.ttw-dup-entry-cb').forEach(cb => {
-            cb.addEventListener('change', () => {
-                const category = cb.dataset.category;
-                const allInCategory = modal.querySelectorAll(`.ttw-dup-entry-cb[data-category="${category}"]`);
-                const checkedInCategory = modal.querySelectorAll(`.ttw-dup-entry-cb[data-category="${category}"]:checked`);
-                const categoryCb = modal.querySelector(`.ttw-dup-category-cb[data-category="${category}"]`);
-                if (categoryCb) {
-                    categoryCb.checked = checkedInCategory.length === allInCategory.length;
-                    categoryCb.indeterminate = checkedInCategory.length > 0 && checkedInCategory.length < allInCategory.length;
-                }
-            });
-        });
-
         modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
         modal.querySelector('#ttw-cancel-merge').addEventListener('click', () => modal.remove());
         modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
@@ -2919,7 +2921,7 @@ ${generateDynamicJsonTemplate()}
         }
 
         modal.querySelector('#ttw-confirm-merge').addEventListener('click', async () => {
-            const mergeMode = modal.querySelector('input[name="merge-mode"]:checked')?.value || 'ai';
+            const mergeMode = modal.querySelector('input[name="merge-mode"]:checked')?.value || 'keep';
             const customPrompt = modal.querySelector('#ttw-merge-prompt')?.value || '';
             const mergeConcurrency = parseInt(modal.querySelector('#ttw-merge-concurrency')?.value) || parallelConfig.concurrency;
             settings.customMergePrompt = customPrompt;
@@ -2928,13 +2930,14 @@ ${generateDynamicJsonTemplate()}
             const selectedNewIndices = [...modal.querySelectorAll('.ttw-new-entry-cb:checked')].map(cb => parseInt(cb.dataset.index));
             const selectedDupIndices = [...modal.querySelectorAll('.ttw-dup-entry-cb:checked')].map(cb => parseInt(cb.dataset.index));
 
-            const selectedNew = selectedNewIndices.map(i => newEntries[i]);
-            const selectedDup = selectedDupIndices.map(i => duplicates[i]);
+            const selectedNew = selectedNewIndices.map(i => newEntries[i]).filter(Boolean);
+            const selectedDup = selectedDupIndices.map(i => allDuplicates[i]).filter(Boolean);
 
             modal.remove();
-            await performMerge(importedWorldbook, selectedDup, selectedNew, mergeMode, customPrompt, mergeConcurrency);
+            await performMergeInternal(importedWorldbook, selectedDup, selectedNew, mergeMode, customPrompt, mergeConcurrency);
         });
     }
+
 
     async function performMerge(importedWorldbook, duplicates, newEntries, mergeMode, customPrompt, concurrency = 3) {
         showProgressSection(true);
@@ -3021,6 +3024,116 @@ ${generateDynamicJsonTemplate()}
         updateWorldbookPreview();
         alert('世界书合并完成！');
     }
+    async function performMergeInternal(importedWorldbook, duplicates, newEntries, mergeMode, customPrompt, concurrency = 3) {
+        showProgressSection(true);
+        isProcessingStopped = false;
+        updateProgress(0, '开始处理...');
+        updateStreamContent('', true);
+        updateStreamContent(`🔀 开始处理世界书\n处理模式: ${mergeMode}\n并发数: ${concurrency}\n${'='.repeat(50)}\n`);
+
+        // 先把导入的世界书作为基础
+        const resultWorldbook = JSON.parse(JSON.stringify(importedWorldbook));
+
+        // 添加新条目到现有世界书
+        for (const item of newEntries) {
+            if (!generatedWorldbook[item.category]) generatedWorldbook[item.category] = {};
+            generatedWorldbook[item.category][item.name] = item.entry;
+        }
+        updateStreamContent(`✅ 添加了 ${newEntries.length} 个新条目到现有世界书\n`);
+
+        if (duplicates.length > 0) {
+            updateStreamContent(`\n🔀 处理 ${duplicates.length} 个重复条目...\n`);
+
+            if (mergeMode === 'ai') {
+                const semaphore = new Semaphore(concurrency);
+                let completed = 0;
+                let failed = 0;
+
+                const processOne = async (dup, index) => {
+                    if (isProcessingStopped) return;
+
+                    await semaphore.acquire();
+                    if (isProcessingStopped) {
+                        semaphore.release();
+                        return;
+                    }
+
+                    try {
+                        updateStreamContent(`📝 [${index + 1}/${duplicates.length}] ${dup.category} - ${dup.name}\n`);
+                        const mergedEntry = await mergeEntriesWithAI(dup.existing, dup.imported, customPrompt);
+
+                        // 更新到结果世界书
+                        if (!resultWorldbook[dup.category]) resultWorldbook[dup.category] = {};
+                        resultWorldbook[dup.category][dup.name] = mergedEntry;
+
+                        completed++;
+                        updateProgress((completed / duplicates.length) * 100, `AI合并中 (${completed}/${duplicates.length})`);
+                        updateStreamContent(`   ✅ 完成\n`);
+                    } catch (error) {
+                        failed++;
+                        updateStreamContent(`   ❌ 失败: ${error.message}\n`);
+                    } finally {
+                        semaphore.release();
+                    }
+                };
+
+                await Promise.allSettled(duplicates.map((dup, i) => processOne(dup, i)));
+                updateStreamContent(`\n📦 AI合并完成: 成功 ${completed}, 失败 ${failed}\n`);
+
+            } else {
+                for (let i = 0; i < duplicates.length; i++) {
+                    if (isProcessingStopped) break;
+
+                    const dup = duplicates[i];
+                    updateProgress(((i + 1) / duplicates.length) * 100, `处理: [${dup.category}] ${dup.name}`);
+                    updateStreamContent(`\n📝 [${i + 1}/${duplicates.length}] ${dup.category} - ${dup.name}\n`);
+
+                    if (!resultWorldbook[dup.category]) resultWorldbook[dup.category] = {};
+
+                    if (mergeMode === 'replace') {
+                        resultWorldbook[dup.category][dup.name] = dup.imported;
+                        updateStreamContent(`   ✅ 使用后者覆盖\n`);
+                    } else if (mergeMode === 'keep') {
+                        // 保持第一个，不做改动
+                        updateStreamContent(`   ⏭️ 保留前者\n`);
+                    } else if (mergeMode === 'rename') {
+                        let newName = `${dup.name}_2`;
+                        let counter = 2;
+                        while (resultWorldbook[dup.category][newName]) {
+                            counter++;
+                            newName = `${dup.name}_${counter}`;
+                        }
+                        resultWorldbook[dup.category][newName] = dup.imported;
+                        updateStreamContent(`   ✅ 添加为: ${newName}\n`);
+                    } else if (mergeMode === 'append') {
+                        const existing = resultWorldbook[dup.category][dup.name] || dup.existing;
+                        const keywords = [...new Set([...(existing['关键词'] || []), ...(dup.imported['关键词'] || [])])];
+                        const content = (existing['内容'] || '') + '\n\n---\n\n' + (dup.imported['内容'] || '');
+                        resultWorldbook[dup.category][dup.name] = { '关键词': keywords, '内容': content };
+                        updateStreamContent(`   ✅ 内容已叠加\n`);
+                    }
+                }
+            }
+        }
+
+        // 把处理结果合并到现有世界书
+        for (const category in resultWorldbook) {
+            if (!generatedWorldbook[category]) generatedWorldbook[category] = {};
+            for (const name in resultWorldbook[category]) {
+                generatedWorldbook[category][name] = resultWorldbook[category][name];
+            }
+        }
+
+        pendingImportData = null;
+
+        updateProgress(100, '处理完成！');
+        updateStreamContent(`\n${'='.repeat(50)}\n✅ 处理完成！\n`);
+
+        showResultSection(true);
+        updateWorldbookPreview();
+        alert('世界书导入完成！');
+    }
+
 
     async function mergeEntriesWithAI(entryA, entryB, customPrompt) {
         const promptTemplate = customPrompt?.trim() || defaultMergePrompt;
