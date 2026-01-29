@@ -2556,42 +2556,61 @@ ${generateDynamicJsonTemplate()}
         for (const entry of entriesArray) {
             if (!entry || typeof entry !== 'object') continue;
 
-            const group = entry.group || '未分类';
+            // 【核心修改】优先从comment解析分类
+            let category = '未分类';
+            let name = '';
 
-            let name;
             if (entry.comment) {
+                // comment格式："分类名 - 条目名"
                 const parts = entry.comment.split(' - ');
-                if (parts.length > 1) {
-                    name = parts.slice(1).join(' - ').trim();
+                if (parts.length >= 2) {
+                    category = parts[0].trim();  // 取第一部分作为分类
+                    name = parts.slice(1).join(' - ').trim();  // 剩余部分作为名称
                 } else {
                     name = entry.comment.trim();
                 }
-            } else {
+            }
+
+            // 如果comment解析不出分类，再用group
+            if (category === '未分类' && entry.group) {
+                // 处理 "分类_条目名" 格式的group
+                const groupParts = entry.group.split('_');
+                if (groupParts.length >= 2) {
+                    category = groupParts[0];  // 取下划线前的部分作为分类
+                } else {
+                    category = entry.group;
+                }
+            }
+
+            // 如果还没名字，生成一个
+            if (!name) {
                 name = `条目_${entry.uid || Math.random().toString(36).substr(2, 9)}`;
             }
 
-            if (!result[group]) {
-                result[group] = {};
-                usedNames[group] = new Set();
+            if (!result[category]) {
+                result[category] = {};
+                usedNames[category] = new Set();
             }
 
+            // 处理重名
             let finalName = name;
             let counter = 1;
-            while (usedNames[group].has(finalName)) {
+            while (usedNames[category].has(finalName)) {
                 finalName = `${name}_${counter}`;
                 counter++;
             }
-            usedNames[group].add(finalName);
+            usedNames[category].add(finalName);
 
-            result[group][finalName] = {
+            result[category][finalName] = {
                 '关键词': Array.isArray(entry.key) ? entry.key : (entry.key ? [entry.key] : []),
                 '内容': entry.content || ''
             };
         }
 
-        console.log(`ST格式转换完成: ${Object.values(result).reduce((sum, cat) => sum + Object.keys(cat).length, 0)} 个条目`);
+        console.log(`ST格式转换完成: ${Object.keys(result).length} 个分类, ${Object.values(result).reduce((sum, cat) => sum + Object.keys(cat).length, 0)} 个条目`);
         return result;
     }
+
 
     function findDuplicateEntries(existing, imported) {
         const duplicates = [];
