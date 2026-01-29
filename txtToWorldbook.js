@@ -5000,8 +5000,9 @@ ${pairsContent}
                         delayUntilRecursion: false,
                         probability: 100,
                         depth: config.depth !== undefined ? config.depth : 4,
-                        group: category,
-                        groupOverride: true, // 同条目同时触发
+                        comment: `${category} - ${itemName}`,  // 保留comment显示分类名
+                        group: "",  // ← 改成空字符串，让每个条目独立匹配
+                        groupOverride: false,
                         groupOverride: false,
                         groupWeight: 100,
                         // 修复1：明确设置扫描深度，确保能扫到最近的消息
