@@ -55,14 +55,13 @@
             defaultOrder: 100,
             autoIncrementOrder: false
         },
-
         {
             name: "地点",
             enabled: true,
             isBuiltin: true,
             entryExample: "地点真实名称",
             keywordsExample: ["地点名", "别称", "俗称"],
-            contentGuide: "基于原文的地点描述，包含但不限于**名称**:（必须要）、**位置**:、**特征**:、**重要事件**:等（实际嵌套或者排列方式按合理的逻辑）"
+            contentGuide: "基于原文的地点描述，包含但不限于**名称**:（必须要）、**位置**:、**特征**:、**重要事件**:等（实际嵌套或者排列方式按合理的逻辑）",
             defaultPosition: 0,
             defaultDepth: 4,
             defaultOrder: 100,
@@ -74,7 +73,7 @@
             isBuiltin: true,
             entryExample: "组织真实名称",
             keywordsExample: ["组织名", "简称", "代号"],
-            contentGuide: "基于原文的组织描述，包含但不限于**名称**:（必须要）、**性质**:、**成员**:、**目标**:等（实际嵌套或者排列方式按合理的逻辑）"
+            contentGuide: "基于原文的组织描述，包含但不限于**名称**:（必须要）、**性质**:、**成员**:、**目标**:等（实际嵌套或者排列方式按合理的逻辑）",
             defaultPosition: 0,
             defaultDepth: 4,
             defaultOrder: 100,
@@ -86,7 +85,7 @@
             isBuiltin: false,
             entryExample: "道具名称",
             keywordsExample: ["道具名", "别名"],
-            contentGuide: "基于原文的道具描述，包含但不限于**名称**:、**类型**:、**功能**:、**来源**:、**持有者**:等"
+            contentGuide: "基于原文的道具描述，包含但不限于**名称**:、**类型**:、**功能**:、**来源**:、**持有者**:等",
             defaultPosition: 0,
             defaultDepth: 4,
             defaultOrder: 100,
@@ -98,7 +97,7 @@
             isBuiltin: false,
             entryExample: "玩法名称",
             keywordsExample: ["玩法名", "规则名"],
-            contentGuide: "基于原文的玩法/规则描述，包含但不限于**名称**:、**规则说明**:、**参与条件**:、**奖惩机制**:等"
+            contentGuide: "基于原文的玩法/规则描述，包含但不限于**名称**:、**规则说明**:、**参与条件**:、**奖惩机制**:等",
             defaultPosition: 0,
             defaultDepth: 4,
             defaultOrder: 100,
@@ -110,7 +109,7 @@
             isBuiltin: false,
             entryExample: "第X章",
             keywordsExample: ["章节名", "章节号"],
-            contentGuide: "该章节的剧情概要，包含但不限于**章节标题**:、**主要事件**:、**出场角色**:、**关键转折**:、**伏笔线索**:等"
+            contentGuide: "该章节的剧情概要，包含但不限于**章节标题**:、**主要事件**:、**出场角色**:、**关键转折**:、**伏笔线索**:等",
             defaultPosition: 0,
             defaultDepth: 4,
             defaultOrder: 100,
@@ -122,13 +121,14 @@
             isBuiltin: false,
             entryExample: "角色名-内心世界",
             keywordsExample: ["角色名", "内心", "心理"],
-            contentGuide: "角色的内心想法和心理活动，包含但不限于**原文内容**:、**内心独白**:、**情感变化**:、**动机分析**:、**心理矛盾**:等"
+            contentGuide: "角色的内心想法和心理活动，包含但不限于**原文内容**:、**内心独白**:、**情感变化**:、**动机分析**:、**心理矛盾**:等",
             defaultPosition: 0,
             defaultDepth: 4,
             defaultOrder: 100,
             autoIncrementOrder: false
         }
     ];
+
 
     let customWorldbookCategories = JSON.parse(JSON.stringify(DEFAULT_WORLDBOOK_CATEGORIES));
 
@@ -4858,7 +4858,7 @@ ${pairsContent}
                         groupOverride: false,
                         groupWeight: 100,
                         // 修复1：明确设置扫描深度，确保能扫到最近的消息
-                        scanDepth: 10,
+                        scanDepth: null,  // 使用酒馆全局设置
                         // 修复2：关闭全词匹配（中文环境必须关闭！）
                         caseSensitive: false,
                         matchWholeWords: false,
