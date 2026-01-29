@@ -1,6 +1,6 @@
 
 /**
- * TXT转世界书独立模块 v2.9.7
+ * TXT转世界书独立模块 v2.9.8
  * 新增: 查找高亮、批量替换、多选整理分类、条目位置/深度/顺序配置、默认世界书UI化、新增默认勾选2递归选项
  */
 
@@ -5966,56 +5966,147 @@ ${pairsContent}
         helpModal.id = 'ttw-help-modal';
         helpModal.className = 'ttw-modal-container';
         helpModal.innerHTML = `
-            <div class="ttw-modal" style="max-width:650px;">
-                <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">❓ TXT转世界书 v2.9.7  帮助</span>
-                    <button class="ttw-modal-close" type="button">✕</button>
+        <div class="ttw-modal" style="max-width:700px;">
+            <div class="ttw-modal-header">
+                <span class="ttw-modal-title">❓ TXT转世界书 v2.9.7 帮助</span>
+                <button class="ttw-modal-close" type="button">✕</button>
+            </div>
+            <div class="ttw-modal-body" style="max-height:75vh;overflow-y:auto;">
+                <div style="margin-bottom:16px;">
+                    <h4 style="color:#e67e22;margin:0 0 10px;">📌 基本功能</h4>
+                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
+                        <li>将TXT小说转换为SillyTavern世界书格式</li>
+                        <li>自动检测文件编码（UTF-8/GBK/GB2312等）</li>
+                        <li>自动章节检测和智能分块</li>
+                        <li>支持并行/串行两种处理模式</li>
+                    </ul>
                 </div>
-                <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
-                    <div style="margin-bottom:16px;">
-                        <h4 style="color:#e67e22;margin:0 0 10px;">📌 基本功能</h4>
-                        <p style="color:#ccc;line-height:1.6;margin:0;">将TXT小说转换为SillyTavern世界书格式，自动提取角色、地点、组织等信息。</p>
-                    </div>
-                    <div style="margin-bottom:16px;">
-                        <h4 style="color:#9b59b6;margin:0 0 10px;">🏷️ v2.9.7  更新</h4>
-                        <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                            <li><strong>🔍 查找功能</strong>：查找处理结果中的特定字符并高亮</li>
-                            <li><strong>🔄 批量替换</strong>：替换所有处理结果中的词语</li>
-                            <li><strong>🧹 多选整理</strong>：可选择多个分类进行整理</li>
-                            <li><strong>⚙️ 条目配置</strong>：每个条目可配置位置/深度/顺序</li>
-                            <li><strong>📚 默认条目UI</strong>：可视化管理默认世界书条目</li>
-                        </ul>
-                    </div>
-                    <div style="margin-bottom:16px;">
-                        <h4 style="color:#27ae60;margin:0 0 10px;">🔧 API 模式</h4>
-                        <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                            <li><strong>使用酒馆API</strong>：勾选后使用酒馆当前连接的AI</li>
-                            <li><strong>自定义API</strong>：不勾选时，可配置独立的API</li>
-                            <li>支持：Gemini / DeepSeek / OpenAI兼容 / Gemini代理</li>
-                        </ul>
-                    </div>
-                    <div style="margin-bottom:16px;">
-                        <h4 style="color:#3498db;margin:0 0 10px;">✨ 其他功能</h4>
-                        <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                            <li><strong>📝 记忆编辑</strong>：点击章节可查看/编辑/复制</li>
-                            <li><strong>🎲 重Roll功能</strong>：每个记忆可多次生成</li>
-                            <li><strong>📥 合并世界书</strong>：导入已有世界书进行合并</li>
-                            <li><strong>🔵🟢 灯状态</strong>：分类蓝灯(常驻)或绿灯(触发)</li>
-                            <li><strong>🔗 别名合并</strong>：识别同一角色的不同称呼</li>
-                        </ul>
-                    </div>
+
+                <div style="margin-bottom:16px;">
+                    <h4 style="color:#3498db;margin:0 0 10px;">🔧 API模式</h4>
+                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
+                        <li><strong>酒馆API</strong>：使用酒馆当前连接的AI</li>
+                        <li><strong>自定义API</strong>：Gemini / DeepSeek / OpenAI兼容 / Gemini代理</li>
+                        <li>支持拉取模型列表和快速测试</li>
+                    </ul>
                 </div>
-                <div class="ttw-modal-footer">
-                    <button class="ttw-btn ttw-btn-primary" id="ttw-close-help">我知道了</button>
+
+                <div style="margin-bottom:16px;">
+                    <h4 style="color:#9b59b6;margin:0 0 10px;">🏷️ 世界书生成</h4>
+                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
+                        <li><strong>自定义分类</strong>：角色/地点/组织/道具/玩法/章节剧情/角色内心等</li>
+                        <li><strong>剧情大纲</strong>：提取主线剧情和支线剧情</li>
+                        <li><strong>文风配置</strong>：提取叙事视角、语言风格、情感基调</li>
+                        <li><strong>增量输出</strong>：只输出变更条目，减少重复</li>
+                        <li><strong>分卷模式</strong>：上下文超限时自动分卷</li>
+                        <li><strong>强制章节标记</strong>：确保剧情条目包含正确章节号</li>
+                    </ul>
+                </div>
+
+                <div style="margin-bottom:16px;">
+                    <h4 style="color:#27ae60;margin:0 0 10px;">📋 章节管理</h4>
+                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
+                        <li><strong>点击章节</strong>：查看/编辑/复制内容</li>
+                        <li><strong>合并章节</strong>：合并到上一章或下一章</li>
+                        <li><strong>多选删除</strong>：批量删除章节</li>
+                        <li><strong>选择起始</strong>：从任意章节开始处理</li>
+                        <li><strong>重新分块</strong>：修改字数后重新切分</li>
+                        <li><strong>章回正则</strong>：自定义章节检测规则</li>
+                    </ul>
+                </div>
+
+                <div style="margin-bottom:16px;">
+                    <h4 style="color:#e74c3c;margin:0 0 10px;">🎲 处理控制</h4>
+                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
+                        <li><strong>暂停/继续</strong>：随时暂停，下次继续</li>
+                        <li><strong>修复失败</strong>：重试失败的章节</li>
+                        <li><strong>🎲 重Roll</strong>：重新生成某章节，保留所有历史版本</li>
+                        <li><strong>Roll历史</strong>：查看/选择任意历史版本</li>
+                    </ul>
+                </div>
+
+                <div style="margin-bottom:16px;">
+                    <h4 style="color:#f39c12;margin:0 0 10px;">🔍 查找与替换</h4>
+                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
+                        <li><strong>查找功能</strong>：查找特定字符（如乱码）并高亮显示</li>
+                        <li><strong>批量重Roll</strong>：重Roll所有包含匹配内容的章节</li>
+                        <li><strong>批量替换</strong>：替换世界书和处理结果中的词语</li>
+                        <li><strong>单项替换</strong>：逐条预览并单独替换</li>
+                    </ul>
+                </div>
+
+                <div style="margin-bottom:16px;">
+                    <h4 style="color:#1abc9c;margin:0 0 10px;">🧹 结果处理</h4>
+                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
+                        <li><strong>整理条目</strong>：AI去除重复信息，优化格式</li>
+                        <li><strong>别名合并</strong>：识别同一角色的不同称呼并合并</li>
+                        <li><strong>修改历史</strong>：查看所有修改记录，支持回退</li>
+                    </ul>
+                </div>
+
+                <div style="margin-bottom:16px;">
+                    <h4 style="color:#9b59b6;margin:0 0 10px;">📥 合并世界书</h4>
+                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
+                        <li>导入已有世界书JSON文件</li>
+                        <li>自动检测重复条目（含文件内部重复）</li>
+                        <li><strong>处理方式</strong>：AI智能合并 / 覆盖 / 保留 / 重命名 / 内容叠加</li>
+                    </ul>
+                </div>
+
+                <div style="margin-bottom:16px;">
+                    <h4 style="color:#3498db;margin:0 0 10px;">⚙️ 条目配置</h4>
+                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
+                        <li><strong>🔵🟢 灯状态</strong>：蓝灯(常驻) / 绿灯(触发式)</li>
+                        <li><strong>位置/深度/顺序</strong>：配置条目在酒馆中的插入位置</li>
+                        <li><strong>分类默认配置</strong>：批量设置同分类条目的配置</li>
+                        <li><strong>顺序自动递增</strong>：同分类条目顺序自动递增</li>
+                        <li><strong>允许递归</strong>：条目可被其他条目激活</li>
+                    </ul>
+                </div>
+
+                <div style="margin-bottom:16px;">
+                    <h4 style="color:#e67e22;margin:0 0 10px;">📚 默认世界书条目</h4>
+                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
+                        <li>可视化添加/编辑默认条目</li>
+                        <li>每次转换时自动添加到世界书</li>
+                        <li>支持配置位置/深度/顺序</li>
+                    </ul>
+                </div>
+
+                <div style="margin-bottom:16px;">
+                    <h4 style="color:#95a5a6;margin:0 0 10px;">💾 导入导出</h4>
+                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
+                        <li><strong>导出JSON</strong>：原始格式，可再次导入合并</li>
+                        <li><strong>导出SillyTavern格式</strong>：直接导入酒馆使用</li>
+                        <li><strong>导出/导入任务</strong>：保存进度，换设备继续</li>
+                        <li><strong>导出/导入配置</strong>：保存提示词和设置</li>
+                        <li><strong>分卷导出</strong>：分卷模式时导出各卷</li>
+                    </ul>
+                </div>
+
+                <div style="padding:12px;background:rgba(52,152,219,0.15);border-radius:8px;">
+                    <div style="font-weight:bold;color:#3498db;margin-bottom:8px;">💡 使用技巧</div>
+                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;font-size:12px;">
+                        <li>处理长篇小说建议开启<strong>并行模式</strong>，速度更快</li>
+                        <li>遇到乱码可用<strong>查找功能</strong>定位并<strong>批量重Roll</strong></li>
+                        <li>同一角色有多个名字？用<strong>别名合并</strong>功能</li>
+                        <li>条目内容太杂乱？用<strong>整理条目</strong>让AI优化</li>
+                        <li>担心进度丢失？随时<strong>导出任务</strong>保存</li>
+                    </ul>
                 </div>
             </div>
-        `;
+            <div class="ttw-modal-footer">
+                <button class="ttw-btn ttw-btn-primary" id="ttw-close-help">我知道了</button>
+            </div>
+        </div>
+    `;
 
         document.body.appendChild(helpModal);
         helpModal.querySelector('.ttw-modal-close').addEventListener('click', () => helpModal.remove());
         helpModal.querySelector('#ttw-close-help').addEventListener('click', () => helpModal.remove());
         helpModal.addEventListener('click', (e) => { if (e.target === helpModal) helpModal.remove(); });
     }
+
 
     // ========== 选择起始记忆 ==========
     function showStartFromSelector() {
@@ -6440,7 +6531,7 @@ ${pairsContent}
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v2.9.5 </span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v2.9.8 </span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -7947,5 +8038,5 @@ ${pairsContent}
         getDefaultWorldbookEntriesUI: () => defaultWorldbookEntriesUI
     };
 
-    console.log('📚 TxtToWorldbook v2.9.7 已加载');
+    console.log('📚 TxtToWorldbook v2.9.8 已加载');
 })();
