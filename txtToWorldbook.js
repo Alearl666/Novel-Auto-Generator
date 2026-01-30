@@ -6931,33 +6931,16 @@ ${pairsContent}
             renderDefaultWorldbookEntriesUI();
         });
         checkAndRestoreState();
-        restoreExistingState().catch(e => console.error('恢复状态失败:', e));
+        restoreExistingState();
     }
 
-    async function restoreExistingState() {
+    function restoreExistingState() {
         if (memoryQueue.length > 0) {
             document.getElementById('ttw-upload-area').style.display = 'none';
             document.getElementById('ttw-file-info').style.display = 'flex';
             document.getElementById('ttw-file-name').textContent = currentFile ? currentFile.name : '已加载的文件';
             const totalChars = memoryQueue.reduce((sum, m) => sum + m.content.length, 0);
             document.getElementById('ttw-file-size').textContent = `(${(totalChars / 1024).toFixed(1)} KB, ${memoryQueue.length}章)`;
-
-            // 【修复】确保每个已处理的memory都有result
-            for (let i = 0; i < memoryQueue.length; i++) {
-                const memory = memoryQueue[i];
-                if (memory.processed && !memory.failed && !memory.result) {
-                    try {
-                        const rollResults = await MemoryHistoryDB.getRollResults(i);
-                        if (rollResults.length > 0) {
-                            const latestRoll = rollResults[rollResults.length - 1];
-                            memory.result = latestRoll.result;
-                            console.log(`✅ 恢复第${i + 1}章的result`);
-                        }
-                    } catch (e) {
-                        console.error(`恢复第${i + 1}章result失败:`, e);
-                    }
-                }
-            }
 
             showQueueSection(true);
             updateMemoryQueueUI();
@@ -6967,21 +6950,12 @@ ${pairsContent}
 
             if (useVolumeMode) updateVolumeIndicator();
 
-            // 【修复】如果世界书为空但有已处理的记忆，重建世界书
-            if (Object.keys(generatedWorldbook).length === 0) {
-                const hasProcessedWithResult = memoryQueue.some(m => m.processed && !m.failed && m.result);
-                if (hasProcessedWithResult) {
-                    rebuildWorldbookFromMemories();
-                }
-            }
-
             if (Object.keys(generatedWorldbook).length > 0) {
                 showResultSection(true);
                 updateWorldbookPreview();
             }
         }
     }
-
 
     function addModalStyles() {
         if (document.getElementById('ttw-styles')) return;
