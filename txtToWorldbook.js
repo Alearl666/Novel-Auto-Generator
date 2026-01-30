@@ -2402,8 +2402,9 @@ ${generateDynamicJsonTemplate()}
                             <div class="ttw-roll-list">${listHtml}</div>
                         </div>
                         <div id="ttw-roll-detail" class="ttw-roll-history-right">
-                            <div style="text-align:center;color:#888;padding:20px;font-size:12px;">👈 点击左侧查看</div>
                         </div>
+
+
                     </div>
                     <div class="ttw-reroll-prompt-section" style="margin-top:12px;padding:12px;background:rgba(155,89,182,0.15);border-radius:8px;">
                         <div style="font-weight:bold;color:#9b59b6;margin-bottom:8px;font-size:13px;">📝 重Roll自定义提示词</div>
@@ -2419,6 +2420,87 @@ ${generateDynamicJsonTemplate()}
         `;
 
         document.body.appendChild(modal);
+        // ===== 初始化右侧：显示当前结果的编辑区 =====
+        const initDetailDiv = modal.querySelector('#ttw-roll-detail');
+        const currentResultJson = memory.result ? JSON.stringify(memory.result, null, 2) : '{}';
+        initDetailDiv.innerHTML = `
+            <div style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid #444;">
+                <h4 style="color:#27ae60;margin:0 0 6px;font-size:14px;">📝 当前处理结果（第${index + 1}章）</h4>
+                <div style="font-size:11px;color:#888;">可直接编辑下方JSON，编辑后点击"保存并应用"</div>
+            </div>
+            <textarea id="ttw-current-result-editor" style="width:100%;min-height:200px;max-height:300px;padding:10px;background:rgba(0,0,0,0.3);border:1px solid #555;border-radius:6px;color:#fff;font-size:11px;font-family:monospace;line-height:1.5;resize:vertical;box-sizing:border-box;">${currentResultJson}</textarea>
+            <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
+                <button class="ttw-btn ttw-btn-primary ttw-btn-small" id="ttw-save-current-result">💾 保存并应用</button>
+                <button class="ttw-btn ttw-btn-small" id="ttw-copy-current-result">📋 复制</button>
+            </div>
+            <div style="margin-top:12px;padding:10px;background:rgba(155,89,182,0.15);border:1px solid rgba(155,89,182,0.3);border-radius:6px;">
+                <div style="font-weight:bold;color:#9b59b6;margin-bottom:6px;font-size:12px;">📋 粘贴JSON导入</div>
+                <div style="font-size:11px;color:#888;margin-bottom:6px;">支持标准JSON、带\`\`\`json代码块的、甚至不完整的JSON</div>
+                <textarea id="ttw-paste-json-area" rows="4" placeholder="在此粘贴JSON..." style="width:100%;padding:8px;background:rgba(0,0,0,0.3);border:1px solid #555;border-radius:6px;color:#fff;font-size:11px;font-family:monospace;resize:vertical;box-sizing:border-box;"></textarea>
+                <button class="ttw-btn ttw-btn-small" id="ttw-parse-and-apply" style="margin-top:8px;background:rgba(155,89,182,0.5);">📋 解析并填入上方</button>
+            </div>
+        `;
+
+        // 保存并应用当前编辑
+        initDetailDiv.querySelector('#ttw-save-current-result').addEventListener('click', async () => {
+            const editor = initDetailDiv.querySelector('#ttw-current-result-editor');
+            let parsed;
+            try {
+                parsed = JSON.parse(editor.value);
+            } catch (e) {
+                alert('JSON格式错误！\n\n' + e.message);
+                return;
+            }
+            memory.result = parsed;
+            memory.processed = true;
+            memory.failed = false;
+            try {
+                await MemoryHistoryDB.saveRollResult(index, parsed);
+            } catch (dbErr) {
+                console.error('保存到数据库失败:', dbErr);
+            }
+            rebuildWorldbookFromMemories();
+            updateMemoryQueueUI();
+            updateWorldbookPreview();
+            const btn = initDetailDiv.querySelector('#ttw-save-current-result');
+            btn.textContent = '✅ 已保存并应用';
+            setTimeout(() => { btn.textContent = '💾 保存并应用'; }, 1500);
+        });
+
+        // 复制
+        initDetailDiv.querySelector('#ttw-copy-current-result').addEventListener('click', () => {
+            const editor = initDetailDiv.querySelector('#ttw-current-result-editor');
+            navigator.clipboard.writeText(editor.value).then(() => {
+                const btn = initDetailDiv.querySelector('#ttw-copy-current-result');
+                btn.textContent = '✅ 已复制';
+                setTimeout(() => { btn.textContent = '📋 复制'; }, 1500);
+            });
+        });
+
+        // 解析粘贴的JSON
+        initDetailDiv.querySelector('#ttw-parse-and-apply').addEventListener('click', () => {
+            const pasteArea = initDetailDiv.querySelector('#ttw-paste-json-area');
+            const editor = initDetailDiv.querySelector('#ttw-current-result-editor');
+            const rawText = pasteArea.value.trim();
+            if (!rawText) { alert('请先粘贴JSON内容'); return; }
+            let parsed;
+            try {
+                parsed = parseAIResponse(rawText);
+            } catch (e) {
+                alert('无法解析！\n\n错误: ' + e.message);
+                return;
+            }
+            if (!parsed || typeof parsed !== 'object' || Object.keys(parsed).length === 0) {
+                alert('解析结果为空，请检查内容');
+                return;
+            }
+            editor.value = JSON.stringify(parsed, null, 2);
+            pasteArea.value = '';
+            const btn = initDetailDiv.querySelector('#ttw-parse-and-apply');
+            btn.textContent = '✅ 已填入';
+            setTimeout(() => { btn.textContent = '📋 解析并填入上方'; }, 1500);
+        });
+        // ===== 初始化结束 =====
 
         modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
         modal.querySelector('#ttw-close-roll-history').addEventListener('click', () => modal.remove());
