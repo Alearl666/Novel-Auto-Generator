@@ -3822,18 +3822,36 @@ ${pairsContent}
 
                 let mergePlanHtml = '';
                 if (aiResult.mergedGroups && aiResult.mergedGroups.length > 0) {
-                    for (const group of aiResult.mergedGroups) {
+                    mergePlanHtml += `
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                            <span style="font-size:11px;color:#888;">取消勾选可排除不想合并的组</span>
+                            <label style="font-size:11px;cursor:pointer;"><input type="checkbox" id="ttw-select-all-merge-groups" checked> 全选</label>
+                        </div>
+                    `;
+                    aiResult.mergedGroups.forEach((group, idx) => {
                         mergePlanHtml += `
-                            <div style="padding:8px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:6px;border-left:3px solid #27ae60;">
-                                <div style="color:#27ae60;font-weight:bold;font-size:12px;">→ 合并为「${group.mainName}」</div>
-                                <div style="font-size:11px;color:#ccc;margin-top:4px;">包含: ${group.names.join(', ')}</div>
-                            </div>
+                            <label style="display:flex;align-items:flex-start;gap:8px;padding:8px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:6px;border-left:3px solid #27ae60;cursor:pointer;">
+                                <input type="checkbox" class="ttw-merge-group-cb" data-group-index="${idx}" checked style="margin-top:2px;width:16px;height:16px;accent-color:#27ae60;flex-shrink:0;">
+                                <div>
+                                    <div style="color:#27ae60;font-weight:bold;font-size:12px;">→ 合并为「${group.mainName}」</div>
+                                    <div style="font-size:11px;color:#ccc;margin-top:4px;">包含: ${group.names.join(', ')}</div>
+                                </div>
+                            </label>
                         `;
-                    }
+                    });
                 } else {
                     mergePlanHtml = '<div style="color:#888;font-size:12px;">没有需要合并的角色（所有配对都是不同人）</div>';
                 }
                 mergePlanDiv.innerHTML = mergePlanHtml;
+
+                // 全选checkbox联动
+                const selectAllMergeCb = mergePlanDiv.querySelector('#ttw-select-all-merge-groups');
+                if (selectAllMergeCb) {
+                    selectAllMergeCb.addEventListener('change', (e) => {
+                        mergePlanDiv.querySelectorAll('.ttw-merge-group-cb').forEach(cb => cb.checked = e.target.checked);
+                    });
+                }
+
 
                 if (aiResult.mergedGroups && aiResult.mergedGroups.length > 0) {
                     modal.querySelector('#ttw-confirm-alias').style.display = 'inline-block';
@@ -3866,14 +3884,26 @@ ${pairsContent}
                 return;
             }
 
-            if (!confirm(`确定合并 ${aiResult.mergedGroups.length} 组同人角色？`)) return;
+            // 只取勾选的组
+            const selectedIndices = [...modal.querySelectorAll('.ttw-merge-group-cb:checked')].map(cb => parseInt(cb.dataset.groupIndex));
+            if (selectedIndices.length === 0) {
+                alert('没有勾选任何合并组');
+                return;
+            }
 
-            const mergedCount = await mergeConfirmedDuplicates(aiResult);
+            const selectedGroups = selectedIndices.map(i => aiResult.mergedGroups[i]).filter(Boolean);
+
+            if (!confirm(`确定合并选中的 ${selectedGroups.length} 组同人角色？\n（共 ${aiResult.mergedGroups.length} 组中选了 ${selectedGroups.length} 组）`)) return;
+
+            // 构造只包含选中组的结果
+            const filteredResult = { ...aiResult, mergedGroups: selectedGroups };
+            const mergedCount = await mergeConfirmedDuplicates(filteredResult);
 
             updateWorldbookPreview();
             modal.remove();
             alert(`合并完成！合并了 ${mergedCount} 组角色。\n\n建议使用"整理条目"功能清理合并后的重复内容。`);
         });
+
     }
 
     // ========== 新增：查找功能 ==========
