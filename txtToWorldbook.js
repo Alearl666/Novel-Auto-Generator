@@ -3731,7 +3731,7 @@ ${pairsContent}
                         <div style="font-weight:bold;color:#3498db;margin-bottom:10px;">⚙️ 并发设置</div>
                         <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;">
                             <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
-                               <input type="checkbox" id="ttw-alias-parallel">
+                              <input type="checkbox" id="ttw-alias-parallel">
                                 <span>启用并发</span>
                             </label>
                             <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
@@ -3822,36 +3822,25 @@ ${pairsContent}
 
                 let mergePlanHtml = '';
                 if (aiResult.mergedGroups && aiResult.mergedGroups.length > 0) {
-                    mergePlanHtml += `
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                            <span style="font-size:11px;color:#888;">取消勾选可排除不想合并的组</span>
-                            <label style="font-size:11px;cursor:pointer;"><input type="checkbox" id="ttw-select-all-merge-groups" checked> 全选</label>
-                        </div>
-                    `;
-                    aiResult.mergedGroups.forEach((group, idx) => {
-                        mergePlanHtml += `
-                            <label style="display:flex;align-items:flex-start;gap:8px;padding:8px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:6px;border-left:3px solid #27ae60;cursor:pointer;">
-                                <input type="checkbox" class="ttw-merge-group-cb" data-group-index="${idx}" checked style="margin-top:2px;width:16px;height:16px;accent-color:#27ae60;flex-shrink:0;">
-                                <div>
-                                    <div style="color:#27ae60;font-weight:bold;font-size:12px;">→ 合并为「${group.mainName}」</div>
-                                    <div style="font-size:11px;color:#ccc;margin-top:4px;">包含: ${group.names.join(', ')}</div>
-                                </div>
-                            </label>
-                        `;
-                    });
+                    mergePlanHtml += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><span style="font-size:11px;color:#888;">取消勾选可排除不想合并的组</span><label style="font-size:11px;cursor:pointer;"><input type="checkbox" id="ttw-select-all-merge-groups" checked> 全选</label></div>';
+                    for (var gi = 0; gi < aiResult.mergedGroups.length; gi++) {
+                        var group = aiResult.mergedGroups[gi];
+                        mergePlanHtml += '<label style="display:flex;align-items:flex-start;gap:8px;padding:8px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:6px;border-left:3px solid #27ae60;cursor:pointer;"><input type="checkbox" class="ttw-merge-group-cb" data-group-index="' + gi + '" checked style="margin-top:2px;width:16px;height:16px;accent-color:#27ae60;flex-shrink:0;"><div><div style="color:#27ae60;font-weight:bold;font-size:12px;">→ 合并为「' + group.mainName + '」</div><div style="font-size:11px;color:#ccc;margin-top:4px;">包含: ' + group.names.join(', ') + '</div></div></label>';
+                    }
                 } else {
                     mergePlanHtml = '<div style="color:#888;font-size:12px;">没有需要合并的角色（所有配对都是不同人）</div>';
                 }
                 mergePlanDiv.innerHTML = mergePlanHtml;
 
-                // 全选checkbox联动
-                const selectAllMergeCb = mergePlanDiv.querySelector('#ttw-select-all-merge-groups');
+                var selectAllMergeCb = mergePlanDiv.querySelector('#ttw-select-all-merge-groups');
                 if (selectAllMergeCb) {
-                    selectAllMergeCb.addEventListener('change', (e) => {
-                        mergePlanDiv.querySelectorAll('.ttw-merge-group-cb').forEach(cb => cb.checked = e.target.checked);
+                    selectAllMergeCb.addEventListener('change', function (e) {
+                        var allCbs = mergePlanDiv.querySelectorAll('.ttw-merge-group-cb');
+                        for (var ci = 0; ci < allCbs.length; ci++) {
+                            allCbs[ci].checked = e.target.checked;
+                        }
                     });
                 }
-
 
                 if (aiResult.mergedGroups && aiResult.mergedGroups.length > 0) {
                     modal.querySelector('#ttw-confirm-alias').style.display = 'inline-block';
@@ -3860,6 +3849,7 @@ ${pairsContent}
                 stopBtn.style.display = 'none';
 
                 updateStreamContent('✅ AI判断完成\n');
+
 
             } catch (error) {
                 updateStreamContent(`❌ AI判断失败: ${error.message}\n`);
@@ -3877,6 +3867,40 @@ ${pairsContent}
             modal.querySelector('#ttw-stop-alias').style.display = 'none';
         });
 
+        modal.querySelector('#ttw-confirm-alias').addEventListener('click', async function () {
+            if (!aiResult || !aiResult.mergedGroups || aiResult.mergedGroups.length === 0) {
+                alert('没有需要合并的角色');
+                modal.remove();
+                return;
+            }
+
+            var checkedBoxes = modal.querySelectorAll('.ttw-merge-group-cb:checked');
+            var selectedIndices = [];
+            for (var i = 0; i < checkedBoxes.length; i++) {
+                selectedIndices.push(parseInt(checkedBoxes[i].getAttribute('data-group-index')));
+            }
+
+            if (selectedIndices.length === 0) {
+                alert('没有勾选任何合并组');
+                return;
+            }
+
+            var selectedGroups = [];
+            for (var j = 0; j < selectedIndices.length; j++) {
+                if (aiResult.mergedGroups[selectedIndices[j]]) {
+                    selectedGroups.push(aiResult.mergedGroups[selectedIndices[j]]);
+                }
+            }
+
+            if (!confirm('确定合并选中的 ' + selectedGroups.length + ' 组同人角色？\n（共 ' + aiResult.mergedGroups.length + ' 组中选了 ' + selectedGroups.length + ' 组）')) return;
+
+            var filteredResult = { pairResults: aiResult.pairResults, mergedGroups: selectedGroups };
+            var mergedCount = await mergeConfirmedDuplicates(filteredResult);
+
+            updateWorldbookPreview();
+            modal.remove();
+            alert('合并完成！合并了 ' + mergedCount + ' 组角色。\n\n建议使用"整理条目"功能清理合并后的重复内容。');
+        });
 
     }
 
@@ -6931,16 +6955,33 @@ ${pairsContent}
             renderDefaultWorldbookEntriesUI();
         });
         checkAndRestoreState();
-        restoreExistingState();
+        restoreExistingState().catch(e => console.error('恢复状态失败:', e));
     }
 
-    function restoreExistingState() {
+    async function restoreExistingState() {
         if (memoryQueue.length > 0) {
             document.getElementById('ttw-upload-area').style.display = 'none';
             document.getElementById('ttw-file-info').style.display = 'flex';
             document.getElementById('ttw-file-name').textContent = currentFile ? currentFile.name : '已加载的文件';
             const totalChars = memoryQueue.reduce((sum, m) => sum + m.content.length, 0);
             document.getElementById('ttw-file-size').textContent = `(${(totalChars / 1024).toFixed(1)} KB, ${memoryQueue.length}章)`;
+
+            // 【修复】确保每个已处理的memory都有result
+            for (let i = 0; i < memoryQueue.length; i++) {
+                const memory = memoryQueue[i];
+                if (memory.processed && !memory.failed && !memory.result) {
+                    try {
+                        const rollResults = await MemoryHistoryDB.getRollResults(i);
+                        if (rollResults.length > 0) {
+                            const latestRoll = rollResults[rollResults.length - 1];
+                            memory.result = latestRoll.result;
+                            console.log(`✅ 恢复第${i + 1}章的result`);
+                        }
+                    } catch (e) {
+                        console.error(`恢复第${i + 1}章result失败:`, e);
+                    }
+                }
+            }
 
             showQueueSection(true);
             updateMemoryQueueUI();
@@ -6950,12 +6991,21 @@ ${pairsContent}
 
             if (useVolumeMode) updateVolumeIndicator();
 
+            // 【修复】如果世界书为空但有已处理的记忆，重建世界书
+            if (Object.keys(generatedWorldbook).length === 0) {
+                const hasProcessedWithResult = memoryQueue.some(m => m.processed && !m.failed && m.result);
+                if (hasProcessedWithResult) {
+                    rebuildWorldbookFromMemories();
+                }
+            }
+
             if (Object.keys(generatedWorldbook).length > 0) {
                 showResultSection(true);
                 updateWorldbookPreview();
             }
         }
     }
+
 
     function addModalStyles() {
         if (document.getElementById('ttw-styles')) return;
