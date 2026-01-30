@@ -2480,13 +2480,33 @@ ${generateDynamicJsonTemplate()}
                     <div class="ttw-roll-detail-header">
                         <h4>Roll #${rollIndex + 1}</h4>
                         <div class="ttw-roll-detail-time">${time}</div>
-                        <button class="ttw-btn ttw-btn-primary ttw-btn-small" id="ttw-use-this-roll">✅ 使用此结果</button>
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
+                            <button class="ttw-btn ttw-btn-primary ttw-btn-small" id="ttw-use-this-roll">✅ 使用此结果</button>
+                            <button class="ttw-btn ttw-btn-small" id="ttw-save-edited-roll" style="background:rgba(39,174,96,0.5);">💾 保存编辑</button>
+                        </div>
                     </div>
-                    <pre class="ttw-roll-detail-content">${JSON.stringify(roll.result, null, 2)}</pre>
+                    <textarea id="ttw-roll-edit-area" style="width:100%;min-height:280px;max-height:400px;padding:10px;background:rgba(0,0,0,0.3);border:1px solid #555;border-radius:6px;color:#fff;font-size:11px;font-family:monospace;line-height:1.5;resize:vertical;box-sizing:border-box;">${JSON.stringify(roll.result, null, 2)}</textarea>
+                    <div style="margin-top:10px;padding:10px;background:rgba(155,89,182,0.15);border:1px solid rgba(155,89,182,0.3);border-radius:6px;">
+                        <div style="font-weight:bold;color:#9b59b6;margin-bottom:8px;font-size:12px;">📋 粘贴JSON导入</div>
+                        <div style="font-size:11px;color:#888;margin-bottom:8px;">将JSON粘贴到上方编辑框后点击"保存编辑"，或粘贴到下方后点击"解析并替换"</div>
+                        <textarea id="ttw-roll-paste-area" rows="4" placeholder="在此粘贴JSON格式的世界书数据..." style="width:100%;padding:8px;background:rgba(0,0,0,0.3);border:1px solid #555;border-radius:6px;color:#fff;font-size:11px;font-family:monospace;resize:vertical;box-sizing:border-box;"></textarea>
+                        <button class="ttw-btn ttw-btn-small" id="ttw-parse-paste-json" style="margin-top:8px;background:rgba(155,89,182,0.5);">📋 解析并替换到上方</button>
+                    </div>
                 `;
 
+                // ✅ 使用此结果
                 detailDiv.querySelector('#ttw-use-this-roll').addEventListener('click', async () => {
-                    memory.result = roll.result;
+                    // 先读取编辑框当前内容
+                    const editArea = detailDiv.querySelector('#ttw-roll-edit-area');
+                    let resultToUse;
+                    try {
+                        resultToUse = JSON.parse(editArea.value);
+                    } catch (e) {
+                        if (!confirm('编辑框中的JSON格式有误，是否使用原始结果？\n\n点击"取消"可继续编辑修复。')) return;
+                        resultToUse = roll.result;
+                    }
+
+                    memory.result = resultToUse;
                     memory.processed = true;
                     memory.failed = false;
 
@@ -2495,10 +2515,76 @@ ${generateDynamicJsonTemplate()}
                     updateMemoryQueueUI();
                     updateWorldbookPreview();
                     modal.remove();
-                    alert(`已使用 Roll #${rollIndex + 1}`);
+                    alert(`已使用 Roll #${rollIndex + 1}${resultToUse !== roll.result ? '（已编辑）' : ''}`);
+                });
+
+                // 💾 保存编辑（保存到当前roll的result，不关闭弹窗）
+                detailDiv.querySelector('#ttw-save-edited-roll').addEventListener('click', async () => {
+                    const editArea = detailDiv.querySelector('#ttw-roll-edit-area');
+                    let parsed;
+                    try {
+                        parsed = JSON.parse(editArea.value);
+                    } catch (e) {
+                        alert('JSON格式错误，无法保存！\n\n错误信息: ' + e.message);
+                        return;
+                    }
+
+                    roll.result = parsed;
+
+                    // 同时保存到数据库
+                    try {
+                        await MemoryHistoryDB.saveRollResult(index, parsed);
+                    } catch (dbErr) {
+                        console.error('保存到数据库失败:', dbErr);
+                    }
+
+                    const btn = detailDiv.querySelector('#ttw-save-edited-roll');
+                    btn.textContent = '✅ 已保存';
+                    btn.style.background = 'rgba(39,174,96,0.8)';
+                    setTimeout(() => {
+                        btn.textContent = '💾 保存编辑';
+                        btn.style.background = 'rgba(39,174,96,0.5)';
+                    }, 1500);
+                });
+
+                // 📋 解析粘贴的JSON并替换到编辑框
+                detailDiv.querySelector('#ttw-parse-paste-json').addEventListener('click', () => {
+                    const pasteArea = detailDiv.querySelector('#ttw-roll-paste-area');
+                    const editArea = detailDiv.querySelector('#ttw-roll-edit-area');
+                    const rawText = pasteArea.value.trim();
+
+                    if (!rawText) {
+                        alert('请先在下方粘贴JSON内容');
+                        return;
+                    }
+
+                    let parsed;
+                    try {
+                        parsed = parseAIResponse(rawText);
+                    } catch (e) {
+                        alert('无法解析粘贴的内容！\n\n支持的格式:\n1. 标准JSON\n2. 带```json```代码块的JSON\n3. 不完整但可修复的JSON\n\n错误: ' + e.message);
+                        return;
+                    }
+
+                    if (!parsed || typeof parsed !== 'object' || Object.keys(parsed).length === 0) {
+                        alert('解析结果为空，请检查粘贴的内容是否正确');
+                        return;
+                    }
+
+                    editArea.value = JSON.stringify(parsed, null, 2);
+                    pasteArea.value = '';
+
+                    const btn = detailDiv.querySelector('#ttw-parse-paste-json');
+                    btn.textContent = '✅ 已替换到上方';
+                    btn.style.background = 'rgba(39,174,96,0.5)';
+                    setTimeout(() => {
+                        btn.textContent = '📋 解析并替换到上方';
+                        btn.style.background = 'rgba(155,89,182,0.5)';
+                    }, 1500);
                 });
 
             });
+
         });
     }
 
