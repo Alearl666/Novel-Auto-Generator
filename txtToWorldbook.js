@@ -3731,7 +3731,7 @@ ${pairsContent}
                         <div style="font-weight:bold;color:#3498db;margin-bottom:10px;">⚙️ 并发设置</div>
                         <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;">
                             <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
-                                <input type="checkbox" id="ttw-alias-parallel" ${parallelConfig.enabled ? 'checked' : ''}>
+                               <input type="checkbox" id="ttw-alias-parallel">
                                 <span>启用并发</span>
                             </label>
                             <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
@@ -3877,32 +3877,6 @@ ${pairsContent}
             modal.querySelector('#ttw-stop-alias').style.display = 'none';
         });
 
-        modal.querySelector('#ttw-confirm-alias').addEventListener('click', async () => {
-            if (!aiResult || !aiResult.mergedGroups || aiResult.mergedGroups.length === 0) {
-                alert('没有需要合并的角色');
-                modal.remove();
-                return;
-            }
-
-            // 只取勾选的组
-            const selectedIndices = [...modal.querySelectorAll('.ttw-merge-group-cb:checked')].map(cb => parseInt(cb.dataset.groupIndex));
-            if (selectedIndices.length === 0) {
-                alert('没有勾选任何合并组');
-                return;
-            }
-
-            const selectedGroups = selectedIndices.map(i => aiResult.mergedGroups[i]).filter(Boolean);
-
-            if (!confirm(`确定合并选中的 ${selectedGroups.length} 组同人角色？\n（共 ${aiResult.mergedGroups.length} 组中选了 ${selectedGroups.length} 组）`)) return;
-
-            // 构造只包含选中组的结果
-            const filteredResult = { ...aiResult, mergedGroups: selectedGroups };
-            const mergedCount = await mergeConfirmedDuplicates(filteredResult);
-
-            updateWorldbookPreview();
-            modal.remove();
-            alert(`合并完成！合并了 ${mergedCount} 组角色。\n\n建议使用"整理条目"功能清理合并后的重复内容。`);
-        });
 
     }
 
