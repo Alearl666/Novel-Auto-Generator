@@ -1,6 +1,6 @@
 
 /**
- * TXT转世界书独立模块 v2.9.8
+ * TXT转世界书独立模块 v2.9.9
  * 新增: 查找高亮、批量替换、多选整理分类、条目位置/深度/顺序配置、默认世界书UI化、新增默认勾选2递归选项
  */
 
@@ -3342,7 +3342,9 @@ ${generateDynamicJsonTemplate()}
         }
     }
 
-    // 新增：显示分类选择弹窗
+    // 显示整理条目选择弹窗（两级：分类→条目，支持失败重试）
+    let lastConsolidateFailedEntries = [];
+
     function showConsolidateCategorySelector() {
         const categories = Object.keys(generatedWorldbook).filter(cat => {
             const entries = generatedWorldbook[cat];
@@ -3361,33 +3363,75 @@ ${generateDynamicJsonTemplate()}
         modal.id = 'ttw-consolidate-modal';
         modal.className = 'ttw-modal-container';
 
+        // 构建分类→条目的两级列表
         let categoriesHtml = '';
         categories.forEach(cat => {
-            const entryCount = Object.keys(generatedWorldbook[cat]).length;
+            const entryNames = Object.keys(generatedWorldbook[cat]);
+            const entryCount = entryNames.length;
+
+            let entriesListHtml = '';
+            entryNames.forEach(name => {
+                const isFailed = lastConsolidateFailedEntries.some(e => e.category === cat && e.name === name);
+                const failedBadge = isFailed ? '<span style="color:#e74c3c;font-size:9px;margin-left:4px;">❗失败</span>' : '';
+                entriesListHtml += `
+                    <label style="display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:11px;cursor:pointer;">
+                        <input type="checkbox" class="ttw-consolidate-entry-cb" data-category="${cat}" data-entry="${name}" ${isFailed ? 'checked' : ''}>
+                        <span>${name}${failedBadge}</span>
+                    </label>
+                `;
+            });
+
+            const hasFailedInCat = lastConsolidateFailedEntries.some(e => e.category === cat);
+
             categoriesHtml += `
-                <label class="ttw-consolidate-category-item">
-                    <input type="checkbox" class="ttw-consolidate-cat-cb" data-category="${cat}" checked>
-                    <span>${cat}</span>
-                    <span style="color:#888;font-size:11px;">(${entryCount}条)</span>
-                </label>
+                <div class="ttw-consolidate-cat-group" style="margin-bottom:10px;">
+                    <div style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:rgba(52,152,219,0.15);border-radius:6px;cursor:pointer;" data-cat-toggle="${cat}">
+                        <input type="checkbox" class="ttw-consolidate-cat-cb" data-category="${cat}" ${hasFailedInCat ? 'checked' : ''}>
+                        <span style="font-weight:bold;font-size:12px;flex:1;">${cat}</span>
+                        <span style="color:#888;font-size:11px;">(${entryCount}条)</span>
+                        ${hasFailedInCat ? '<span style="color:#e74c3c;font-size:10px;">有失败</span>' : ''}
+                        <span class="ttw-cat-expand-icon" style="font-size:10px;transition:transform 0.2s;">▶</span>
+                    </div>
+                    <div class="ttw-cat-entries-list" data-cat-list="${cat}" style="display:none;margin-left:20px;margin-top:4px;max-height:200px;overflow-y:auto;">
+                        <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:4px;">
+                            <button class="ttw-btn-tiny ttw-select-all-entries" data-category="${cat}">全选</button>
+                            <button class="ttw-btn-tiny ttw-deselect-all-entries" data-category="${cat}">全不选</button>
+                            ${hasFailedInCat ? '<button class="ttw-btn-tiny ttw-select-failed-entries" data-category="' + cat + '" style="color:#e74c3c;">选失败项</button>' : ''}
+                        </div>
+                        ${entriesListHtml}
+                    </div>
+                </div>
             `;
         });
 
+        const hasAnyFailed = lastConsolidateFailedEntries.length > 0;
+
         modal.innerHTML = `
-            <div class="ttw-modal" style="max-width:500px;">
+            <div class="ttw-modal" style="max-width:600px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">🧹 整理条目 - 选择分类</span>
+                    <span class="ttw-modal-title">🧹 整理条目 - 选择条目</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
-                <div class="ttw-modal-body">
-                    <div style="margin-bottom:16px;padding:12px;background:rgba(52,152,219,0.15);border-radius:8px;">
-                        <div style="font-size:12px;color:#ccc;">选择要整理的分类，AI将去除重复信息并优化格式。</div>
+                <div class="ttw-modal-body" style="max-height:65vh;overflow-y:auto;">
+                    <div style="margin-bottom:12px;padding:12px;background:rgba(52,152,219,0.15);border-radius:8px;">
+                        <div style="font-size:12px;color:#ccc;">展开分类可多选具体条目。AI将去除重复信息并优化格式。</div>
                     </div>
+                    ${hasAnyFailed ? `
+                    <div style="margin-bottom:12px;padding:10px;background:rgba(231,76,60,0.15);border:1px solid rgba(231,76,60,0.3);border-radius:6px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <span style="color:#e74c3c;font-weight:bold;font-size:12px;">❗ 上次有 ${lastConsolidateFailedEntries.length} 个条目失败</span>
+                            <button class="ttw-btn ttw-btn-small ttw-btn-warning" id="ttw-select-all-failed">🔧 只选失败项</button>
+                        </div>
+                    </div>
+                    ` : ''}
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-                        <span style="font-weight:bold;">选择分类</span>
-                        <label style="font-size:12px;"><input type="checkbox" id="ttw-select-all-consolidate" checked> 全选</label>
+                        <span style="font-weight:bold;">选择分类和条目 <span id="ttw-consolidate-selected-count" style="color:#888;font-size:11px;font-weight:normal;"></span></span>
+                        <div style="display:flex;gap:8px;">
+                            <button class="ttw-btn-tiny" id="ttw-check-all-cats">全选所有</button>
+                            <button class="ttw-btn-tiny" id="ttw-uncheck-all-cats">全不选</button>
+                        </div>
                     </div>
-                    <div style="max-height:300px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:10px;">
+                    <div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:10px;">
                         ${categoriesHtml}
                     </div>
                 </div>
@@ -3400,81 +3444,479 @@ ${generateDynamicJsonTemplate()}
 
         document.body.appendChild(modal);
 
-        modal.querySelector('#ttw-select-all-consolidate').addEventListener('change', (e) => {
-            modal.querySelectorAll('.ttw-consolidate-cat-cb').forEach(cb => cb.checked = e.target.checked);
+        // 更新选中计数
+        function updateSelectedCount() {
+            const count = modal.querySelectorAll('.ttw-consolidate-entry-cb:checked').length;
+            const countEl = modal.querySelector('#ttw-consolidate-selected-count');
+            if (countEl) countEl.textContent = `(已选 ${count} 条)`;
+        }
+
+        // 展开/收起分类
+        modal.querySelectorAll('[data-cat-toggle]').forEach(header => {
+            header.addEventListener('click', (e) => {
+                if (e.target.type === 'checkbox') return;
+                const cat = header.dataset.catToggle;
+                const list = modal.querySelector(`[data-cat-list="${cat}"]`);
+                const icon = header.querySelector('.ttw-cat-expand-icon');
+                if (list.style.display === 'none') {
+                    list.style.display = 'block';
+                    icon.style.transform = 'rotate(90deg)';
+                } else {
+                    list.style.display = 'none';
+                    icon.style.transform = 'rotate(0deg)';
+                }
+            });
         });
+
+        // 分类checkbox → 联动所有子条目
+        modal.querySelectorAll('.ttw-consolidate-cat-cb').forEach(cb => {
+            cb.addEventListener('change', (e) => {
+                const cat = e.target.dataset.category;
+                modal.querySelectorAll(`.ttw-consolidate-entry-cb[data-category="${cat}"]`).forEach(entryCb => {
+                    entryCb.checked = e.target.checked;
+                });
+                updateSelectedCount();
+            });
+        });
+
+        // 条目checkbox变化 → 更新计数
+        modal.querySelectorAll('.ttw-consolidate-entry-cb').forEach(cb => {
+            cb.addEventListener('change', updateSelectedCount);
+        });
+
+        // 分类内：全选/全不选/选失败项
+        modal.querySelectorAll('.ttw-select-all-entries').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const cat = btn.dataset.category;
+                modal.querySelectorAll(`.ttw-consolidate-entry-cb[data-category="${cat}"]`).forEach(cb => cb.checked = true);
+                updateSelectedCount();
+            });
+        });
+        modal.querySelectorAll('.ttw-deselect-all-entries').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const cat = btn.dataset.category;
+                modal.querySelectorAll(`.ttw-consolidate-entry-cb[data-category="${cat}"]`).forEach(cb => cb.checked = false);
+                updateSelectedCount();
+            });
+        });
+        modal.querySelectorAll('.ttw-select-failed-entries').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const cat = btn.dataset.category;
+                modal.querySelectorAll(`.ttw-consolidate-entry-cb[data-category="${cat}"]`).forEach(cb => {
+                    const isFailed = lastConsolidateFailedEntries.some(e => e.category === cat && e.name === cb.dataset.entry);
+                    cb.checked = isFailed;
+                });
+                updateSelectedCount();
+            });
+        });
+
+        // 全局：全选所有/全不选
+        modal.querySelector('#ttw-check-all-cats').addEventListener('click', () => {
+            modal.querySelectorAll('.ttw-consolidate-cat-cb').forEach(cb => { cb.checked = true; cb.dispatchEvent(new Event('change')); });
+        });
+        modal.querySelector('#ttw-uncheck-all-cats').addEventListener('click', () => {
+            modal.querySelectorAll('.ttw-consolidate-cat-cb').forEach(cb => { cb.checked = false; cb.dispatchEvent(new Event('change')); });
+        });
+
+        // 只选失败项
+        const selectAllFailedBtn = modal.querySelector('#ttw-select-all-failed');
+        if (selectAllFailedBtn) {
+            selectAllFailedBtn.addEventListener('click', () => {
+                // 先全不选
+                modal.querySelectorAll('.ttw-consolidate-entry-cb').forEach(cb => cb.checked = false);
+                modal.querySelectorAll('.ttw-consolidate-cat-cb').forEach(cb => cb.checked = false);
+                // 选中失败项
+                lastConsolidateFailedEntries.forEach(failed => {
+                    const cb = modal.querySelector(`.ttw-consolidate-entry-cb[data-category="${failed.category}"][data-entry="${failed.name}"]`);
+                    if (cb) cb.checked = true;
+                });
+                updateSelectedCount();
+            });
+        }
 
         modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
         modal.querySelector('#ttw-cancel-consolidate').addEventListener('click', () => modal.remove());
         modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
 
         modal.querySelector('#ttw-start-consolidate').addEventListener('click', async () => {
-            const selectedCategories = [...modal.querySelectorAll('.ttw-consolidate-cat-cb:checked')].map(cb => cb.dataset.category);
-            if (selectedCategories.length === 0) {
-                alert('请至少选择一个分类');
+            const selectedEntries = [...modal.querySelectorAll('.ttw-consolidate-entry-cb:checked')].map(cb => ({
+                category: cb.dataset.category,
+                name: cb.dataset.entry
+            }));
+            if (selectedEntries.length === 0) {
+                alert('请至少选择一个条目');
                 return;
             }
-
+            if (!confirm(`确定要整理 ${selectedEntries.length} 个条目吗？`)) return;
             modal.remove();
-            await consolidateSelectedCategories(selectedCategories);
+            await consolidateSelectedEntries(selectedEntries);
         });
+
+        updateSelectedCount();
     }
 
+
     async function consolidateSelectedCategories(categories) {
-        let totalEntries = 0;
-        for (const cat of categories) {
-            totalEntries += Object.keys(generatedWorldbook[cat] || {}).length;
-        }
-
-        if (!confirm(`确定要整理 ${categories.length} 个分类，共 ${totalEntries} 个条目吗？\n这将使用AI去除重复信息。`)) return;
-
-        showProgressSection(true);
-        isProcessingStopped = false;
-        updateProgress(0, '开始整理条目...');
-        updateStreamContent('', true);
-        updateStreamContent(`🧹 开始整理条目\n分类: ${categories.join(', ')}\n${'='.repeat(50)}\n`);
-
-        const semaphore = new Semaphore(parallelConfig.concurrency);
-        let completed = 0;
-        let failed = 0;
-
         const allEntries = [];
         for (const cat of categories) {
             for (const name of Object.keys(generatedWorldbook[cat] || {})) {
                 allEntries.push({ category: cat, name });
             }
         }
+        if (allEntries.length === 0) { alert('没有条目'); return; }
+        if (!confirm(`确定要整理 ${allEntries.length} 个条目吗？`)) return;
+        await consolidateSelectedEntries(allEntries);
+    }
+
+    async function consolidateSelectedEntries(entries) {
+        showProgressSection(true);
+        isProcessingStopped = false;
+        updateProgress(0, '开始整理条目...');
+        updateStreamContent('', true);
+        updateStreamContent(`🧹 开始整理 ${entries.length} 个条目\n${'='.repeat(50)}\n`);
+
+        const semaphore = new Semaphore(parallelConfig.concurrency);
+        let completed = 0;
+        let failed = 0;
+        const failedEntries = [];
 
         const processOne = async (entry, index) => {
             if (isProcessingStopped) return;
 
-            await semaphore.acquire();
+            try {
+                await semaphore.acquire();
+            } catch (e) {
+                if (e.message === 'ABORTED') return;
+                throw e;
+            }
+
             if (isProcessingStopped) {
                 semaphore.release();
                 return;
             }
 
             try {
-                updateStreamContent(`📝 [${index + 1}/${allEntries.length}] ${entry.category} - ${entry.name}\n`);
+                updateStreamContent(`📝 [${index + 1}/${entries.length}] ${entry.category} - ${entry.name}\n`);
                 await consolidateEntry(entry.category, entry.name);
                 completed++;
-                updateProgress((completed / allEntries.length) * 100, `整理中 (${completed}/${allEntries.length})`);
+                updateProgress(((completed + failed) / entries.length) * 100, `整理中 (${completed}✅ ${failed}❌ / ${entries.length})`);
                 updateStreamContent(`   ✅ 完成\n`);
             } catch (error) {
                 failed++;
+                failedEntries.push({ category: entry.category, name: entry.name, error: error.message });
+                updateProgress(((completed + failed) / entries.length) * 100, `整理中 (${completed}✅ ${failed}❌ / ${entries.length})`);
                 updateStreamContent(`   ❌ 失败: ${error.message}\n`);
             } finally {
                 semaphore.release();
             }
         };
 
-        await Promise.allSettled(allEntries.map((entry, i) => processOne(entry, i)));
+        await Promise.allSettled(entries.map((entry, i) => processOne(entry, i)));
+
+        // 记录失败条目供下次重试
+        lastConsolidateFailedEntries = failedEntries;
 
         updateProgress(100, `整理完成: 成功 ${completed}, 失败 ${failed}`);
         updateStreamContent(`\n${'='.repeat(50)}\n✅ 整理完成！成功 ${completed}, 失败 ${failed}\n`);
 
+        if (failedEntries.length > 0) {
+            updateStreamContent(`\n❗ 失败条目:\n`);
+            failedEntries.forEach(f => {
+                updateStreamContent(`   • [${f.category}] ${f.name}: ${f.error}\n`);
+            });
+            updateStreamContent(`\n💡 再次打开"整理条目"可以只选失败项重试\n`);
+        }
+
         updateWorldbookPreview();
-        alert(`条目整理完成！成功: ${completed}, 失败: ${failed}`);
+
+        let msg = `条目整理完成！\n成功: ${completed}\n失败: ${failed}`;
+        if (failed > 0) {
+            msg += `\n\n再次点击"整理条目"可以只选失败项重试`;
+        }
+        alert(msg);
+    }
+
+    // ========== 清除标签功能（不消耗Token） ==========
+    function showCleanTagsModal() {
+        const existingModal = document.getElementById('ttw-clean-tags-modal');
+        if (existingModal) existingModal.remove();
+
+        const modal = document.createElement('div');
+        modal.id = 'ttw-clean-tags-modal';
+        modal.className = 'ttw-modal-container';
+
+        modal.innerHTML = `
+            <div class="ttw-modal" style="max-width:650px;">
+                <div class="ttw-modal-header">
+                    <span class="ttw-modal-title">🏷️ 清除标签内容（不消耗Token）</span>
+                    <button class="ttw-modal-close" type="button">✕</button>
+                </div>
+                <div class="ttw-modal-body">
+                    <div style="margin-bottom:16px;padding:12px;background:rgba(52,152,219,0.15);border-radius:8px;">
+                        <div style="font-size:12px;color:#ccc;">
+                            纯本地处理，不调用AI，不消耗Token。<br>
+                            输入标签名后将清除世界书和各章节结果中所有匹配的标签及其内容。
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom:16px;">
+                        <label style="display:block;margin-bottom:8px;font-size:13px;font-weight:bold;">要清除的标签名（每行一个）</label>
+                        <textarea id="ttw-clean-tags-input" rows="5" class="ttw-textarea-small" placeholder="每行一个标签名，例如：
+thinking
+tucao
+tochao
+think">thinking\ntucao\ntochao\nthink</textarea>
+                    </div>
+
+                    <div style="margin-bottom:16px;padding:12px;background:rgba(230,126,34,0.1);border-radius:6px;">
+                        <div style="font-weight:bold;color:#e67e22;margin-bottom:8px;font-size:12px;">📋 处理规则</div>
+                        <ul style="margin:0;padding-left:18px;font-size:11px;color:#ccc;line-height:1.8;">
+                            <li><code><tag>内容</tag></code> → 整个移除（标签+内容）</li>
+                            <li>开头到 <code></tag></code> → 移除（处理不闭合的结束标签）</li>
+                            <li><code><tag>内容</code> 到末尾 → 移除（处理不闭合的开始标签）</li>
+                        </ul>
+                    </div>
+
+                    <div style="margin-bottom:16px;">
+                        <label class="ttw-checkbox-label">
+                            <input type="checkbox" id="ttw-clean-in-worldbook" checked>
+                            <span>清除世界书中的标签</span>
+                        </label>
+                        <label class="ttw-checkbox-label" style="margin-top:8px;">
+                            <input type="checkbox" id="ttw-clean-in-results" checked>
+                            <span>清除各章节处理结果中的标签</span>
+                        </label>
+                    </div>
+
+                    <div id="ttw-clean-tags-preview" style="display:none;max-height:250px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:12px;margin-bottom:16px;">
+                    </div>
+                </div>
+                <div class="ttw-modal-footer">
+                    <button class="ttw-btn" id="ttw-preview-clean-tags">👁️ 预览</button>
+                    <button class="ttw-btn ttw-btn-warning" id="ttw-execute-clean-tags">🏷️ 执行清除</button>
+                    <button class="ttw-btn" id="ttw-close-clean-tags">关闭</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
+        modal.querySelector('#ttw-close-clean-tags').addEventListener('click', () => modal.remove());
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+        modal.querySelector('#ttw-preview-clean-tags').addEventListener('click', () => {
+            const tagNames = parseTagNames(modal.querySelector('#ttw-clean-tags-input').value);
+            if (tagNames.length === 0) { alert('请输入至少一个标签名'); return; }
+
+            const inWorldbook = modal.querySelector('#ttw-clean-in-worldbook').checked;
+            const inResults = modal.querySelector('#ttw-clean-in-results').checked;
+
+            const preview = previewCleanTags(tagNames, inWorldbook, inResults);
+            const previewDiv = modal.querySelector('#ttw-clean-tags-preview');
+            previewDiv.style.display = 'block';
+
+            if (preview.totalMatches === 0) {
+                previewDiv.innerHTML = '<div style="text-align:center;color:#888;padding:20px;">未找到匹配的标签内容</div>';
+            } else {
+                let html = `<div style="margin-bottom:10px;color:#27ae60;font-weight:bold;">找到 ${preview.totalMatches} 处匹配（${preview.affectedEntries} 个条目受影响）</div>`;
+                preview.matches.slice(0, 30).forEach(m => {
+                    const beforeShort = m.before.length > 80 ? m.before.substring(0, 80) + '...' : m.before;
+                    html += `
+                        <div style="font-size:11px;margin-bottom:6px;padding:6px;background:rgba(0,0,0,0.2);border-radius:4px;border-left:3px solid #e74c3c;">
+                            <div style="color:#888;font-size:10px;margin-bottom:4px;">${m.location}</div>
+                            <div style="color:#e74c3c;text-decoration:line-through;word-break:break-all;">${beforeShort.replace(/</g, '<').replace(/>/g, '>')}</div>
+                        </div>
+                    `;
+                });
+                if (preview.matches.length > 30) {
+                    html += `<div style="color:#888;text-align:center;padding:8px;">...还有 ${preview.matches.length - 30} 处</div>`;
+                }
+                previewDiv.innerHTML = html;
+            }
+        });
+
+        modal.querySelector('#ttw-execute-clean-tags').addEventListener('click', () => {
+            const tagNames = parseTagNames(modal.querySelector('#ttw-clean-tags-input').value);
+            if (tagNames.length === 0) { alert('请输入至少一个标签名'); return; }
+
+            const inWorldbook = modal.querySelector('#ttw-clean-in-worldbook').checked;
+            const inResults = modal.querySelector('#ttw-clean-in-results').checked;
+
+            const preview = previewCleanTags(tagNames, inWorldbook, inResults);
+            if (preview.totalMatches === 0) { alert('未找到匹配的标签内容'); return; }
+
+            if (!confirm(`确定要清除 ${preview.totalMatches} 处标签内容吗？\n涉及 ${preview.affectedEntries} 个条目。\n\n此操作不可撤销！`)) return;
+
+            const result = executeCleanTags(tagNames, inWorldbook, inResults);
+            modal.remove();
+            updateWorldbookPreview();
+            alert(`清除完成！共清除 ${result.cleanedCount} 处标签内容`);
+        });
+    }
+
+    function parseTagNames(input) {
+        return input.split('\n')
+            .map(line => line.trim())
+            .filter(line => line.length > 0 && /^[a-zA-Z_][a-zA-Z0-9_-]*$/.test(line));
+    }
+
+    function buildTagRegexes(tagNames) {
+        const regexes = [];
+        for (const tag of tagNames) {
+            const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            // 完整标签对：<tag>内容</tag>（含换行）
+            regexes.push(new RegExp(`<${escaped}>[\\s\\S]*?</${escaped}>`, 'gi'));
+            // 开头到不闭合的结束标签：从文本开头到</tag>
+            regexes.push(new RegExp(`^[\\s\\S]*?</${escaped}>`, 'gi'));
+            // 不闭合的开始标签到末尾：<tag>到文本末尾
+            regexes.push(new RegExp(`<${escaped}>[\\s\\S]*$`, 'gi'));
+        }
+        return regexes;
+    }
+
+    function cleanSingleText(text, tagNames) {
+        if (!text || typeof text !== 'string') return { text, changed: false, matchCount: 0 };
+
+        let result = text;
+        let totalMatchCount = 0;
+
+        for (const tag of tagNames) {
+            const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+            // 第1步：完整闭合标签 <tag>...</tag>
+            const fullRegex = new RegExp(`<${escaped}>[\\s\\S]*?</${escaped}>`, 'gi');
+            const fullMatches = result.match(fullRegex);
+            if (fullMatches) {
+                totalMatchCount += fullMatches.length;
+                result = result.replace(fullRegex, '');
+            }
+
+            // 第2步：开头到不闭合的</tag>
+            const closeOnlyRegex = new RegExp(`^[\\s\\S]*?</${escaped}>`, 'i');
+            if (closeOnlyRegex.test(result)) {
+                totalMatchCount++;
+                result = result.replace(closeOnlyRegex, '');
+            }
+
+            // 第3步：不闭合的<tag>到末尾
+            const openOnlyRegex = new RegExp(`<${escaped}>[\\s\\S]*$`, 'i');
+            if (openOnlyRegex.test(result)) {
+                totalMatchCount++;
+                result = result.replace(openOnlyRegex, '');
+            }
+        }
+
+        // 清理多余空行
+        result = result.replace(/\n{3,}/g, '\n\n').trim();
+
+        return {
+            text: result,
+            changed: result !== text,
+            matchCount: totalMatchCount
+        };
+    }
+
+    function previewCleanTags(tagNames, inWorldbook, inResults) {
+        const matches = [];
+        let totalMatches = 0;
+        const affectedEntriesSet = new Set();
+
+        const scanEntry = (content, location, entryKey) => {
+            const result = cleanSingleText(content, tagNames);
+            if (result.changed) {
+                totalMatches += result.matchCount;
+                affectedEntriesSet.add(entryKey);
+
+                // 提取匹配片段用于预览
+                for (const tag of tagNames) {
+                    const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const fullRegex = new RegExp(`<${escaped}>[\\s\\S]*?</${escaped}>`, 'gi');
+                    let match;
+                    while ((match = fullRegex.exec(content)) !== null) {
+                        matches.push({ location, before: match[0].substring(0, 150) });
+                    }
+                    const closeOnlyRegex = new RegExp(`^[\\s\\S]*?</${escaped}>`, 'i');
+                    const closeMatch = content.match(closeOnlyRegex);
+                    if (closeMatch) {
+                        matches.push({ location: location + ' (开头不闭合)', before: closeMatch[0].substring(0, 150) });
+                    }
+                    const openOnlyRegex = new RegExp(`<${escaped}>[\\s\\S]*$`, 'i');
+                    const openMatch = content.match(openOnlyRegex);
+                    if (openMatch && !fullRegex.test(content)) {
+                        matches.push({ location: location + ' (末尾不闭合)', before: openMatch[0].substring(0, 150) });
+                    }
+                }
+            }
+        };
+
+        if (inWorldbook) {
+            for (const cat in generatedWorldbook) {
+                for (const name in generatedWorldbook[cat]) {
+                    const entry = generatedWorldbook[cat][name];
+                    if (entry['内容']) {
+                        scanEntry(entry['内容'], `世界书/${cat}/${name}`, `wb-${cat}-${name}`);
+                    }
+                }
+            }
+        }
+
+        if (inResults) {
+            for (let i = 0; i < memoryQueue.length; i++) {
+                const memory = memoryQueue[i];
+                if (!memory.result) continue;
+                for (const cat in memory.result) {
+                    for (const name in memory.result[cat]) {
+                        const entry = memory.result[cat][name];
+                        if (entry && entry['内容']) {
+                            scanEntry(entry['内容'], `记忆${i + 1}/${cat}/${name}`, `mem${i}-${cat}-${name}`);
+                        }
+                    }
+                }
+            }
+        }
+
+        return { totalMatches, affectedEntries: affectedEntriesSet.size, matches };
+    }
+
+    function executeCleanTags(tagNames, inWorldbook, inResults) {
+        let cleanedCount = 0;
+
+        if (inWorldbook) {
+            for (const cat in generatedWorldbook) {
+                for (const name in generatedWorldbook[cat]) {
+                    const entry = generatedWorldbook[cat][name];
+                    if (entry['内容']) {
+                        const result = cleanSingleText(entry['内容'], tagNames);
+                        if (result.changed) {
+                            entry['内容'] = result.text;
+                            cleanedCount += result.matchCount;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (inResults) {
+            for (let i = 0; i < memoryQueue.length; i++) {
+                const memory = memoryQueue[i];
+                if (!memory.result) continue;
+                for (const cat in memory.result) {
+                    for (const name in memory.result[cat]) {
+                        const entry = memory.result[cat][name];
+                        if (entry && entry['内容']) {
+                            const result = cleanSingleText(entry['内容'], tagNames);
+                            if (result.changed) {
+                                entry['内容'] = result.text;
+                                cleanedCount += result.matchCount;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return { cleanedCount };
     }
 
     // ========== 别名识别与合并 ==========
@@ -6753,7 +7195,7 @@ ${pairsContent}
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v2.9.8 </span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v2.9.9 </span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -7098,7 +7540,8 @@ ${pairsContent}
                                 <button id="ttw-replace-btn" class="ttw-btn">🔄 替换</button>
                                 <button id="ttw-view-worldbook" class="ttw-btn">📖 查看世界书</button>
                                 <button id="ttw-view-history" class="ttw-btn">📜 修改历史</button>
-                                <button id="ttw-consolidate-entries" class="ttw-btn" title="用AI整理条目，去除重复信息">🧹 整理条目</button>
+                                 <button id="ttw-consolidate-entries" class="ttw-btn" title="用AI整理条目，去除重复信息">🧹 整理条目</button>
+                                <button id="ttw-clean-tags" class="ttw-btn" title="清除条目中的标签内容（不消耗Token）">🏷️ 清除标签</button>
                                 <button id="ttw-alias-merge" class="ttw-btn" title="识别同一角色的不同称呼并合并">🔗 别名合并</button>
                                 <button id="ttw-export-json" class="ttw-btn">📥 导出JSON</button>
                                 <button id="ttw-export-volumes" class="ttw-btn" style="display:none;">📦 分卷导出</button>
@@ -7510,6 +7953,7 @@ ${pairsContent}
         document.getElementById('ttw-view-worldbook').addEventListener('click', showWorldbookView);
         document.getElementById('ttw-view-history').addEventListener('click', showHistoryView);
         document.getElementById('ttw-consolidate-entries').addEventListener('click', showConsolidateCategorySelector);
+        document.getElementById('ttw-clean-tags').addEventListener('click', showCleanTagsModal);
         document.getElementById('ttw-alias-merge').addEventListener('click', showAliasMergeUI);
         document.getElementById('ttw-export-json').addEventListener('click', exportWorldbook);
         document.getElementById('ttw-export-volumes').addEventListener('click', exportVolumes);
@@ -8286,5 +8730,5 @@ ${pairsContent}
         getDefaultWorldbookEntriesUI: () => defaultWorldbookEntriesUI
     };
 
-    console.log('📚 TxtToWorldbook v2.9.8 已加载');
+    console.log('📚 TxtToWorldbook v2.9.9 已加载');
 })();
