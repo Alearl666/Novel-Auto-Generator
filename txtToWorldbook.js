@@ -3646,54 +3646,62 @@ ${generateDynamicJsonTemplate()}
         modal.className = 'ttw-modal-container';
 
         modal.innerHTML = `
-            <div class="ttw-modal" style="max-width:650px;">
+            <div class="ttw-modal" style="max-width:750px;">
                 <div class="ttw-modal-header">
                     <span class="ttw-modal-title">🏷️ 清除标签内容（不消耗Token）</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
-                <div class="ttw-modal-body">
+                <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
                     <div style="margin-bottom:16px;padding:12px;background:rgba(52,152,219,0.15);border-radius:8px;">
                         <div style="font-size:12px;color:#ccc;">
                             纯本地处理，不调用AI，不消耗Token。<br>
-                            输入标签名后将清除世界书和各章节结果中所有匹配的标签及其内容。
+                            扫描后逐条列出匹配，可以单独确认或取消每一条删除。
                         </div>
                     </div>
 
                     <div style="margin-bottom:16px;">
                         <label style="display:block;margin-bottom:8px;font-size:13px;font-weight:bold;">要清除的标签名（每行一个）</label>
-                        <textarea id="ttw-clean-tags-input" rows="5" class="ttw-textarea-small" placeholder="每行一个标签名，例如：
+                        <textarea id="ttw-clean-tags-input" rows="4" class="ttw-textarea-small" placeholder="每行一个标签名，例如：
 thinking
 tucao
-tochao
-think">thinking\ntucao\ntochao\nthink</textarea>
+tochao">thinking\ntucao\ntochao</textarea>
                     </div>
 
                     <div style="margin-bottom:16px;padding:12px;background:rgba(230,126,34,0.1);border-radius:6px;">
-                        <div style="font-weight:bold;color:#e67e22;margin-bottom:8px;font-size:12px;">📋 处理规则</div>
+                        <div style="font-weight:bold;color:#e67e22;margin-bottom:8px;font-size:12px;">📋 匹配规则</div>
                         <ul style="margin:0;padding-left:18px;font-size:11px;color:#ccc;line-height:1.8;">
-                            <li><code><tag>内容</tag></code> → 整个移除（标签+内容）</li>
-                            <li>开头到 <code></tag></code> → 移除（处理不闭合的结束标签）</li>
-                            <li><code><tag>内容</code> 到末尾 → 移除（处理不闭合的开始标签）</li>
+                            <li><code><tag>内容</tag></code> → 移除标签和标签内的内容</li>
+                            <li>文本开头就是 <code>...内容</tag></code> → 移除开头到该结束标签</li>
+                            <li>文本末尾有 <code><tag>内容...</code> 无闭合 → 移除该开始标签到末尾</li>
                         </ul>
+                        <div style="font-size:11px;color:#f39c12;margin-top:6px;">⚠️ 每条匹配都会显示前后文字，请逐条确认再删除</div>
                     </div>
 
                     <div style="margin-bottom:16px;">
                         <label class="ttw-checkbox-label">
                             <input type="checkbox" id="ttw-clean-in-worldbook" checked>
-                            <span>清除世界书中的标签</span>
+                            <span>扫描世界书</span>
                         </label>
                         <label class="ttw-checkbox-label" style="margin-top:8px;">
                             <input type="checkbox" id="ttw-clean-in-results" checked>
-                            <span>清除各章节处理结果中的标签</span>
+                            <span>扫描各章节处理结果</span>
                         </label>
                     </div>
 
-                    <div id="ttw-clean-tags-preview" style="display:none;max-height:250px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:12px;margin-bottom:16px;">
+                    <div id="ttw-clean-tags-results" style="display:none;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                            <span id="ttw-clean-scan-summary" style="font-weight:bold;color:#27ae60;"></span>
+                            <div style="display:flex;gap:8px;">
+                                <button class="ttw-btn-tiny" id="ttw-clean-select-all">全选</button>
+                                <button class="ttw-btn-tiny" id="ttw-clean-deselect-all">全不选</button>
+                            </div>
+                        </div>
+                        <div id="ttw-clean-match-list" style="max-height:350px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:8px;"></div>
                     </div>
                 </div>
                 <div class="ttw-modal-footer">
-                    <button class="ttw-btn" id="ttw-preview-clean-tags">👁️ 预览</button>
-                    <button class="ttw-btn ttw-btn-warning" id="ttw-execute-clean-tags">🏷️ 执行清除</button>
+                    <button class="ttw-btn ttw-btn-primary" id="ttw-scan-tags">🔍 扫描</button>
+                    <button class="ttw-btn ttw-btn-warning" id="ttw-execute-clean-tags" style="display:none;">🗑️ 删除选中项</button>
                     <button class="ttw-btn" id="ttw-close-clean-tags">关闭</button>
                 </div>
             </div>
@@ -3701,57 +3709,90 @@ think">thinking\ntucao\ntochao\nthink</textarea>
 
         document.body.appendChild(modal);
 
+        let scanResults = [];
+
         modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
         modal.querySelector('#ttw-close-clean-tags').addEventListener('click', () => modal.remove());
         modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
 
-        modal.querySelector('#ttw-preview-clean-tags').addEventListener('click', () => {
+        // 扫描
+        modal.querySelector('#ttw-scan-tags').addEventListener('click', () => {
             const tagNames = parseTagNames(modal.querySelector('#ttw-clean-tags-input').value);
             if (tagNames.length === 0) { alert('请输入至少一个标签名'); return; }
 
             const inWorldbook = modal.querySelector('#ttw-clean-in-worldbook').checked;
             const inResults = modal.querySelector('#ttw-clean-in-results').checked;
 
-            const preview = previewCleanTags(tagNames, inWorldbook, inResults);
-            const previewDiv = modal.querySelector('#ttw-clean-tags-preview');
-            previewDiv.style.display = 'block';
+            scanResults = scanForTags(tagNames, inWorldbook, inResults);
 
-            if (preview.totalMatches === 0) {
-                previewDiv.innerHTML = '<div style="text-align:center;color:#888;padding:20px;">未找到匹配的标签内容</div>';
-            } else {
-                let html = `<div style="margin-bottom:10px;color:#27ae60;font-weight:bold;">找到 ${preview.totalMatches} 处匹配（${preview.affectedEntries} 个条目受影响）</div>`;
-                preview.matches.slice(0, 30).forEach(m => {
-                    const beforeShort = m.before.length > 80 ? m.before.substring(0, 80) + '...' : m.before;
-                    html += `
-                        <div style="font-size:11px;margin-bottom:6px;padding:6px;background:rgba(0,0,0,0.2);border-radius:4px;border-left:3px solid #e74c3c;">
-                            <div style="color:#888;font-size:10px;margin-bottom:4px;">${m.location}</div>
-                            <div style="color:#e74c3c;text-decoration:line-through;word-break:break-all;">${beforeShort.replace(/</g, '<').replace(/>/g, '>')}</div>
-                        </div>
-                    `;
-                });
-                if (preview.matches.length > 30) {
-                    html += `<div style="color:#888;text-align:center;padding:8px;">...还有 ${preview.matches.length - 30} 处</div>`;
-                }
-                previewDiv.innerHTML = html;
+            const resultsDiv = modal.querySelector('#ttw-clean-tags-results');
+            const summaryEl = modal.querySelector('#ttw-clean-scan-summary');
+            const listEl = modal.querySelector('#ttw-clean-match-list');
+            const execBtn = modal.querySelector('#ttw-execute-clean-tags');
+
+            resultsDiv.style.display = 'block';
+
+            if (scanResults.length === 0) {
+                summaryEl.textContent = '未找到匹配的标签内容';
+                summaryEl.style.color = '#888';
+                listEl.innerHTML = '';
+                execBtn.style.display = 'none';
+                return;
             }
+
+            summaryEl.textContent = `找到 ${scanResults.length} 处匹配`;
+            summaryEl.style.color = '#27ae60';
+            execBtn.style.display = 'inline-block';
+            execBtn.textContent = `🗑️ 删除选中项 (${scanResults.length})`;
+
+            renderMatchList(listEl, scanResults, execBtn);
         });
 
+        // 全选/全不选
+        modal.querySelector('#ttw-clean-select-all').addEventListener('click', () => {
+            modal.querySelectorAll('.ttw-clean-match-cb').forEach(cb => cb.checked = true);
+            updateExecBtnCount(modal, scanResults);
+        });
+        modal.querySelector('#ttw-clean-deselect-all').addEventListener('click', () => {
+            modal.querySelectorAll('.ttw-clean-match-cb').forEach(cb => cb.checked = false);
+            updateExecBtnCount(modal, scanResults);
+        });
+
+        // 执行删除
         modal.querySelector('#ttw-execute-clean-tags').addEventListener('click', () => {
-            const tagNames = parseTagNames(modal.querySelector('#ttw-clean-tags-input').value);
-            if (tagNames.length === 0) { alert('请输入至少一个标签名'); return; }
+            const selectedIndices = [...modal.querySelectorAll('.ttw-clean-match-cb:checked')].map(cb => parseInt(cb.dataset.index));
+            if (selectedIndices.length === 0) { alert('请至少选择一项'); return; }
 
-            const inWorldbook = modal.querySelector('#ttw-clean-in-worldbook').checked;
-            const inResults = modal.querySelector('#ttw-clean-in-results').checked;
+            if (!confirm(`确定要删除选中的 ${selectedIndices.length} 处标签内容吗？\n\n请确认预览无误！此操作不可撤销！`)) return;
 
-            const preview = previewCleanTags(tagNames, inWorldbook, inResults);
-            if (preview.totalMatches === 0) { alert('未找到匹配的标签内容'); return; }
+            // 按从后往前排序，避免删除偏移
+            const toDelete = selectedIndices.map(i => scanResults[i]).filter(Boolean);
+            const grouped = groupMatchesBySource(toDelete);
 
-            if (!confirm(`确定要清除 ${preview.totalMatches} 处标签内容吗？\n涉及 ${preview.affectedEntries} 个条目。\n\n此操作不可撤销！`)) return;
+            let deletedCount = 0;
+            for (const key in grouped) {
+                const matches = grouped[key];
+                // 同一个文本内的匹配，从后往前删
+                matches.sort((a, b) => b.startInText - a.startInText);
 
-            const result = executeCleanTags(tagNames, inWorldbook, inResults);
+                const textRef = getTextRef(matches[0]);
+                if (!textRef) continue;
+
+                let text = textRef.get();
+                for (const m of matches) {
+                    const before = text.substring(0, m.startInText);
+                    const after = text.substring(m.endInText);
+                    text = before + after;
+                    deletedCount++;
+                }
+                // 清理多余空行
+                text = text.replace(/\n{3,}/g, '\n\n').trim();
+                textRef.set(text);
+            }
+
             modal.remove();
             updateWorldbookPreview();
-            alert(`清除完成！共清除 ${result.cleanedCount} 处标签内容`);
+            alert(`清除完成！共删除 ${deletedCount} 处标签内容`);
         });
     }
 
@@ -3761,90 +3802,78 @@ think">thinking\ntucao\ntochao\nthink</textarea>
             .filter(line => line.length > 0 && /^[a-zA-Z_][a-zA-Z0-9_-]*$/.test(line));
     }
 
-    function buildTagRegexes(tagNames) {
-        const regexes = [];
-        for (const tag of tagNames) {
-            const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            // 完整标签对：<tag>内容</tag>（含换行）
-            regexes.push(new RegExp(`<${escaped}>[\\s\\S]*?</${escaped}>`, 'gi'));
-            // 开头到不闭合的结束标签：从文本开头到</tag>
-            regexes.push(new RegExp(`^[\\s\\S]*?</${escaped}>`, 'gi'));
-            // 不闭合的开始标签到末尾：<tag>到文本末尾
-            regexes.push(new RegExp(`<${escaped}>[\\s\\S]*$`, 'gi'));
-        }
-        return regexes;
-    }
+    function scanForTags(tagNames, inWorldbook, inResults) {
+        const allMatches = [];
 
-    function cleanSingleText(text, tagNames) {
-        if (!text || typeof text !== 'string') return { text, changed: false, matchCount: 0 };
+        const scanText = (text, source, category, entryName, memoryIndex) => {
+            if (!text || typeof text !== 'string') return;
 
-        let result = text;
-        let totalMatchCount = 0;
+            for (const tag of tagNames) {
+                const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-        for (const tag of tagNames) {
-            const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                // 规则1：完整闭合 <tag>...</tag>
+                const fullRegex = new RegExp(`<${escaped}>[\\s\\S]*?</${escaped}>`, 'gi');
+                let match;
+                while ((match = fullRegex.exec(text)) !== null) {
+                    allMatches.push({
+                        source, category, entryName, memoryIndex, tag,
+                        type: 'full',
+                        startInText: match.index,
+                        endInText: match.index + match[0].length,
+                        matchedText: match[0],
+                        fullText: text
+                    });
+                }
 
-            // 第1步：完整闭合标签 <tag>...</tag>
-            const fullRegex = new RegExp(`<${escaped}>[\\s\\S]*?</${escaped}>`, 'gi');
-            const fullMatches = result.match(fullRegex);
-            if (fullMatches) {
-                totalMatchCount += fullMatches.length;
-                result = result.replace(fullRegex, '');
-            }
-
-            // 第2步：开头到不闭合的</tag>
-            const closeOnlyRegex = new RegExp(`^[\\s\\S]*?</${escaped}>`, 'i');
-            if (closeOnlyRegex.test(result)) {
-                totalMatchCount++;
-                result = result.replace(closeOnlyRegex, '');
-            }
-
-            // 第3步：不闭合的<tag>到末尾
-            const openOnlyRegex = new RegExp(`<${escaped}>[\\s\\S]*$`, 'i');
-            if (openOnlyRegex.test(result)) {
-                totalMatchCount++;
-                result = result.replace(openOnlyRegex, '');
-            }
-        }
-
-        // 清理多余空行
-        result = result.replace(/\n{3,}/g, '\n\n').trim();
-
-        return {
-            text: result,
-            changed: result !== text,
-            matchCount: totalMatchCount
-        };
-    }
-
-    function previewCleanTags(tagNames, inWorldbook, inResults) {
-        const matches = [];
-        let totalMatches = 0;
-        const affectedEntriesSet = new Set();
-
-        const scanEntry = (content, location, entryKey) => {
-            const result = cleanSingleText(content, tagNames);
-            if (result.changed) {
-                totalMatches += result.matchCount;
-                affectedEntriesSet.add(entryKey);
-
-                // 提取匹配片段用于预览
-                for (const tag of tagNames) {
-                    const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                    const fullRegex = new RegExp(`<${escaped}>[\\s\\S]*?</${escaped}>`, 'gi');
-                    let match;
-                    while ((match = fullRegex.exec(content)) !== null) {
-                        matches.push({ location, before: match[0].substring(0, 150) });
+                // 规则2：文本开头到</tag>（不闭合的结束标签）
+                // 只在文本前500字符内找</tag>，且前面没有对应的<tag>
+                const closeTagRegex = new RegExp(`</${escaped}>`, 'i');
+                const closeMatch = text.substring(0, 500).match(closeTagRegex);
+                if (closeMatch) {
+                    const closePos = closeMatch.index + closeMatch[0].length;
+                    const textBefore = text.substring(0, closeMatch.index);
+                    const openTagCheck = new RegExp(`<${escaped}[\\s>]`, 'i');
+                    // 如果前面没有开始标签，说明是不闭合的
+                    if (!openTagCheck.test(textBefore)) {
+                        allMatches.push({
+                            source, category, entryName, memoryIndex, tag,
+                            type: 'close-only',
+                            startInText: 0,
+                            endInText: closePos,
+                            matchedText: text.substring(0, closePos),
+                            fullText: text
+                        });
                     }
-                    const closeOnlyRegex = new RegExp(`^[\\s\\S]*?</${escaped}>`, 'i');
-                    const closeMatch = content.match(closeOnlyRegex);
-                    if (closeMatch) {
-                        matches.push({ location: location + ' (开头不闭合)', before: closeMatch[0].substring(0, 150) });
-                    }
-                    const openOnlyRegex = new RegExp(`<${escaped}>[\\s\\S]*$`, 'i');
-                    const openMatch = content.match(openOnlyRegex);
-                    if (openMatch && !fullRegex.test(content)) {
-                        matches.push({ location: location + ' (末尾不闭合)', before: openMatch[0].substring(0, 150) });
+                }
+
+                // 规则3：<tag>到文本末尾（不闭合的开始标签）
+                // 只在文本后500字符内找<tag>，且后面没有对应的</tag>
+                const tailStart = Math.max(0, text.length - 500);
+                const tailText = text.substring(tailStart);
+                const openTagRegex = new RegExp(`<${escaped}>`, 'i');
+                const openMatch = tailText.match(openTagRegex);
+                if (openMatch) {
+                    const absPos = tailStart + openMatch.index;
+                    const textAfter = text.substring(absPos);
+                    const closeTagCheck = new RegExp(`</${escaped}>`, 'i');
+                    // 如果后面没有结束标签，说明是不闭合的
+                    if (!closeTagCheck.test(textAfter.substring(openMatch[0].length))) {
+                        // 排除和规则1重复的（已被完整匹配过）
+                        const alreadyMatched = allMatches.some(m =>
+                            m.source === source && m.category === category &&
+                            m.entryName === entryName && m.memoryIndex === memoryIndex &&
+                            m.startInText <= absPos && m.endInText >= text.length
+                        );
+                        if (!alreadyMatched) {
+                            allMatches.push({
+                                source, category, entryName, memoryIndex, tag,
+                                type: 'open-only',
+                                startInText: absPos,
+                                endInText: text.length,
+                                matchedText: text.substring(absPos),
+                                fullText: text
+                            });
+                        }
                     }
                 }
             }
@@ -3854,8 +3883,8 @@ think">thinking\ntucao\ntochao\nthink</textarea>
             for (const cat in generatedWorldbook) {
                 for (const name in generatedWorldbook[cat]) {
                     const entry = generatedWorldbook[cat][name];
-                    if (entry['内容']) {
-                        scanEntry(entry['内容'], `世界书/${cat}/${name}`, `wb-${cat}-${name}`);
+                    if (entry && entry['内容']) {
+                        scanText(entry['内容'], 'worldbook', cat, name, -1);
                     }
                 }
             }
@@ -3869,55 +3898,116 @@ think">thinking\ntucao\ntochao\nthink</textarea>
                     for (const name in memory.result[cat]) {
                         const entry = memory.result[cat][name];
                         if (entry && entry['内容']) {
-                            scanEntry(entry['内容'], `记忆${i + 1}/${cat}/${name}`, `mem${i}-${cat}-${name}`);
+                            scanText(entry['内容'], 'memory', cat, name, i);
                         }
                     }
                 }
             }
         }
 
-        return { totalMatches, affectedEntries: affectedEntriesSet.size, matches };
+        return allMatches;
     }
 
-    function executeCleanTags(tagNames, inWorldbook, inResults) {
-        let cleanedCount = 0;
+    function renderMatchList(container, matches, execBtn) {
+        let html = '';
+        const CONTEXT_CHARS = 40;
 
-        if (inWorldbook) {
-            for (const cat in generatedWorldbook) {
-                for (const name in generatedWorldbook[cat]) {
-                    const entry = generatedWorldbook[cat][name];
-                    if (entry['内容']) {
-                        const result = cleanSingleText(entry['内容'], tagNames);
-                        if (result.changed) {
-                            entry['内容'] = result.text;
-                            cleanedCount += result.matchCount;
-                        }
-                    }
-                }
-            }
-        }
+        matches.forEach((m, idx) => {
+            const locationStr = m.source === 'worldbook'
+                ? `世界书 / ${m.category} / ${m.entryName}`
+                : `记忆${m.memoryIndex + 1} / ${m.category} / ${m.entryName}`;
 
-        if (inResults) {
-            for (let i = 0; i < memoryQueue.length; i++) {
-                const memory = memoryQueue[i];
-                if (!memory.result) continue;
-                for (const cat in memory.result) {
-                    for (const name in memory.result[cat]) {
-                        const entry = memory.result[cat][name];
-                        if (entry && entry['内容']) {
-                            const result = cleanSingleText(entry['内容'], tagNames);
-                            if (result.changed) {
-                                entry['内容'] = result.text;
-                                cleanedCount += result.matchCount;
-                            }
-                        }
-                    }
-                }
-            }
-        }
+            const typeLabels = { 'full': '完整标签', 'close-only': '开头不闭合', 'open-only': '末尾不闭合' };
+            const typeColors = { 'full': '#3498db', 'close-only': '#e67e22', 'open-only': '#9b59b6' };
 
-        return { cleanedCount };
+            // 前文
+            const beforeStart = Math.max(0, m.startInText - CONTEXT_CHARS);
+            const beforeText = m.fullText.substring(beforeStart, m.startInText);
+            const beforePrefix = beforeStart > 0 ? '...' : '';
+
+            // 被删内容（截断显示）
+            const deletedFull = m.matchedText;
+            const deletedDisplay = deletedFull.length > 200
+                ? deletedFull.substring(0, 100) + `\n... (${deletedFull.length}字) ...\n` + deletedFull.substring(deletedFull.length - 80)
+                : deletedFull;
+
+            // 后文
+            const afterEnd = Math.min(m.fullText.length, m.endInText + CONTEXT_CHARS);
+            const afterText = m.fullText.substring(m.endInText, afterEnd);
+            const afterSuffix = afterEnd < m.fullText.length ? '...' : '';
+
+            const escapedBefore = (beforePrefix + beforeText).replace(/</g, '<').replace(/>/g, '>').replace(/\n/g, '↵');
+            const escapedDeleted = deletedDisplay.replace(/</g, '<').replace(/>/g, '>').replace(/\n/g, '↵');
+            const escapedAfter = (afterText + afterSuffix).replace(/</g, '<').replace(/>/g, '>').replace(/\n/g, '↵');
+
+            html += `
+                <div style="margin-bottom:10px;padding:10px;background:rgba(0,0,0,0.2);border-radius:6px;border-left:3px solid ${typeColors[m.type] || '#888'};">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                        <input type="checkbox" class="ttw-clean-match-cb" data-index="${idx}" checked style="width:16px;height:16px;accent-color:#e74c3c;flex-shrink:0;">
+                        <div style="flex:1;min-width:0;">
+                            <div style="font-size:10px;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${locationStr}">${locationStr}</div>
+                            <div style="font-size:10px;margin-top:2px;">
+                                <span style="color:${typeColors[m.type]};font-weight:bold;">${typeLabels[m.type]}</span>
+                                <span style="color:#888;margin-left:6px;"><${m.tag}> · ${m.matchedText.length}字</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="font-family:monospace;font-size:11px;line-height:1.6;background:rgba(0,0,0,0.3);padding:8px;border-radius:4px;word-break:break-all;overflow-x:auto;">
+                        <span style="color:#888;">${escapedBefore}</span><span style="background:rgba(231,76,60,0.4);color:#ff6b6b;text-decoration:line-through;border:1px dashed #e74c3c;padding:1px 2px;border-radius:2px;">${escapedDeleted}</span><span style="color:#888;">${escapedAfter}</span>
+                    </div>
+                </div>
+            `;
+        });
+
+        container.innerHTML = html;
+
+        // 绑定checkbox事件更新计数
+        container.querySelectorAll('.ttw-clean-match-cb').forEach(cb => {
+            cb.addEventListener('change', () => {
+                updateExecBtnCount(container.closest('.ttw-modal-container'), matches);
+            });
+        });
     }
+
+    function updateExecBtnCount(modal, allMatches) {
+        const execBtn = modal.querySelector('#ttw-execute-clean-tags');
+        if (!execBtn) return;
+        const checkedCount = modal.querySelectorAll('.ttw-clean-match-cb:checked').length;
+        execBtn.textContent = `🗑️ 删除选中项 (${checkedCount})`;
+    }
+
+    function groupMatchesBySource(matches) {
+        const groups = {};
+        for (const m of matches) {
+            const key = m.source === 'worldbook'
+                ? `wb::${m.category}::${m.entryName}`
+                : `mem${m.memoryIndex}::${m.category}::${m.entryName}`;
+            if (!groups[key]) groups[key] = [];
+            groups[key].push(m);
+        }
+        return groups;
+    }
+
+    function getTextRef(match) {
+        if (match.source === 'worldbook') {
+            const entry = generatedWorldbook[match.category]?.[match.entryName];
+            if (!entry) return null;
+            return {
+                get: () => entry['内容'] || '',
+                set: (val) => { entry['内容'] = val; }
+            };
+        } else {
+            const memory = memoryQueue[match.memoryIndex];
+            if (!memory?.result) return null;
+            const entry = memory.result[match.category]?.[match.entryName];
+            if (!entry) return null;
+            return {
+                get: () => entry['内容'] || '',
+                set: (val) => { entry['内容'] = val; }
+            };
+        }
+    }
+
 
     // ========== 别名识别与合并 ==========
     function findPotentialDuplicateCharacters() {
@@ -5231,6 +5321,22 @@ ${pairsContent}
                 for (const entryName in generatedWorldbook[category]) {
                     const entry = generatedWorldbook[category][entryName];
 
+                    // 检查条目名称
+                    if (entryName.includes(findText)) {
+                        count++;
+                        allMatches.push({
+                            source: 'worldbook',
+                            category,
+                            entryName,
+                            field: 'entryName',
+                            fieldIndex: -1,
+                            location: `世界书/${category}/${entryName}/条目名称`,
+                            locationShort: `[${category}] ${entryName} - 条目名称`,
+                            before: entryName,
+                            after: entryName.replace(regex, replaceWith)
+                        });
+                    }
+
                     // 检查关键词
                     if (Array.isArray(entry['关键词'])) {
                         entry['关键词'].forEach((kw, kwIndex) => {
@@ -5257,7 +5363,6 @@ ${pairsContent}
                         const matchCount = matches ? matches.length : 0;
                         count += matchCount;
 
-                        // 找到第一个匹配的上下文作为预览
                         const idx = entry['内容'].indexOf(findText);
                         const start = Math.max(0, idx - 20);
                         const end = Math.min(entry['内容'].length, idx + findText.length + 20);
@@ -5287,6 +5392,23 @@ ${pairsContent}
                 for (const category in memory.result) {
                     for (const entryName in memory.result[category]) {
                         const entry = memory.result[category][entryName];
+
+                        // 检查条目名称
+                        if (entryName.includes(findText)) {
+                            count++;
+                            allMatches.push({
+                                source: 'memory',
+                                memoryIndex: i,
+                                category,
+                                entryName,
+                                field: 'entryName',
+                                fieldIndex: -1,
+                                location: `记忆${i + 1}/${category}/${entryName}/条目名称`,
+                                locationShort: `记忆${i + 1} [${category}] ${entryName} - 条目名称`,
+                                before: entryName,
+                                after: entryName.replace(regex, replaceWith)
+                            });
+                        }
 
                         if (Array.isArray(entry['关键词'])) {
                             entry['关键词'].forEach((kw, kwIndex) => {
@@ -5344,6 +5466,24 @@ ${pairsContent}
         const regex = new RegExp(findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
 
         if (matchInfo.source === 'worldbook') {
+            if (matchInfo.field === 'entryName') {
+                const catData = generatedWorldbook[matchInfo.category];
+                if (!catData || !catData[matchInfo.entryName]) return false;
+                const newName = matchInfo.entryName.replace(regex, replaceWith);
+                if (!newName || newName === matchInfo.entryName) return false;
+                const finalName = catData[newName] ? newName + '_重命名' : newName;
+                catData[finalName] = catData[matchInfo.entryName];
+                delete catData[matchInfo.entryName];
+                // 同步entryPositionConfig
+                const oldKey = `${matchInfo.category}::${matchInfo.entryName}`;
+                const newKey = `${matchInfo.category}::${finalName}`;
+                if (entryPositionConfig[oldKey]) {
+                    entryPositionConfig[newKey] = entryPositionConfig[oldKey];
+                    delete entryPositionConfig[oldKey];
+                }
+                return true;
+            }
+
             const entry = generatedWorldbook[matchInfo.category]?.[matchInfo.entryName];
             if (!entry) return false;
 
@@ -5362,6 +5502,17 @@ ${pairsContent}
         } else if (matchInfo.source === 'memory') {
             const memory = memoryQueue[matchInfo.memoryIndex];
             if (!memory?.result) return false;
+
+            if (matchInfo.field === 'entryName') {
+                const catData = memory.result[matchInfo.category];
+                if (!catData || !catData[matchInfo.entryName]) return false;
+                const newName = matchInfo.entryName.replace(regex, replaceWith);
+                if (!newName || newName === matchInfo.entryName) return false;
+                const finalName = catData[newName] ? newName + '_重命名' : newName;
+                catData[finalName] = catData[matchInfo.entryName];
+                delete catData[matchInfo.entryName];
+                return true;
+            }
 
             const entry = memory.result[matchInfo.category]?.[matchInfo.entryName];
             if (!entry) return false;
@@ -5384,11 +5535,40 @@ ${pairsContent}
     }
 
 
+
     function executeReplace(findText, replaceWith, inWorldbook, inResults) {
         const regex = new RegExp(findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
         let count = 0;
 
         if (inWorldbook) {
+            // 先收集需要重命名的条目名称（避免遍历中修改对象）
+            const renameList = [];
+            for (const category in generatedWorldbook) {
+                for (const entryName in generatedWorldbook[category]) {
+                    if (entryName.includes(findText)) {
+                        const newName = entryName.replace(regex, replaceWith);
+                        if (newName && newName !== entryName) {
+                            renameList.push({ category, oldName: entryName, newName });
+                            count++;
+                        }
+                    }
+                }
+            }
+            // 执行重命名
+            for (const item of renameList) {
+                const catData = generatedWorldbook[item.category];
+                const finalName = catData[item.newName] ? item.newName + '_重命名' : item.newName;
+                catData[finalName] = catData[item.oldName];
+                delete catData[item.oldName];
+                // 同步entryPositionConfig
+                const oldKey = `${item.category}::${item.oldName}`;
+                const newKey = `${item.category}::${finalName}`;
+                if (entryPositionConfig[oldKey]) {
+                    entryPositionConfig[newKey] = entryPositionConfig[oldKey];
+                    delete entryPositionConfig[oldKey];
+                }
+            }
+
             for (const category in generatedWorldbook) {
                 for (const entryName in generatedWorldbook[category]) {
                     const entry = generatedWorldbook[category][entryName];
@@ -5400,7 +5580,7 @@ ${pairsContent}
                                 return kw.replace(regex, replaceWith);
                             }
                             return kw;
-                        }).filter(kw => kw); // 过滤空字符串
+                        }).filter(kw => kw);
                     }
 
                     if (entry['内容'] && entry['内容'].includes(findText)) {
@@ -5416,6 +5596,27 @@ ${pairsContent}
             for (let i = 0; i < memoryQueue.length; i++) {
                 const memory = memoryQueue[i];
                 if (!memory.result) continue;
+
+                // 先收集需要重命名的
+                const renameList = [];
+                for (const category in memory.result) {
+                    for (const entryName in memory.result[category]) {
+                        if (entryName.includes(findText)) {
+                            const newName = entryName.replace(regex, replaceWith);
+                            if (newName && newName !== entryName) {
+                                renameList.push({ category, oldName: entryName, newName });
+                                count++;
+                            }
+                        }
+                    }
+                }
+                // 执行重命名
+                for (const item of renameList) {
+                    const catData = memory.result[item.category];
+                    const finalName = catData[item.newName] ? item.newName + '_重命名' : item.newName;
+                    catData[finalName] = catData[item.oldName];
+                    delete catData[item.oldName];
+                }
 
                 for (const category in memory.result) {
                     for (const entryName in memory.result[category]) {
@@ -5443,6 +5644,7 @@ ${pairsContent}
 
         return { count };
     }
+
 
     // ========== 新增：条目配置弹窗 ==========
     function showEntryConfigModal(category, entryName) {
