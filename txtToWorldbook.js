@@ -35,6 +35,9 @@
     // 新增：查找高亮关键词
     let searchHighlightKeyword = '';
 
+    // 新增：Token高亮阈值
+    let tokenHighlightThreshold = 0;
+
     // 新增：条目位置/深度/顺序配置（按分类和条目名称存储）
     let entryPositionConfig = {};
 
@@ -168,6 +171,50 @@
     };
 
     let activeParallelTasks = new Set();
+
+    // ========== Token计数功能 ==========
+    function estimateTokenCount(text) {
+        if (!text) return 0;
+        const str = String(text);
+        // 简单估算：中文字符约1.5-2 token，英文单词约1 token，标点符号等
+        let tokens = 0;
+
+        // 中文字符计数 (大约每个中文字符1.5-2个token)
+        const chineseChars = (str.match(/[\u4e00-\u9fa5]/g) || []).length;
+        tokens += chineseChars * 1.5;
+
+        // 英文单词计数
+        const englishWords = (str.match(/[a-zA-Z]+/g) || []).length;
+        tokens += englishWords;
+
+        // 数字
+        const numbers = (str.match(/\d+/g) || []).length;
+        tokens += numbers;
+
+        // 标点和特殊字符
+        const punctuation = (str.match(/[^\u4e00-\u9fa5a-zA-Z0-9\s]/g) || []).length;
+        tokens += punctuation * 0.5;
+
+        return Math.ceil(tokens);
+    }
+
+    function getEntryTotalTokens(entry) {
+        if (!entry || typeof entry !== 'object') return 0;
+        let total = 0;
+
+        // 计算关键词tokens
+        if (entry['关键词']) {
+            const keywords = Array.isArray(entry['关键词']) ? entry['关键词'].join(', ') : entry['关键词'];
+            total += estimateTokenCount(keywords);
+        }
+
+        // 计算内容tokens
+        if (entry['内容']) {
+            total += estimateTokenCount(entry['内容']);
+        }
+
+        return total;
+    }
 
     // ========== 默认设置 ==========
     const defaultWorldbookPrompt = `你是专业的小说世界书生成专家。请仔细阅读提供的小说内容，提取其中的关键信息，生成高质量的世界书条目。
@@ -8798,6 +8845,9 @@ ${pairsContent}
         }
         let html = '';
         let totalEntries = 0;
+        let totalTokens = 0;
+        let belowThresholdCount = 0;
+
         for (const category in worldbook) {
             const entries = worldbook[category];
             const entryCount = typeof entries === 'object' ? Object.keys(entries).length : 0;
@@ -8809,12 +8859,20 @@ ${pairsContent}
             const lightIcon = isGreen ? '🟢' : '🔵';
             const lightTitle = isGreen ? '绿灯(触发式) - 点击切换为蓝灯' : '蓝灯(常驻) - 点击切换为绿灯';
 
+            // 计算分类token总数
+            let categoryTokens = 0;
+            for (const entryName in entries) {
+                categoryTokens += getEntryTotalTokens(entries[entryName]);
+            }
+            totalTokens += categoryTokens;
+
             html += `<div style="margin-bottom:12px;border:1px solid #e67e22;border-radius:8px;overflow:hidden;">
                 <div style="background:linear-gradient(135deg,#e67e22,#d35400);padding:10px 14px;cursor:pointer;font-weight:bold;display:flex;justify-content:space-between;align-items:center;" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
                     <span style="display:flex;align-items:center;">📁 ${category}<button class="ttw-light-toggle ${lightClass}" data-category="${category}" title="${lightTitle}" onclick="event.stopPropagation();">${lightIcon}</button><button class="ttw-config-btn" data-category="${category}" title="配置分类默认位置/深度" onclick="event.stopPropagation();">⚙️</button></span>
-                    <span style="font-size:12px;">${entryCount} 条目</span>
+                    <span style="font-size:12px;">${entryCount} 条目 | <span style="color:#f1c40f;">~${categoryTokens} tk</span></span>
                 </div>
                 <div style="background:#2d2d2d;display:none;">`;
+
             for (const entryName in entries) {
                 const entry = entries[entryName];
                 const config = getEntryConfig(category, entryName);
@@ -8829,30 +8887,52 @@ ${pairsContent}
                     displayOrder = baseOrder + entryIndex;
                 }
 
+                // 计算条目token数
+                const entryTokens = getEntryTotalTokens(entry);
+
+                // 判断是否低于阈值需要高亮
+                const isBelowThreshold = tokenHighlightThreshold > 0 && entryTokens < tokenHighlightThreshold;
+                if (isBelowThreshold) belowThresholdCount++;
+
+                const highlightStyle = isBelowThreshold ? 'background:#7f1d1d;border-left:3px solid #ef4444;' : 'border-left:3px solid #3498db;';
+                const tokenStyle = isBelowThreshold ? 'color:#ef4444;font-weight:bold;' : 'color:#f1c40f;';
+                const warningIcon = isBelowThreshold ? '⚠️ ' : '';
+
                 html += `<div style="margin:8px;border:1px solid #555;border-radius:6px;overflow:hidden;">
-        <div style="background:#3a3a3a;padding:8px 12px;cursor:pointer;display:flex;justify-content:space-between;border-left:3px solid #3498db;" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
-            <span style="display:flex;align-items:center;gap:6px;">📄 ${entryName}<button class="ttw-entry-config-btn ttw-config-btn" data-category="${category}" data-entry="${entryName}" title="配置位置/深度/顺序" onclick="event.stopPropagation();">⚙️</button></span>
-            <span style="font-size:10px;color:#888;">${getPositionDisplayName(config.position)} | 深度${config.depth} | 顺序${displayOrder}${autoIncrement ? ' ↗' : ''}</span>
+        <div style="background:#3a3a3a;padding:8px 12px;cursor:pointer;display:flex;justify-content:space-between;${highlightStyle}" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+            <span style="display:flex;align-items:center;gap:6px;">${warningIcon}📄 ${entryName}<button class="ttw-entry-config-btn ttw-config-btn" data-category="${category}" data-entry="${entryName}" title="配置位置/深度/顺序" onclick="event.stopPropagation();">⚙️</button></span>
+            <span style="font-size:10px;color:#888;display:flex;gap:8px;align-items:center;">
+                <span style="${tokenStyle}">${entryTokens} tk</span>
+                <span>${getPositionDisplayName(config.position)} | 深度${config.depth} | 顺序${displayOrder}${autoIncrement ? ' ↗' : ''}</span>
+            </span>
         </div>
         <div style="display:none;background:#1c1c1c;padding:12px;">`;
 
                 if (entry && typeof entry === 'object') {
                     if (entry['关键词']) {
                         const keywords = Array.isArray(entry['关键词']) ? entry['关键词'].join(', ') : entry['关键词'];
+                        const keywordTokens = estimateTokenCount(keywords);
                         html += `<div style="margin-bottom:8px;padding:8px;background:#252525;border-left:3px solid #9b59b6;border-radius:4px;">
-                <div style="color:#9b59b6;font-size:11px;margin-bottom:4px;">🔑 关键词</div>
+                <div style="color:#9b59b6;font-size:11px;margin-bottom:4px;display:flex;justify-content:space-between;">
+                    <span>🔑 关键词</span>
+                    <span style="color:#888;">~${keywordTokens} tk</span>
+                </div>
                 <div style="font-size:13px;">${keywords}</div>
             </div>`;
                     }
                     if (entry['内容']) {
-                        let content = String(entry['内容']).replace(/</g, '<').replace(/>/g, '>').replace(/\*\*(.+?)\*\*/g, '<strong style="color:#3498db;">$1</strong>').replace(/\n/g, '<br>');
+                        let content = String(entry['内容']).replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\*\*(.+?)\*\*/g, '<strong style="color:#3498db;">$1</strong>').replace(/\n/g, '<br>');
+                        const contentTokens = estimateTokenCount(entry['内容']);
                         // 如果有搜索关键词，高亮显示
                         if (searchHighlightKeyword) {
                             const regex = new RegExp(searchHighlightKeyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
                             content = content.replace(regex, `<span style="background:#f1c40f;color:#000;padding:1px 2px;border-radius:2px;">${searchHighlightKeyword}</span>`);
                         }
                         html += `<div style="padding:8px;background:#252525;border-left:3px solid #27ae60;border-radius:4px;line-height:1.6;">
-                <div style="color:#27ae60;font-size:11px;margin-bottom:4px;">📝 内容</div>
+                <div style="color:#27ae60;font-size:11px;margin-bottom:4px;display:flex;justify-content:space-between;">
+                    <span>📝 内容</span>
+                    <span style="color:#888;">~${contentTokens} tk</span>
+                </div>
                 <div style="font-size:13px;">${content}</div>
             </div>`;
                     }
@@ -8861,7 +8941,13 @@ ${pairsContent}
             }
             html += `</div></div>`;
         }
-        return `<div style="margin-bottom:12px;font-size:13px;">共 ${Object.keys(worldbook).filter(k => Object.keys(worldbook[k]).length > 0).length} 个分类, ${totalEntries} 个条目</div>` + html;
+
+        // 统计信息
+        const thresholdInfo = tokenHighlightThreshold > 0
+            ? ` | <span style="color:#ef4444;">⚠️ ${belowThresholdCount}个条目低于${tokenHighlightThreshold}tk</span>`
+            : '';
+
+        return `<div style="margin-bottom:12px;font-size:13px;">共 ${Object.keys(worldbook).filter(k => Object.keys(worldbook[k]).length > 0).length} 个分类, ${totalEntries} 个条目 | <span style="color:#f1c40f;">总计 ~${totalTokens} tk</span>${thresholdInfo}</div>` + html;
     }
 
     function bindLightToggleEvents(container) {
@@ -8914,6 +9000,12 @@ ${pairsContent}
                     <span class="ttw-modal-title">📖 世界书详细视图${useVolumeMode ? ` (${worldbookVolumes.length}卷合并)` : ''}</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
+                <div style="padding:10px 15px;background:#1a1a1a;border-bottom:1px solid #444;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                    <span style="font-size:12px;color:#888;">🔍 Token阈值:</span>
+                    <input type="number" id="ttw-token-threshold-input" value="${tokenHighlightThreshold}" min="0" step="50" style="width:80px;padding:4px 8px;border-radius:4px;border:1px solid #555;background:#2d2d2d;color:#fff;font-size:12px;" placeholder="0">
+                    <button class="ttw-btn ttw-btn-small" id="ttw-apply-threshold">应用</button>
+                    <span style="font-size:11px;color:#666;">低于此值的条目将红色高亮（0=关闭）</span>
+                </div>
                 <div class="ttw-modal-body" id="ttw-worldbook-view-body">${formatWorldbookAsCards(worldbookToShow)}</div>
                 <div class="ttw-modal-footer">
                     <div style="font-size:11px;color:#888;margin-right:auto;">💡 点击⚙️配置位置/深度/顺序，点击灯图标切换蓝灯/绿灯</div>
@@ -8922,6 +9014,25 @@ ${pairsContent}
             </div>
         `;
         document.body.appendChild(viewModal);
+
+        // 绑定阈值应用事件
+        viewModal.querySelector('#ttw-apply-threshold').addEventListener('click', () => {
+            const input = viewModal.querySelector('#ttw-token-threshold-input');
+            tokenHighlightThreshold = parseInt(input.value) || 0;
+            // 重新渲染内容
+            const bodyContainer = viewModal.querySelector('#ttw-worldbook-view-body');
+            bodyContainer.innerHTML = formatWorldbookAsCards(worldbookToShow);
+            bindLightToggleEvents(bodyContainer);
+            bindConfigButtonEvents(bodyContainer);
+        });
+
+        // 支持回车键应用
+        viewModal.querySelector('#ttw-token-threshold-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                viewModal.querySelector('#ttw-apply-threshold').click();
+            }
+        });
+
         bindLightToggleEvents(viewModal.querySelector('#ttw-worldbook-view-body'));
         bindConfigButtonEvents(viewModal.querySelector('#ttw-worldbook-view-body'));
         viewModal.querySelector('.ttw-modal-close').addEventListener('click', () => viewModal.remove());
