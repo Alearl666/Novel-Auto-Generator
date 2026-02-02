@@ -3076,7 +3076,9 @@ ${generateDynamicJsonTemplate()}
             for (const entryName in generatedWorldbook[category]) {
                 const sources = findEntrySourceMemories(category, entryName);
                 if (sources.length > 0) {
-                    allEntries.push({ category, entryName, sources });
+                    const entry = generatedWorldbook[category][entryName];
+                    const tokenCount = getEntryTotalTokens(entry);
+                    allEntries.push({ category, entryName, sources, tokenCount });
                 }
             }
         }
@@ -3088,11 +3090,13 @@ ${generateDynamicJsonTemplate()}
 
         let entriesHtml = '';
         allEntries.forEach((entry, idx) => {
+            const tokenStyle = entry.tokenCount < 100 ? 'color:#ef4444;' : 'color:#f1c40f;';
             entriesHtml += `
                 <label style="display:flex;align-items:center;gap:8px;padding:6px;background:rgba(230,126,34,0.1);border-radius:4px;margin-bottom:4px;cursor:pointer;">
                     <input type="checkbox" name="ttw-batch-entry" data-category="${entry.category}" data-entry="${entry.entryName}">
-                    <span style="font-size:12px;"><span style="color:#e67e22;">[${entry.category}]</span> ${entry.entryName}</span>
-                    <span style="font-size:10px;color:#888;margin-left:auto;">${entry.sources.length}章</span>
+                    <span style="font-size:12px;flex:1;"><span style="color:#e67e22;">[${entry.category}]</span> ${entry.entryName}</span>
+                    <span style="font-size:10px;${tokenStyle}">${entry.tokenCount}tk</span>
+                    <span style="font-size:10px;color:#888;">${entry.sources.length}章</span>
                 </label>
             `;
         });
@@ -7703,10 +7707,21 @@ ${pairsContent}
         helpModal.innerHTML = `
         <div class="ttw-modal" style="max-width:700px;">
             <div class="ttw-modal-header">
-                <span class="ttw-modal-title">❓ TXT转世界书 v3.0.1 帮助</span>
+                <span class="ttw-modal-title">❓ TXT转世界书 v3.0.3 帮助</span>
                 <button class="ttw-modal-close" type="button">✕</button>
             </div>
             <div class="ttw-modal-body" style="max-height:75vh;overflow-y:auto;">
+
+                <div style="margin-bottom:16px;padding:12px;background:rgba(155,89,182,0.15);border-radius:8px;border-left:4px solid #9b59b6;">
+                    <h4 style="color:#9b59b6;margin:0 0 10px;">🆕 v3.0.3 新功能</h4>
+                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
+                        <li><strong>单独重Roll多选并发</strong>：可同时选择多个来源章节进行重Roll，支持配置并发数</li>
+                        <li><strong>条目内容可编辑</strong>：重Roll弹窗中可直接编辑关键词和内容，保存后立即生效</li>
+                        <li><strong>条目级Roll历史</strong>：每个条目有独立的Roll历史记录，可选择任意历史版本使用（不影响其他条目）</li>
+                        <li><strong>批量重Roll按钮</strong>：世界书详细视图新增"🎲 批量重Roll"按钮，可一次性选择多个不同条目重Roll</li>
+                        <li><strong>Token数显示</strong>：批量重Roll列表显示每个条目的Token数（低于100的红色高亮）</li>
+                    </ul>
+                </div>
 
                 <div style="margin-bottom:16px;">
                     <h4 style="color:#e67e22;margin:0 0 10px;">📌 基本功能</h4>
@@ -8431,7 +8446,7 @@ ${pairsContent}
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v3.0.0 </span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v3.0.3 </span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
