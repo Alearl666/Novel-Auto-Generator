@@ -2,7 +2,7 @@
 /**
  * TXT转世界书独立模块 v3.0.2
  * 新增: 查找高亮、批量替换、多选整理分类、条目位置/深度/顺序配置、默认世界书UI化、新增默认勾选2递归选项、Token计数与阈值高亮
- * v3.0.2 新增: 单独重Roll条目功能 - 对生成结果的某个条目不满意时可单独重Roll该条目（支持自定义提示词）
+ * v3.0.2 新增: 单独重Roll条目功能 - 对生成结果的某个条目不满意时可单独重Roll该条目（支持自定义提示词），不影响已整理/合并的其他条目
  */
 
 (function () {
@@ -2456,7 +2456,7 @@ ${generateDynamicJsonTemplate()}
         return sources;
     }
 
-    // ========== 新增：单独重Roll条目 ==========
+    // ========== 新增：单独重Roll条目（不影响已整理/合并的其他条目） ==========
     async function rerollSingleEntry(memoryIndex, category, entryName, customPrompt = '') {
         const memory = memoryQueue[memoryIndex];
         if (!memory) {
@@ -2567,8 +2567,12 @@ ${generateDynamicJsonTemplate()}
                 // 保存到历史
                 await MemoryHistoryDB.saveRollResult(memoryIndex, memory.result);
 
-                // 重建世界书
-                rebuildWorldbookFromMemories();
+                // 【关键修改】只更新世界书中的该条目，不重建整个世界书
+                // 这样可以保留别名合并、整理等操作的结果
+                if (!generatedWorldbook[category]) {
+                    generatedWorldbook[category] = {};
+                }
+                generatedWorldbook[category][entryName] = entryUpdate[category][entryName];
 
                 updateStreamContent(`✅ 条目重Roll完成: [${category}] ${entryName}\n`);
                 updateMemoryQueueUI();
@@ -2629,7 +2633,7 @@ ${generateDynamicJsonTemplate()}
                 <div class="ttw-modal-body">
                     <div style="margin-bottom:16px;padding:12px;background:rgba(230,126,34,0.15);border-radius:8px;">
                         <div style="font-weight:bold;color:#e67e22;margin-bottom:4px;">[${category}] ${entryName}</div>
-                        <div style="font-size:11px;color:#888;">只重新生成此条目，不影响该章节的其他条目</div>
+                        <div style="font-size:11px;color:#888;">只重新生成此条目，不影响已整理/合并的其他条目</div>
                     </div>
 
                     <div style="margin-bottom:16px;">
@@ -2639,13 +2643,13 @@ ${generateDynamicJsonTemplate()}
 
                     <div style="margin-bottom:16px;">
                         <label style="display:block;margin-bottom:8px;font-weight:bold;font-size:13px;">📝 额外提示词（可选）</label>
-                        <textarea id="ttw-reroll-entry-prompt" rows="4" placeholder="例如：请更详细地描述该角色的性格特点、请补充该角色的外貌描写、请重点分析该角色的心理活动..." class="ttw-textarea" style="width:100%;padding:10px;"></textarea>
+                        <textarea id="ttw-reroll-entry-prompt" rows="4" placeholder="例如：请更详细地描述该角色的性格特点、请补充该角色的外貌描写、请重点分析该角色在本章的心理活动..." class="ttw-textarea" style="width:100%;padding:10px;"></textarea>
                         <div style="font-size:11px;color:#888;margin-top:4px;">💡 可以在这里指定你希望AI重点关注或补充的内容</div>
                     </div>
                 </div>
                 <div class="ttw-modal-footer">
                     <button class="ttw-btn" id="ttw-cancel-reroll-entry">取消</button>
-                    <button class="ttw-btn ttw-btn-primary" id="ttw-confirm-reroll-entry" ${sources.length === 0 ? 'disabled style="opacity:0.5;"' : ''}>🎲 开始重Roll</button>
+                    <button class="ttw-btn ttw-btn-primary" id="ttw-confirm-reroll-entry" ${sources.length === 0 ? 'disabled style="opacity:0.5;"' : ''}>🎯 开始重Roll</button>
                 </div>
             </div>
         `;
@@ -2680,7 +2684,7 @@ ${generateDynamicJsonTemplate()}
                     alert(`❌ 重Roll失败: ${error.message}`);
                 }
                 confirmBtn.disabled = false;
-                confirmBtn.textContent = '🎲 开始重Roll';
+                confirmBtn.textContent = '🎯 开始重Roll';
             }
         });
     }
@@ -7267,7 +7271,7 @@ ${pairsContent}
                         <li><strong>⏸️ 暂停/继续</strong>：随时暂停，下次从断点继续</li>
                         <li><strong>🔧 修复失败</strong>：自动重试所有失败章节，支持Token超限自动分裂</li>
                         <li><strong>🎲 重Roll</strong>：重新生成某章节的世界书条目</li>
-                        <li><strong>🎯 单独重Roll条目</strong>：对某个条目不满意？点击条目旁的🎯按钮单独重Roll，支持自定义提示词</li>
+                        <li><strong>🎯 单独重Roll条目</strong>：对某个条目不满意？点击条目旁的🎯按钮单独重Roll，支持自定义提示词，不影响已整理/合并的其他条目</li>
                         <li><strong>Roll历史</strong>：查看所有历史Roll版本，选择任意版本使用</li>
                         <li>Roll历史支持<strong>在线编辑JSON</strong>并保存</li>
                         <li>Roll历史支持<strong>粘贴JSON导入</strong>（自动解析代码块格式）</li>
@@ -9148,6 +9152,7 @@ ${pairsContent}
         container.innerHTML = headerInfo + formatWorldbookAsCards(worldbookToShow);
         bindLightToggleEvents(container);
         bindConfigButtonEvents(container);
+        bindEntryRerollEvents(container);
     }
 
     function formatWorldbookAsCards(worldbook) {
@@ -9210,11 +9215,11 @@ ${pairsContent}
                 const warningIcon = isBelowThreshold ? '⚠️ ' : '';
 
                 html += `<div style="margin:8px;border:1px solid #555;border-radius:6px;overflow:hidden;">
-        <div style="background:#3a3a3a;padding:8px 12px;cursor:pointer;display:flex;justify-content:space-between;${highlightStyle}" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
-            <span style="display:flex;align-items:center;gap:6px;">${warningIcon}📄 ${entryName}<button class="ttw-entry-config-btn ttw-config-btn" data-category="${category}" data-entry="${entryName}" title="配置位置/深度/顺序" onclick="event.stopPropagation();">⚙️</button><button class="ttw-entry-reroll-btn" data-category="${category}" data-entry="${entryName}" title="单独重Roll此条目" onclick="event.stopPropagation();" style="background:rgba(155,89,182,0.3);border:none;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:11px;color:#fff;">🎯</button></span>
-            <span style="font-size:10px;color:#888;display:flex;gap:8px;align-items:center;">
-                <span style="${tokenStyle}">${entryTokens} tk</span>
-                <span>${getPositionDisplayName(config.position)} | 深度${config.depth} | 顺序${displayOrder}${autoIncrement ? ' ↗' : ''}</span>
+        <div style="background:#3a3a3a;padding:8px 12px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;${highlightStyle}" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+            <span style="display:flex;align-items:center;gap:4px;flex:1;min-width:0;overflow:hidden;">${warningIcon}📄 <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${entryName}</span><button class="ttw-entry-config-btn ttw-config-btn" data-category="${category}" data-entry="${entryName}" title="配置位置/深度/顺序" onclick="event.stopPropagation();">⚙️</button><button class="ttw-entry-reroll-btn" data-category="${category}" data-entry="${entryName}" title="单独重Roll此条目" onclick="event.stopPropagation();" style="background:rgba(155,89,182,0.4);border:none;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:11px;color:#fff;flex-shrink:0;">🎯</button></span>
+            <span style="font-size:9px;color:#888;display:flex;gap:6px;align-items:center;flex-shrink:0;margin-left:8px;">
+                <span style="${tokenStyle}">${entryTokens}tk</span>
+                <span>${getPositionDisplayName(config.position)}|D${config.depth}|O${displayOrder}${autoIncrement ? '↗' : ''}</span>
             </span>
         </div>
         <div style="display:none;background:#1c1c1c;padding:12px;">`;
@@ -9307,6 +9312,7 @@ ${pairsContent}
                 const entryName = btn.dataset.entry;
                 showRerollEntryModal(category, entryName, () => {
                     // 重Roll完成后刷新视图
+                    updateWorldbookPreview();
                     const viewModal = document.getElementById('ttw-worldbook-view-modal');
                     if (viewModal) {
                         const worldbookToShow = useVolumeMode ? getAllVolumesWorldbook() : generatedWorldbook;
@@ -9344,7 +9350,7 @@ ${pairsContent}
                 </div>
                 <div class="ttw-modal-body" id="ttw-worldbook-view-body">${formatWorldbookAsCards(worldbookToShow)}</div>
                 <div class="ttw-modal-footer">
-                    <div style="font-size:11px;color:#888;margin-right:auto;">💡 点击⚙️配置位置/深度/顺序，点击🎯单独重Roll条目，点击灯图标切换蓝灯/绿灯</div>
+                    <div style="font-size:11px;color:#888;margin-right:auto;">💡 点击⚙️配置，点击🎯单独重Roll条目，点击灯图标切换蓝/绿灯</div>
                     <button class="ttw-btn" id="ttw-close-worldbook-view">关闭</button>
                 </div>
             </div>
