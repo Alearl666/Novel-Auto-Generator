@@ -1,7 +1,8 @@
 
 /**
- * TXT转世界书独立模块 v3.0.1
+ * TXT转世界书独立模块 v3.0.2
  * 新增: 查找高亮、批量替换、多选整理分类、条目位置/深度/顺序配置、默认世界书UI化、新增默认勾选2递归选项、Token计数与阈值高亮
+ * v3.0.2 新增: 单独重Roll条目功能 - 对生成结果的某个条目不满意时可单独重Roll该条目（支持自定义提示词）
  */
 
 (function () {
@@ -2436,6 +2437,252 @@ ${generateDynamicJsonTemplate()}
         } finally {
             isRerolling = false;
         }
+    }
+
+    // ========== 新增：查找条目来源章节 ==========
+    function findEntrySourceMemories(category, entryName) {
+        const sources = [];
+        for (let i = 0; i < memoryQueue.length; i++) {
+            const memory = memoryQueue[i];
+            if (!memory.result || memory.failed) continue;
+            if (memory.result[category] && memory.result[category][entryName]) {
+                sources.push({
+                    memoryIndex: i,
+                    memory: memory,
+                    entry: memory.result[category][entryName]
+                });
+            }
+        }
+        return sources;
+    }
+
+    // ========== 新增：单独重Roll条目 ==========
+    async function rerollSingleEntry(memoryIndex, category, entryName, customPrompt = '') {
+        const memory = memoryQueue[memoryIndex];
+        if (!memory) {
+            throw new Error('找不到对应的章节');
+        }
+
+        isRerolling = true;
+        isProcessingStopped = false;
+
+        updateStopButtonVisibility(true);
+
+        updateStreamContent(`\n🎯 开始单独重Roll条目: [${category}] ${entryName} (来自第${memoryIndex + 1}章)\n`);
+
+        const chapterIndex = memoryIndex + 1;
+        const chapterForcePrompt = settings.forceChapterMarker ? getChapterForcePrompt(chapterIndex) : '';
+
+        // 构建专门针对单个条目的提示词
+        let prompt = chapterForcePrompt;
+        prompt += getLanguagePrefix();
+        
+        // 获取分类的配置信息
+        const categoryConfig = customWorldbookCategories.find(c => c.name === category);
+        const contentGuide = categoryConfig ? categoryConfig.contentGuide : '';
+        
+        prompt += `\n你是一个专业的小说世界书条目生成助手。请根据以下原文内容，专门重新生成指定的条目。\n`;
+        prompt += `\n【任务说明】\n`;
+        prompt += `- 只需要生成一个条目：分类="${category}"，条目名称="${entryName}"\n`;
+        prompt += `- 请基于原文内容重新分析并生成该条目的信息\n`;
+        prompt += `- 输出格式必须是JSON，结构为：{ "${category}": { "${entryName}": { "关键词": [...], "内容": "..." } } }\n`;
+        
+        if (contentGuide) {
+            prompt += `\n【该分类的内容指南】\n${contentGuide}\n`;
+        }
+
+        // 添加前文上下文
+        const prevContext = getPreviousMemoryContext(memoryIndex);
+        if (prevContext) {
+            prompt += prevContext;
+        }
+
+        if (memoryIndex > 0 && memoryQueue[memoryIndex - 1].content) {
+            prompt += `\n\n前文结尾（供参考）：\n---\n${memoryQueue[memoryIndex - 1].content.slice(-500)}\n---\n`;
+        }
+
+        prompt += `\n\n需要分析的原文内容（第${chapterIndex}章）：\n---\n${memory.content}\n---\n`;
+
+        // 添加当前条目信息供参考
+        const currentEntry = memory.result?.[category]?.[entryName];
+        if (currentEntry) {
+            prompt += `\n\n【当前条目信息（供参考，请重新分析生成）】\n`;
+            prompt += JSON.stringify(currentEntry, null, 2);
+        }
+
+        prompt += `\n\n请重新分析原文，生成更准确、更详细的条目信息。`;
+        
+        if (customPrompt) {
+            prompt += `\n\n【用户额外要求】\n${customPrompt}`;
+        }
+
+        if (settings.forceChapterMarker && (category === '剧情大纲' || category === '剧情节点' || category === '章节剧情')) {
+            prompt += `\n\n【重要提醒】条目名称必须包含"第${chapterIndex}章"！`;
+        }
+
+        // 添加全局后缀提示词
+        if (settings.customSuffixPrompt && settings.customSuffixPrompt.trim()) {
+            prompt += `\n\n${settings.customSuffixPrompt.trim()}`;
+        }
+
+        prompt += `\n\n直接输出JSON格式结果，不要有其他内容。`;
+
+        try {
+            memory.processing = true;
+            updateMemoryQueueUI();
+
+            const response = await callAPI(prompt, memoryIndex + 1);
+
+            memory.processing = false;
+
+            if (isProcessingStopped) {
+                updateMemoryQueueUI();
+                throw new Error('ABORTED');
+            }
+
+            let entryUpdate = parseAIResponse(response);
+            
+            // 验证返回结果
+            if (!entryUpdate || !entryUpdate[category] || !entryUpdate[category][entryName]) {
+                // 尝试修正：如果返回了其他名称的条目，使用用户指定的名称
+                if (entryUpdate && entryUpdate[category]) {
+                    const keys = Object.keys(entryUpdate[category]);
+                    if (keys.length === 1) {
+                        const returnedEntry = entryUpdate[category][keys[0]];
+                        entryUpdate[category] = { [entryName]: returnedEntry };
+                    }
+                }
+            }
+
+            if (entryUpdate && entryUpdate[category] && entryUpdate[category][entryName]) {
+                // 更新该章节的result
+                if (!memory.result) {
+                    memory.result = {};
+                }
+                if (!memory.result[category]) {
+                    memory.result[category] = {};
+                }
+                memory.result[category][entryName] = entryUpdate[category][entryName];
+
+                // 保存到历史
+                await MemoryHistoryDB.saveRollResult(memoryIndex, memory.result);
+
+                // 重建世界书
+                rebuildWorldbookFromMemories();
+
+                updateStreamContent(`✅ 条目重Roll完成: [${category}] ${entryName}\n`);
+                updateMemoryQueueUI();
+                updateWorldbookPreview();
+
+                return entryUpdate[category][entryName];
+            } else {
+                throw new Error('AI返回的结果格式不正确，请重试');
+            }
+
+        } catch (error) {
+            memory.processing = false;
+            if (error.message !== 'ABORTED') {
+                updateStreamContent(`❌ 条目重Roll失败: ${error.message}\n`);
+            }
+            updateMemoryQueueUI();
+            throw error;
+        } finally {
+            isRerolling = false;
+        }
+    }
+
+    // ========== 新增：显示单独重Roll条目弹窗 ==========
+    function showRerollEntryModal(category, entryName, callback) {
+        const existingModal = document.getElementById('ttw-reroll-entry-modal');
+        if (existingModal) existingModal.remove();
+
+        // 查找条目来源
+        const sources = findEntrySourceMemories(category, entryName);
+        
+        let sourcesHtml = '';
+        if (sources.length === 0) {
+            sourcesHtml = '<div style="color:#e74c3c;font-size:12px;">⚠️ 未找到该条目的来源章节（可能是默认条目或导入条目）</div>';
+        } else {
+            sourcesHtml = `<div style="font-size:12px;color:#888;margin-bottom:8px;">该条目来自以下章节：</div>`;
+            sources.forEach(source => {
+                sourcesHtml += `
+                    <label class="ttw-radio-label" style="display:flex;align-items:center;gap:8px;padding:8px;background:rgba(39,174,96,0.1);border-radius:6px;margin-bottom:6px;cursor:pointer;">
+                        <input type="radio" name="ttw-reroll-source" value="${source.memoryIndex}" ${sources.length === 1 ? 'checked' : ''}>
+                        <div>
+                            <div style="font-weight:bold;color:#27ae60;">第${source.memoryIndex + 1}章 - ${source.memory.title}</div>
+                            <div style="font-size:11px;color:#888;">${(source.memory.content.length / 1000).toFixed(1)}k字</div>
+                        </div>
+                    </label>
+                `;
+            });
+        }
+
+        const modal = document.createElement('div');
+        modal.id = 'ttw-reroll-entry-modal';
+        modal.className = 'ttw-modal-container';
+        modal.innerHTML = `
+            <div class="ttw-modal" style="max-width:550px;">
+                <div class="ttw-modal-header">
+                    <span class="ttw-modal-title">🎯 单独重Roll条目</span>
+                    <button class="ttw-modal-close" type="button">✕</button>
+                </div>
+                <div class="ttw-modal-body">
+                    <div style="margin-bottom:16px;padding:12px;background:rgba(230,126,34,0.15);border-radius:8px;">
+                        <div style="font-weight:bold;color:#e67e22;margin-bottom:4px;">[${category}] ${entryName}</div>
+                        <div style="font-size:11px;color:#888;">只重新生成此条目，不影响该章节的其他条目</div>
+                    </div>
+
+                    <div style="margin-bottom:16px;">
+                        <label style="display:block;margin-bottom:8px;font-weight:bold;font-size:13px;">📍 选择来源章节</label>
+                        <div id="ttw-reroll-sources">${sourcesHtml}</div>
+                    </div>
+
+                    <div style="margin-bottom:16px;">
+                        <label style="display:block;margin-bottom:8px;font-weight:bold;font-size:13px;">📝 额外提示词（可选）</label>
+                        <textarea id="ttw-reroll-entry-prompt" rows="4" placeholder="例如：请更详细地描述该角色的性格特点、请补充该角色的外貌描写、请重点分析该角色的心理活动..." class="ttw-textarea" style="width:100%;padding:10px;"></textarea>
+                        <div style="font-size:11px;color:#888;margin-top:4px;">💡 可以在这里指定你希望AI重点关注或补充的内容</div>
+                    </div>
+                </div>
+                <div class="ttw-modal-footer">
+                    <button class="ttw-btn" id="ttw-cancel-reroll-entry">取消</button>
+                    <button class="ttw-btn ttw-btn-primary" id="ttw-confirm-reroll-entry" ${sources.length === 0 ? 'disabled style="opacity:0.5;"' : ''}>🎲 开始重Roll</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
+        modal.querySelector('#ttw-cancel-reroll-entry').addEventListener('click', () => modal.remove());
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+        modal.querySelector('#ttw-confirm-reroll-entry').addEventListener('click', async () => {
+            const selectedRadio = modal.querySelector('input[name="ttw-reroll-source"]:checked');
+            if (!selectedRadio) {
+                alert('请选择一个来源章节');
+                return;
+            }
+
+            const memoryIndex = parseInt(selectedRadio.value);
+            const customPrompt = modal.querySelector('#ttw-reroll-entry-prompt').value.trim();
+
+            const confirmBtn = modal.querySelector('#ttw-confirm-reroll-entry');
+            confirmBtn.disabled = true;
+            confirmBtn.textContent = '🔄 重Roll中...';
+
+            try {
+                await rerollSingleEntry(memoryIndex, category, entryName, customPrompt);
+                modal.remove();
+                alert(`✅ 条目 [${category}] ${entryName} 重Roll完成！`);
+                if (callback) callback();
+            } catch (error) {
+                if (error.message !== 'ABORTED') {
+                    alert(`❌ 重Roll失败: ${error.message}`);
+                }
+                confirmBtn.disabled = false;
+                confirmBtn.textContent = '🎲 开始重Roll';
+            }
+        });
     }
 
     async function showRollHistorySelector(index) {
@@ -7020,6 +7267,7 @@ ${pairsContent}
                         <li><strong>⏸️ 暂停/继续</strong>：随时暂停，下次从断点继续</li>
                         <li><strong>🔧 修复失败</strong>：自动重试所有失败章节，支持Token超限自动分裂</li>
                         <li><strong>🎲 重Roll</strong>：重新生成某章节的世界书条目</li>
+                        <li><strong>🎯 单独重Roll条目</strong>：对某个条目不满意？点击条目旁的🎯按钮单独重Roll，支持自定义提示词</li>
                         <li><strong>Roll历史</strong>：查看所有历史Roll版本，选择任意版本使用</li>
                         <li>Roll历史支持<strong>在线编辑JSON</strong>并保存</li>
                         <li>Roll历史支持<strong>粘贴JSON导入</strong>（自动解析代码块格式）</li>
@@ -7198,6 +7446,7 @@ ${pairsContent}
                     <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;font-size:12px;">
                         <li>长篇小说建议开启<strong>并行模式</strong>（独立模式最快）</li>
                         <li>遇到乱码？用<strong>🔍查找</strong>定位 → <strong>🎲批量重Roll</strong>修复</li>
+                        <li>某个条目不满意？点击条目旁的<strong>🎯</strong>按钮单独重Roll，可添加提示词指导</li>
                         <li>AI输出了thinking标签？用<strong>🏷️清除标签</strong>一键清理</li>
                         <li>同一角色多个名字？用<strong>🔗别名合并</strong>自动识别</li>
                         <li>条目内容太杂乱？用<strong>🧹整理条目</strong>让AI优化</li>
@@ -8962,7 +9211,7 @@ ${pairsContent}
 
                 html += `<div style="margin:8px;border:1px solid #555;border-radius:6px;overflow:hidden;">
         <div style="background:#3a3a3a;padding:8px 12px;cursor:pointer;display:flex;justify-content:space-between;${highlightStyle}" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
-            <span style="display:flex;align-items:center;gap:6px;">${warningIcon}📄 ${entryName}<button class="ttw-entry-config-btn ttw-config-btn" data-category="${category}" data-entry="${entryName}" title="配置位置/深度/顺序" onclick="event.stopPropagation();">⚙️</button></span>
+            <span style="display:flex;align-items:center;gap:6px;">${warningIcon}📄 ${entryName}<button class="ttw-entry-config-btn ttw-config-btn" data-category="${category}" data-entry="${entryName}" title="配置位置/深度/顺序" onclick="event.stopPropagation();">⚙️</button><button class="ttw-entry-reroll-btn" data-category="${category}" data-entry="${entryName}" title="单独重Roll此条目" onclick="event.stopPropagation();" style="background:rgba(155,89,182,0.3);border:none;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:11px;color:#fff;">🎯</button></span>
             <span style="font-size:10px;color:#888;display:flex;gap:8px;align-items:center;">
                 <span style="${tokenStyle}">${entryTokens} tk</span>
                 <span>${getPositionDisplayName(config.position)} | 深度${config.depth} | 顺序${displayOrder}${autoIncrement ? ' ↗' : ''}</span>
@@ -9049,6 +9298,31 @@ ${pairsContent}
         });
     }
 
+    // ========== 新增：绑定条目重Roll按钮事件 ==========
+    function bindEntryRerollEvents(container) {
+        container.querySelectorAll('.ttw-entry-reroll-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const category = btn.dataset.category;
+                const entryName = btn.dataset.entry;
+                showRerollEntryModal(category, entryName, () => {
+                    // 重Roll完成后刷新视图
+                    const viewModal = document.getElementById('ttw-worldbook-view-modal');
+                    if (viewModal) {
+                        const worldbookToShow = useVolumeMode ? getAllVolumesWorldbook() : generatedWorldbook;
+                        const bodyContainer = viewModal.querySelector('#ttw-worldbook-view-body');
+                        if (bodyContainer) {
+                            bodyContainer.innerHTML = formatWorldbookAsCards(worldbookToShow);
+                            bindLightToggleEvents(bodyContainer);
+                            bindConfigButtonEvents(bodyContainer);
+                            bindEntryRerollEvents(bodyContainer);
+                        }
+                    }
+                });
+            });
+        });
+    }
+
     function showWorldbookView() {
         const existingModal = document.getElementById('ttw-worldbook-view-modal');
         if (existingModal) existingModal.remove();
@@ -9070,7 +9344,7 @@ ${pairsContent}
                 </div>
                 <div class="ttw-modal-body" id="ttw-worldbook-view-body">${formatWorldbookAsCards(worldbookToShow)}</div>
                 <div class="ttw-modal-footer">
-                    <div style="font-size:11px;color:#888;margin-right:auto;">💡 点击⚙️配置位置/深度/顺序，点击灯图标切换蓝灯/绿灯</div>
+                    <div style="font-size:11px;color:#888;margin-right:auto;">💡 点击⚙️配置位置/深度/顺序，点击🎯单独重Roll条目，点击灯图标切换蓝灯/绿灯</div>
                     <button class="ttw-btn" id="ttw-close-worldbook-view">关闭</button>
                 </div>
             </div>
@@ -9086,6 +9360,7 @@ ${pairsContent}
             bodyContainer.innerHTML = formatWorldbookAsCards(worldbookToShow);
             bindLightToggleEvents(bodyContainer);
             bindConfigButtonEvents(bodyContainer);
+            bindEntryRerollEvents(bodyContainer);
         });
         
         // 支持回车键应用
@@ -9097,6 +9372,7 @@ ${pairsContent}
         
         bindLightToggleEvents(viewModal.querySelector('#ttw-worldbook-view-body'));
         bindConfigButtonEvents(viewModal.querySelector('#ttw-worldbook-view-body'));
+        bindEntryRerollEvents(viewModal.querySelector('#ttw-worldbook-view-body'));
         viewModal.querySelector('.ttw-modal-close').addEventListener('click', () => viewModal.remove());
         viewModal.querySelector('#ttw-close-worldbook-view').addEventListener('click', () => viewModal.remove());
         viewModal.addEventListener('click', (e) => { if (e.target === viewModal) viewModal.remove(); });
@@ -9232,6 +9508,9 @@ ${pairsContent}
         importSettings,
         getParallelConfig: () => parallelConfig,
         rerollMemory,
+        rerollSingleEntry,
+        findEntrySourceMemories,
+        showRerollEntryModal,
         showRollHistory: showRollHistorySelector,
         importAndMerge: importAndMergeWorldbook,
         getCategoryLightSettings: () => categoryLightSettings,
@@ -9255,5 +9534,5 @@ ${pairsContent}
         getDefaultWorldbookEntriesUI: () => defaultWorldbookEntriesUI
     };
 
-    console.log('📚 TxtToWorldbook v3.0.1 已加载');
+    console.log('📚 TxtToWorldbook v3.0.2 已加载');
 })();
