@@ -9215,11 +9215,11 @@ ${pairsContent}
                 const warningIcon = isBelowThreshold ? '⚠️ ' : '';
 
                 html += `<div style="margin:8px;border:1px solid #555;border-radius:6px;overflow:hidden;">
-        <div style="background:#3a3a3a;padding:8px 12px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;${highlightStyle}" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
-            <span style="display:flex;align-items:center;gap:4px;flex:1;min-width:0;overflow:hidden;">${warningIcon}📄 <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${entryName}</span><button class="ttw-entry-config-btn ttw-config-btn" data-category="${category}" data-entry="${entryName}" title="配置位置/深度/顺序" onclick="event.stopPropagation();">⚙️</button><button class="ttw-entry-reroll-btn" data-category="${category}" data-entry="${entryName}" title="单独重Roll此条目" onclick="event.stopPropagation();" style="background:rgba(155,89,182,0.4);border:none;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:11px;color:#fff;flex-shrink:0;">🎯</button></span>
-            <span style="font-size:9px;color:#888;display:flex;gap:6px;align-items:center;flex-shrink:0;margin-left:8px;">
+        <div style="background:#3a3a3a;padding:8px 12px;cursor:pointer;display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;${highlightStyle}" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+            <span style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;">${warningIcon}📄 ${entryName}<button class="ttw-entry-config-btn ttw-config-btn" data-category="${category}" data-entry="${entryName}" title="配置位置/深度/顺序" onclick="event.stopPropagation();">⚙️</button><button class="ttw-entry-reroll-btn" data-category="${category}" data-entry="${entryName}" title="单独重Roll此条目" onclick="event.stopPropagation();" style="background:rgba(155,89,182,0.4);border:none;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:11px;color:#fff;">🎯</button></span>
+            <span style="font-size:9px;color:#888;display:flex;gap:4px;align-items:center;">
                 <span style="${tokenStyle}">${entryTokens}tk</span>
-                <span>${getPositionDisplayName(config.position)}|D${config.depth}|O${displayOrder}${autoIncrement ? '↗' : ''}</span>
+                <span>D${config.depth}O${displayOrder}${autoIncrement ? '↗' : ''}</span>
             </span>
         </div>
         <div style="display:none;background:#1c1c1c;padding:12px;">`;
