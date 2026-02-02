@@ -1815,8 +1815,15 @@
 
         prompt += `\n\n当前需要分析的内容（第${chapterIndex}章）：\n---\n${memory.content}\n---\n`;
 
-        const enabledCatNames = getEnabledCategories().map(c => c.name).join('、');
-        prompt += `\n\n【输出限制】只输出以下分类：${enabledCatNames}。禁止输出未列出的分类（如地点、道具、组织等未勾选的分类），直接输出JSON。`;
+        // 获取所有启用的分类名称（包括基本分类和特殊分类）
+        const enabledCatNamesList = getEnabledCategories().map(c => c.name);
+        // 添加特殊分类（只有剧情大纲和文风配置有独立的启用开关）
+        if (settings.enablePlotOutline) enabledCatNamesList.push('剧情大纲');
+        if (settings.enableLiteraryStyle) enabledCatNamesList.push('文风配置');
+        
+        const enabledCatNamesStr = enabledCatNamesList.join('、');
+        
+        prompt += `\n\n【输出限制】只允许输出以下分类：${enabledCatNamesStr}。禁止输出未列出的任何其他分类，直接输出JSON。`;
 
         if (settings.forceChapterMarker) {
             prompt += `\n\n【重要提醒】如果输出剧情大纲或剧情节点或章节剧情，条目名称必须包含"第${chapterIndex}章"！`;
