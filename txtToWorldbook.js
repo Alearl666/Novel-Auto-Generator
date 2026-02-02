@@ -221,7 +221,7 @@
 
 ## 重要要求
 1. **必须基于提供的具体小说内容**，不要生成通用模板
-2. **只提取文中明确出现的角色、地点、组织等信息**
+2. **只输出以下指定分类：{ENABLED_CATEGORY_NAMES}**，禁止输出其他未指定的分类
 3. **关键词必须是文中实际出现的名称**，用逗号分隔
 4. **内容必须基于原文描述**，不要添加原文没有的信息
 5. **内容使用markdown格式**，可以层层嵌套或使用序号标题
@@ -237,7 +237,8 @@
 - 直接输出JSON，不要包含代码块标记
 - 所有信息必须来源于原文，不要编造
 - 关键词必须是文中实际出现的词语
-- 内容描述要完整但简洁`;
+- 内容描述要完整但简洁
+- **严格只输出上述指定的分类，不要自作主张添加其他分类**`;
 
     const defaultPlotPrompt = `"剧情大纲": {
 "主线剧情": {
@@ -1720,6 +1721,12 @@
 
         const dynamicTemplate = generateDynamicJsonTemplate();
         worldbookPrompt = worldbookPrompt.replace('{DYNAMIC_JSON_TEMPLATE}', dynamicTemplate);
+        
+        // 【修复】动态替换启用的分类名称
+        const enabledCatNames = getEnabledCategories().map(c => c.name);
+        if (settings.enablePlotOutline) enabledCatNames.push('剧情大纲');
+        if (settings.enableLiteraryStyle) enabledCatNames.push('文风配置');
+        worldbookPrompt = worldbookPrompt.replace('{ENABLED_CATEGORY_NAMES}', enabledCatNames.join('、'));
 
         const additionalParts = [];
         if (settings.enablePlotOutline) {
@@ -1809,7 +1816,7 @@
         prompt += `\n\n当前需要分析的内容（第${chapterIndex}章）：\n---\n${memory.content}\n---\n`;
 
         const enabledCatNames = getEnabledCategories().map(c => c.name).join('、');
-        prompt += `\n请提取${enabledCatNames}等信息，直接输出JSON。`;
+        prompt += `\n\n【输出限制】只输出以下分类：${enabledCatNames}。禁止输出未列出的分类（如地点、道具、组织等未勾选的分类），直接输出JSON。`;
 
         if (settings.forceChapterMarker) {
             prompt += `\n\n【重要提醒】如果输出剧情大纲或剧情节点或章节剧情，条目名称必须包含"第${chapterIndex}章"！`;
