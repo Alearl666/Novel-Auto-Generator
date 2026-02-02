@@ -318,7 +318,7 @@
         entryPositionConfig: {},
         customSuffixPrompt: '',
         allowRecursion: false,
-        filterResponseTags: ['thinking', 'think', 'tucao', 'reflection', 'inner_thought'],
+        filterResponseTags: 'thinking,/think',
 
     };
 
@@ -1478,36 +1478,9 @@
     // ========== 解析AI响应 ==========
     function extractWorldbookDataByRegex(jsonString) {
         const result = {};
-        const enabledCategories = getEnabledCategoryNames();
-        
-        // 【修复】自动发现JSON中实际存在的所有分类（不仅限于已启用的）
-        const allCategories = new Set(enabledCategories);
-        
-        // 使用正则查找所有形如 "分类名": { ... "关键词" 的模式
-        const discoverPattern = /"([^"]+)"\s*:\s*\{[^{}]*"关键词"/g;
-        let discoverMatch;
-        while ((discoverMatch = discoverPattern.exec(jsonString)) !== null) {
-            const foundCategory = discoverMatch[1];
-            // 排除明显不是分类的（如条目内部的嵌套对象）
-            if (foundCategory && !foundCategory.includes('\\') && foundCategory.length < 20) {
-                allCategories.add(foundCategory);
-            }
-        }
-        
-        // 额外查找顶层分类（形如 "分类": { "条目": { 的模式）
-        const topLevelPattern = /^\s*"([^"]+)"\s*:\s*\{/gm;
-        let topMatch;
-        const jsonStart = jsonString.indexOf('{');
-        const topLevelContent = jsonStart !== -1 ? jsonString.substring(jsonStart) : jsonString;
-        while ((topMatch = topLevelPattern.exec(topLevelContent)) !== null) {
-            const catName = topMatch[1];
-            if (catName && !catName.includes('\\') && catName.length < 20) {
-                allCategories.add(catName);
-            }
-        }
-        
-        for (const category of allCategories) {
-            const categoryPattern = new RegExp(`"${category.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"\\s*:\\s*\\{`, 'g');
+        const categories = getEnabledCategoryNames();
+        for (const category of categories) {
+            const categoryPattern = new RegExp(`"${category}"\\s*:\\s*\\{`, 'g');
             const categoryMatch = categoryPattern.exec(jsonString);
             if (!categoryMatch) continue;
             const startPos = categoryMatch.index + categoryMatch[0].length;
@@ -1569,36 +1542,23 @@
 
     function parseAIResponse(response) {
         // 【修复】获取用户配置的过滤标签
-        const filterTags = settings.filterResponseTags || ['thinking', 'think', 'tucao', 'reflection', 'inner_thought'];
+        const filterTagsStr = settings.filterResponseTags || 'thinking,/think';
+        const filterTags = filterTagsStr.split(',').map(t => t.trim()).filter(t => t);
         
         let cleaned = response;
         
-        // 【修复】移除各种AI思考标签（支持只有结束标签、只有开始标签、或完整标签对）
+        // 处理用户定义的过滤标签
         for (const tag of filterTags) {
-            // 情况1: 完整标签对 <tag>...</tag>
-            const fullTagRegex = new RegExp(`<${tag}>[\\s\\S]*?<\\/${tag}>`, 'gi');
-            cleaned = cleaned.replace(fullTagRegex, '');
-            
-            // 情况2: 只有结束标签 </tag> 前面的所有内容（从开头到结束标签）
-            const endOnlyRegex = new RegExp(`^[\\s\\S]*?<\\/${tag}>`, 'gi');
-            cleaned = cleaned.replace(endOnlyRegex, '');
-            
-            // 情况3: 只有开始标签 <tag> 到字符串结尾
-            const startOnlyRegex = new RegExp(`<${tag}>[\\s\\S]*$`, 'gi');
-            cleaned = cleaned.replace(startOnlyRegex, '');
-            
-            // 情况4: 残留的单独标签
-            cleaned = cleaned.replace(new RegExp(`<\\/?${tag}>`, 'gi'), '');
-        }
-        
-        // 移除JSON外部可能残留的其他XML风格标签
-        const jsonStartIdx = cleaned.indexOf('{');
-        const jsonEndIdx = cleaned.lastIndexOf('}');
-        if (jsonStartIdx !== -1 && jsonEndIdx > jsonStartIdx) {
-            const beforeJson = cleaned.substring(0, jsonStartIdx).replace(/<[^>]+>/g, '');
-            const jsonPart = cleaned.substring(jsonStartIdx, jsonEndIdx + 1);
-            const afterJson = cleaned.substring(jsonEndIdx + 1).replace(/<[^>]+>/g, '');
-            cleaned = beforeJson + jsonPart + afterJson;
+            if (tag.startsWith('/')) {
+                // 情况2: 以/开头，如 /think，表示移除从开头到</think>的内容
+                const tagName = tag.substring(1);
+                const endTagRegex = new RegExp(`^[\\s\\S]*?<\\/${tagName}>`, 'gi');
+                cleaned = cleaned.replace(endTagRegex, '');
+            } else {
+                // 情况1: 普通标签名，如 thinking，表示移除完整标签对<thinking>内容</thinking>
+                const fullTagRegex = new RegExp(`<${tag}>[\\s\\S]*?<\\/${tag}>`, 'gi');
+                cleaned = cleaned.replace(fullTagRegex, '');
+            }
         }
         
         try {
@@ -6490,6 +6450,9 @@ ${pairsContent}
         const allowRecursionEl = document.getElementById('ttw-allow-recursion');
         if (allowRecursionEl) allowRecursionEl.checked = settings.allowRecursion;
 
+        const filterTagsEl = document.getElementById('ttw-filter-tags');
+        if (filterTagsEl) filterTagsEl.value = settings.filterResponseTags || 'thinking,/think';
+
     }
 
     function updateChapterRegexUI() {
@@ -7807,6 +7770,15 @@ ${pairsContent}
     </div>
 </label>
 
+                                <!-- 响应过滤标签配置 -->
+                                <div style="margin-top:12px;padding:10px;background:rgba(231,76,60,0.1);border:1px solid rgba(231,76,60,0.3);border-radius:6px;">
+                                    <div style="font-weight:bold;color:#e74c3c;margin-bottom:6px;font-size:12px;">🧹 响应过滤标签</div>
+                                    <div class="ttw-setting-hint" style="margin-bottom:8px;font-size:11px;">
+                                        用逗号分隔。<code>thinking</code>=移除&lt;thinking&gt;内容&lt;/thinking&gt;；<code>/think</code>=移除开头到&lt;/think&gt;的内容
+                                    </div>
+                                    <input type="text" id="ttw-filter-tags" class="ttw-input" value="thinking,/think" placeholder="例如: thinking,/think,tucao" style="font-size:12px;">
+                                </div>
+
                                 
                             </div>
                             <div id="ttw-volume-indicator" class="ttw-volume-indicator"></div>
@@ -8490,6 +8462,8 @@ ${pairsContent}
 
         try { localStorage.setItem('txtToWorldbookSettings', JSON.stringify(settings)); } catch (e) { }
         settings.allowRecursion = document.getElementById('ttw-allow-recursion')?.checked ?? false;
+
+        settings.filterResponseTags = document.getElementById('ttw-filter-tags')?.value || 'thinking,/think';
 
         settings.plotOutlineExportConfig = plotOutlineExportConfig;
 
