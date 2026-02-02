@@ -1,8 +1,12 @@
 
 /**
- * TXT转世界书独立模块 v3.0.2
+ * TXT转世界书独立模块 v3.0.3
  * 新增: 查找高亮、批量替换、多选整理分类、条目位置/深度/顺序配置、默认世界书UI化、新增默认勾选2递归选项、Token计数与阈值高亮
  * v3.0.2 新增: 单独重Roll条目功能 - 对生成结果的某个条目不满意时可单独重Roll该条目（支持自定义提示词），不影响已整理/合并的其他条目
+ * v3.0.3 新增: 
+ *   - 单独重Roll支持多选条目 + 并发处理
+ *   - 生成结果的关键词和内容允许直接编辑
+ *   - 单独重Roll条目有独立历史记录，可挑选任意一次Roll结果（不影响其他条目）
  */
 
 (function () {
@@ -380,12 +384,13 @@
         stateStoreName: 'state',
         rollStoreName: 'rolls',
         categoriesStoreName: 'categories',
+        entryRollStoreName: 'entryRolls', // 新增：条目级别Roll历史
         db: null,
 
         async openDB() {
             if (this.db) return this.db;
             return new Promise((resolve, reject) => {
-                const request = indexedDB.open(this.dbName, 5);
+                const request = indexedDB.open(this.dbName, 6); // 升级版本号
                 request.onupgradeneeded = (event) => {
                     const db = event.target.result;
                     if (!db.objectStoreNames.contains(this.storeName)) {
@@ -405,6 +410,12 @@
                     }
                     if (!db.objectStoreNames.contains(this.categoriesStoreName)) {
                         db.createObjectStore(this.categoriesStoreName, { keyPath: 'key' });
+                    }
+                    // 新增：条目级别Roll历史存储
+                    if (!db.objectStoreNames.contains(this.entryRollStoreName)) {
+                        const entryRollStore = db.createObjectStore(this.entryRollStoreName, { keyPath: 'id', autoIncrement: true });
+                        entryRollStore.createIndex('entryKey', 'entryKey', { unique: false }); // category:entryName
+                        entryRollStore.createIndex('timestamp', 'timestamp', { unique: false });
                     }
                 };
                 request.onsuccess = (event) => {
@@ -637,6 +648,93 @@
                 }
                 transaction.oncomplete = () => resolve();
                 transaction.onerror = () => reject(transaction.error);
+            });
+        },
+
+        // ========== 新增：条目级别Roll历史方法 ==========
+        async saveEntryRollResult(category, entryName, memoryIndex, result, customPrompt = '') {
+            const db = await this.openDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([this.entryRollStoreName], 'readwrite');
+                const store = transaction.objectStore(this.entryRollStoreName);
+                const entryKey = `${category}:${entryName}`;
+                const record = {
+                    entryKey,
+                    category,
+                    entryName,
+                    memoryIndex,
+                    result: JSON.parse(JSON.stringify(result)),
+                    customPrompt,
+                    timestamp: Date.now()
+                };
+                const request = store.add(record);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        },
+
+        async getEntryRollResults(category, entryName) {
+            const db = await this.openDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([this.entryRollStoreName], 'readonly');
+                const store = transaction.objectStore(this.entryRollStoreName);
+                const index = store.index('entryKey');
+                const entryKey = `${category}:${entryName}`;
+                const request = index.getAll(entryKey);
+                request.onsuccess = () => {
+                    const results = request.result || [];
+                    // 按时间倒序排列
+                    results.sort((a, b) => b.timestamp - a.timestamp);
+                    resolve(results);
+                };
+                request.onerror = () => reject(request.error);
+            });
+        },
+
+        async clearEntryRollResults(category, entryName) {
+            const db = await this.openDB();
+            const results = await this.getEntryRollResults(category, entryName);
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([this.entryRollStoreName], 'readwrite');
+                const store = transaction.objectStore(this.entryRollStoreName);
+                for (const r of results) {
+                    store.delete(r.id);
+                }
+                transaction.oncomplete = () => resolve();
+                transaction.onerror = () => reject(transaction.error);
+            });
+        },
+
+        async clearAllEntryRolls() {
+            const db = await this.openDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([this.entryRollStoreName], 'readwrite');
+                const store = transaction.objectStore(this.entryRollStoreName);
+                const request = store.clear();
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+            });
+        },
+
+        async deleteEntryRollById(rollId) {
+            const db = await this.openDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([this.entryRollStoreName], 'readwrite');
+                const store = transaction.objectStore(this.entryRollStoreName);
+                const request = store.delete(rollId);
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+            });
+        },
+
+        async getEntryRollById(rollId) {
+            const db = await this.openDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([this.entryRollStoreName], 'readonly');
+                const store = transaction.objectStore(this.entryRollStoreName);
+                const request = store.get(rollId);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
             });
         },
 
@@ -2564,8 +2662,11 @@ ${generateDynamicJsonTemplate()}
                 }
                 memory.result[category][entryName] = entryUpdate[category][entryName];
 
-                // 保存到历史
+                // 保存到章节历史
                 await MemoryHistoryDB.saveRollResult(memoryIndex, memory.result);
+                
+                // 【新增】保存到条目级别历史
+                await MemoryHistoryDB.saveEntryRollResult(category, entryName, memoryIndex, entryUpdate[category][entryName], customPrompt);
 
                 // 【关键修改】只更新世界书中的该条目，不重建整个世界书
                 // 这样可以保留别名合并、整理等操作的结果
@@ -2595,24 +2696,34 @@ ${generateDynamicJsonTemplate()}
         }
     }
 
-    // ========== 新增：显示单独重Roll条目弹窗 ==========
-    function showRerollEntryModal(category, entryName, callback) {
+    // ========== 新增：显示单独重Roll条目弹窗（v3.0.3 升级版：多选+并发+编辑+历史） ==========
+    async function showRerollEntryModal(category, entryName, callback) {
         const existingModal = document.getElementById('ttw-reroll-entry-modal');
         if (existingModal) existingModal.remove();
 
         // 查找条目来源
         const sources = findEntrySourceMemories(category, entryName);
         
+        // 获取当前条目数据
+        const currentEntry = generatedWorldbook[category]?.[entryName] || {};
+        const currentKeywords = Array.isArray(currentEntry['关键词']) 
+            ? currentEntry['关键词'].join(', ') 
+            : (currentEntry['关键词'] || '');
+        const currentContent = currentEntry['内容'] || '';
+        
+        // 获取条目Roll历史
+        const entryRollHistory = await MemoryHistoryDB.getEntryRollResults(category, entryName);
+        
         let sourcesHtml = '';
         if (sources.length === 0) {
             sourcesHtml = '<div style="color:#e74c3c;font-size:12px;">⚠️ 未找到该条目的来源章节（可能是默认条目或导入条目）</div>';
         } else {
-            sourcesHtml = `<div style="font-size:12px;color:#888;margin-bottom:8px;">该条目来自以下章节：</div>`;
+            sourcesHtml = `<div style="font-size:12px;color:#888;margin-bottom:8px;">该条目来自以下章节（可多选）：</div>`;
             sources.forEach(source => {
                 sourcesHtml += `
-                    <label class="ttw-radio-label" style="display:flex;align-items:center;gap:8px;padding:8px;background:rgba(39,174,96,0.1);border-radius:6px;margin-bottom:6px;cursor:pointer;">
-                        <input type="radio" name="ttw-reroll-source" value="${source.memoryIndex}" ${sources.length === 1 ? 'checked' : ''}>
-                        <div>
+                    <label class="ttw-checkbox-label" style="display:flex;align-items:center;gap:8px;padding:8px;background:rgba(39,174,96,0.1);border-radius:6px;margin-bottom:6px;cursor:pointer;">
+                        <input type="checkbox" name="ttw-reroll-source" value="${source.memoryIndex}" ${sources.length === 1 ? 'checked' : ''}>
+                        <div style="flex:1;">
                             <div style="font-weight:bold;color:#27ae60;">第${source.memoryIndex + 1}章 - ${source.memory.title}</div>
                             <div style="font-size:11px;color:#888;">${(source.memory.content.length / 1000).toFixed(1)}k字</div>
                         </div>
@@ -2620,35 +2731,90 @@ ${generateDynamicJsonTemplate()}
                 `;
             });
         }
+        
+        // 构建Roll历史HTML
+        let historyHtml = '';
+        if (entryRollHistory.length === 0) {
+            historyHtml = '<div style="text-align:center;color:#666;padding:15px;font-size:11px;">暂无Roll历史</div>';
+        } else {
+            historyHtml = '<div style="max-height:150px;overflow-y:auto;">';
+            entryRollHistory.forEach((roll, idx) => {
+                const time = new Date(roll.timestamp).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+                const promptPreview = roll.customPrompt ? `「${roll.customPrompt.substring(0, 20)}${roll.customPrompt.length > 20 ? '...' : ''}」` : '';
+                historyHtml += `
+                    <div class="ttw-entry-roll-item" data-roll-id="${roll.id}" style="display:flex;align-items:center;gap:8px;padding:8px;background:rgba(155,89,182,0.1);border-radius:6px;margin-bottom:6px;cursor:pointer;transition:all 0.2s;" onmouseover="this.style.background='rgba(155,89,182,0.25)'" onmouseout="this.style.background='rgba(155,89,182,0.1)'">
+                        <div style="flex:1;">
+                            <div style="font-size:12px;color:#9b59b6;font-weight:bold;">#${idx + 1} - ${time}</div>
+                            <div style="font-size:11px;color:#888;">第${roll.memoryIndex + 1}章 ${promptPreview}</div>
+                        </div>
+                        <button class="ttw-use-roll-btn" data-roll-id="${roll.id}" style="background:rgba(39,174,96,0.5);border:none;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:11px;color:#fff;">✅ 使用</button>
+                    </div>
+                `;
+            });
+            historyHtml += '</div>';
+        }
 
         const modal = document.createElement('div');
         modal.id = 'ttw-reroll-entry-modal';
         modal.className = 'ttw-modal-container';
         modal.innerHTML = `
-            <div class="ttw-modal" style="max-width:550px;">
+            <div class="ttw-modal" style="max-width:700px;">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">🎯 单独重Roll条目</span>
+                    <span class="ttw-modal-title">🎯 单独重Roll条目 - [${category}] ${entryName}</span>
                     <button class="ttw-modal-close" type="button">✕</button>
                 </div>
-                <div class="ttw-modal-body">
+                <div class="ttw-modal-body" style="max-height:70vh;overflow-y:auto;">
+                    <!-- 当前条目编辑区 -->
                     <div style="margin-bottom:16px;padding:12px;background:rgba(230,126,34,0.15);border-radius:8px;">
-                        <div style="font-weight:bold;color:#e67e22;margin-bottom:4px;">[${category}] ${entryName}</div>
-                        <div style="font-size:11px;color:#888;">只重新生成此条目，不影响已整理/合并的其他条目</div>
+                        <div style="font-weight:bold;color:#e67e22;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
+                            <span>📝 当前条目内容（可编辑）</span>
+                            <button id="ttw-save-entry-edit" class="ttw-btn ttw-btn-small" style="background:rgba(39,174,96,0.5);">💾 保存编辑</button>
+                        </div>
+                        <div style="margin-bottom:8px;">
+                            <label style="font-size:11px;color:#888;display:block;margin-bottom:4px;">🔑 关键词（逗号分隔）</label>
+                            <input type="text" id="ttw-entry-keywords-edit" value="${currentKeywords.replace(/"/g, '&quot;')}" style="width:100%;padding:8px;border:1px solid #555;border-radius:6px;background:rgba(0,0,0,0.3);color:#fff;font-size:12px;box-sizing:border-box;">
+                        </div>
+                        <div>
+                            <label style="font-size:11px;color:#888;display:block;margin-bottom:4px;">📄 内容</label>
+                            <textarea id="ttw-entry-content-edit" rows="5" style="width:100%;padding:8px;border:1px solid #555;border-radius:6px;background:rgba(0,0,0,0.3);color:#fff;font-size:12px;resize:vertical;box-sizing:border-box;">${currentContent.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</textarea>
+                        </div>
                     </div>
 
-                    <div style="margin-bottom:16px;">
-                        <label style="display:block;margin-bottom:8px;font-weight:bold;font-size:13px;">📍 选择来源章节</label>
+                    <!-- Roll历史区 -->
+                    <div style="margin-bottom:16px;padding:12px;background:rgba(155,89,182,0.1);border-radius:8px;">
+                        <div style="font-weight:bold;color:#9b59b6;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
+                            <span>📜 Roll历史 (${entryRollHistory.length}条)</span>
+                            ${entryRollHistory.length > 0 ? '<button id="ttw-clear-entry-history" class="ttw-btn ttw-btn-small ttw-btn-warning" style="font-size:10px;">🗑️ 清空</button>' : ''}
+                        </div>
+                        <div id="ttw-entry-roll-history">${historyHtml}</div>
+                    </div>
+
+                    <!-- 来源章节选择 -->
+                    <div style="margin-bottom:16px;padding:12px;background:rgba(39,174,96,0.1);border-radius:8px;">
+                        <label style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-weight:bold;font-size:13px;">
+                            <span>📍 选择来源章节重Roll</span>
+                            ${sources.length > 1 ? '<button id="ttw-select-all-sources" class="ttw-btn ttw-btn-small" style="font-size:10px;">全选/取消</button>' : ''}
+                        </label>
                         <div id="ttw-reroll-sources">${sourcesHtml}</div>
                     </div>
 
+                    <!-- 额外提示词 -->
                     <div style="margin-bottom:16px;">
                         <label style="display:block;margin-bottom:8px;font-weight:bold;font-size:13px;">📝 额外提示词（可选）</label>
-                        <textarea id="ttw-reroll-entry-prompt" rows="4" placeholder="例如：请更详细地描述该角色的性格特点、请补充该角色的外貌描写、请重点分析该角色在本章的心理活动..." class="ttw-textarea" style="width:100%;padding:10px;"></textarea>
-                        <div style="font-size:11px;color:#888;margin-top:4px;">💡 可以在这里指定你希望AI重点关注或补充的内容</div>
+                        <textarea id="ttw-reroll-entry-prompt" rows="3" placeholder="例如：请更详细地描述该角色的性格特点、请补充该角色的外貌描写..." class="ttw-textarea" style="width:100%;padding:10px;box-sizing:border-box;"></textarea>
+                    </div>
+
+                    <!-- 并发设置 -->
+                    <div style="display:flex;align-items:center;gap:10px;padding:10px;background:rgba(52,152,219,0.1);border-radius:6px;">
+                        <label style="font-size:12px;color:#3498db;">⚡ 并发数:</label>
+                        <input type="number" id="ttw-reroll-concurrency" value="${parallelConfig.concurrency}" min="1" max="10" style="width:60px;padding:4px;border:1px solid #555;border-radius:4px;background:rgba(0,0,0,0.3);color:#fff;text-align:center;">
+                        <span style="font-size:11px;color:#888;">（多选时同时处理的数量）</span>
                     </div>
                 </div>
-                <div class="ttw-modal-footer">
+                <div class="ttw-modal-footer" style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <div id="ttw-reroll-progress" style="flex:1;font-size:12px;color:#888;display:none;"></div>
                     <button class="ttw-btn" id="ttw-cancel-reroll-entry">取消</button>
+                    <button class="ttw-btn ttw-btn-secondary" id="ttw-stop-reroll-entry" style="display:none;">⏸️ 停止</button>
                     <button class="ttw-btn ttw-btn-primary" id="ttw-confirm-reroll-entry" ${sources.length === 0 ? 'disabled style="opacity:0.5;"' : ''}>🎯 开始重Roll</button>
                 </div>
             </div>
@@ -2656,36 +2822,403 @@ ${generateDynamicJsonTemplate()}
 
         document.body.appendChild(modal);
 
+        // ===== 事件绑定 =====
         modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
         modal.querySelector('#ttw-cancel-reroll-entry').addEventListener('click', () => modal.remove());
         modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
 
-        modal.querySelector('#ttw-confirm-reroll-entry').addEventListener('click', async () => {
-            const selectedRadio = modal.querySelector('input[name="ttw-reroll-source"]:checked');
-            if (!selectedRadio) {
-                alert('请选择一个来源章节');
+        // 保存编辑
+        modal.querySelector('#ttw-save-entry-edit').addEventListener('click', () => {
+            const keywordsInput = modal.querySelector('#ttw-entry-keywords-edit').value;
+            const contentInput = modal.querySelector('#ttw-entry-content-edit').value;
+            
+            const keywords = keywordsInput.split(/[,，]/).map(k => k.trim()).filter(k => k);
+            
+            if (!generatedWorldbook[category]) {
+                generatedWorldbook[category] = {};
+            }
+            generatedWorldbook[category][entryName] = {
+                '关键词': keywords,
+                '内容': contentInput
+            };
+            
+            updateWorldbookPreview();
+            
+            const btn = modal.querySelector('#ttw-save-entry-edit');
+            btn.textContent = '✅ 已保存';
+            setTimeout(() => { btn.textContent = '💾 保存编辑'; }, 1500);
+        });
+
+        // 全选/取消
+        const selectAllBtn = modal.querySelector('#ttw-select-all-sources');
+        if (selectAllBtn) {
+            selectAllBtn.addEventListener('click', () => {
+                const checkboxes = modal.querySelectorAll('input[name="ttw-reroll-source"]');
+                const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+                checkboxes.forEach(cb => cb.checked = !allChecked);
+            });
+        }
+
+        // 清空历史
+        const clearHistoryBtn = modal.querySelector('#ttw-clear-entry-history');
+        if (clearHistoryBtn) {
+            clearHistoryBtn.addEventListener('click', async () => {
+                if (confirm('确定清空该条目的所有Roll历史？')) {
+                    await MemoryHistoryDB.clearEntryRollResults(category, entryName);
+                    modal.remove();
+                    showRerollEntryModal(category, entryName, callback);
+                }
+            });
+        }
+
+        // 使用历史结果
+        modal.querySelectorAll('.ttw-use-roll-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const rollId = parseInt(btn.dataset.rollId);
+                const roll = await MemoryHistoryDB.getEntryRollById(rollId);
+                if (roll && roll.result) {
+                    // 更新到编辑区
+                    const keywords = Array.isArray(roll.result['关键词']) 
+                        ? roll.result['关键词'].join(', ') 
+                        : (roll.result['关键词'] || '');
+                    modal.querySelector('#ttw-entry-keywords-edit').value = keywords;
+                    modal.querySelector('#ttw-entry-content-edit').value = roll.result['内容'] || '';
+                    
+                    // 同时更新世界书
+                    if (!generatedWorldbook[category]) {
+                        generatedWorldbook[category] = {};
+                    }
+                    generatedWorldbook[category][entryName] = JSON.parse(JSON.stringify(roll.result));
+                    updateWorldbookPreview();
+                    
+                    btn.textContent = '✅ 已应用';
+                    setTimeout(() => { btn.textContent = '✅ 使用'; }, 1500);
+                }
+            });
+        });
+
+        // 点击历史项显示详情
+        modal.querySelectorAll('.ttw-entry-roll-item').forEach(item => {
+            item.addEventListener('click', async (e) => {
+                if (e.target.classList.contains('ttw-use-roll-btn')) return;
+                const rollId = parseInt(item.dataset.rollId);
+                const roll = await MemoryHistoryDB.getEntryRollById(rollId);
+                if (roll && roll.result) {
+                    const keywords = Array.isArray(roll.result['关键词']) 
+                        ? roll.result['关键词'].join(', ') 
+                        : (roll.result['关键词'] || '');
+                    // 显示预览
+                    alert(`【Roll #${rollId}】\n\n关键词:\n${keywords}\n\n内容:\n${roll.result['内容'] || '(无)'}\n\n提示词: ${roll.customPrompt || '(无)'}`);
+                }
+            });
+        });
+
+        // 开始重Roll（支持多选并发）
+        const confirmBtn = modal.querySelector('#ttw-confirm-reroll-entry');
+        const stopBtn = modal.querySelector('#ttw-stop-reroll-entry');
+        const progressDiv = modal.querySelector('#ttw-reroll-progress');
+        
+        let isRerollingEntries = false;
+        
+        stopBtn.addEventListener('click', () => {
+            isProcessingStopped = true;
+            isRerollingEntries = false;
+        });
+
+        confirmBtn.addEventListener('click', async () => {
+            const selectedCheckboxes = modal.querySelectorAll('input[name="ttw-reroll-source"]:checked');
+            if (selectedCheckboxes.length === 0) {
+                alert('请至少选择一个来源章节');
                 return;
             }
 
-            const memoryIndex = parseInt(selectedRadio.value);
+            const selectedIndices = Array.from(selectedCheckboxes).map(cb => parseInt(cb.value));
             const customPrompt = modal.querySelector('#ttw-reroll-entry-prompt').value.trim();
+            const concurrency = parseInt(modal.querySelector('#ttw-reroll-concurrency').value) || 3;
 
-            const confirmBtn = modal.querySelector('#ttw-confirm-reroll-entry');
             confirmBtn.disabled = true;
-            confirmBtn.textContent = '🔄 重Roll中...';
+            confirmBtn.style.display = 'none';
+            stopBtn.style.display = 'inline-block';
+            progressDiv.style.display = 'block';
+            isRerollingEntries = true;
+            isProcessingStopped = false;
+
+            let completed = 0;
+            let failed = 0;
+            const total = selectedIndices.length;
+            let lastResult = null;
+
+            const updateProgress = () => {
+                progressDiv.textContent = `进度: ${completed}/${total} 完成${failed > 0 ? `, ${failed} 失败` : ''}`;
+            };
+            updateProgress();
+
+            // 并发处理
+            const processBatch = async (indices, concurrencyLimit) => {
+                const results = [];
+                let index = 0;
+
+                const worker = async () => {
+                    while (index < indices.length && !isProcessingStopped) {
+                        const currentIndex = index++;
+                        const memoryIndex = indices[currentIndex];
+                        try {
+                            const result = await rerollSingleEntry(memoryIndex, category, entryName, customPrompt);
+                            results.push({ memoryIndex, result, success: true });
+                            lastResult = result;
+                            completed++;
+                        } catch (error) {
+                            if (error.message !== 'ABORTED') {
+                                results.push({ memoryIndex, error: error.message, success: false });
+                                failed++;
+                            }
+                        }
+                        updateProgress();
+                    }
+                };
+
+                const workers = [];
+                for (let i = 0; i < Math.min(concurrencyLimit, indices.length); i++) {
+                    workers.push(worker());
+                }
+                await Promise.all(workers);
+                return results;
+            };
 
             try {
-                await rerollSingleEntry(memoryIndex, category, entryName, customPrompt);
-                modal.remove();
-                alert(`✅ 条目 [${category}] ${entryName} 重Roll完成！`);
-                if (callback) callback();
+                await processBatch(selectedIndices, concurrency);
+                
+                if (!isProcessingStopped) {
+                    // 更新编辑区显示最后一次结果
+                    if (lastResult) {
+                        const keywords = Array.isArray(lastResult['关键词']) 
+                            ? lastResult['关键词'].join(', ') 
+                            : (lastResult['关键词'] || '');
+                        modal.querySelector('#ttw-entry-keywords-edit').value = keywords;
+                        modal.querySelector('#ttw-entry-content-edit').value = lastResult['内容'] || '';
+                    }
+                    
+                    progressDiv.textContent = `✅ 完成! ${completed}/${total} 成功${failed > 0 ? `, ${failed} 失败` : ''}`;
+                    
+                    // 刷新历史列表
+                    const newHistory = await MemoryHistoryDB.getEntryRollResults(category, entryName);
+                    let newHistoryHtml = '';
+                    if (newHistory.length === 0) {
+                        newHistoryHtml = '<div style="text-align:center;color:#666;padding:15px;font-size:11px;">暂无Roll历史</div>';
+                    } else {
+                        newHistoryHtml = '<div style="max-height:150px;overflow-y:auto;">';
+                        newHistory.forEach((roll, idx) => {
+                            const time = new Date(roll.timestamp).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+                            const promptPreview = roll.customPrompt ? `「${roll.customPrompt.substring(0, 20)}${roll.customPrompt.length > 20 ? '...' : ''}」` : '';
+                            newHistoryHtml += `
+                                <div class="ttw-entry-roll-item" data-roll-id="${roll.id}" style="display:flex;align-items:center;gap:8px;padding:8px;background:rgba(155,89,182,0.1);border-radius:6px;margin-bottom:6px;cursor:pointer;transition:all 0.2s;" onmouseover="this.style.background='rgba(155,89,182,0.25)'" onmouseout="this.style.background='rgba(155,89,182,0.1)'">
+                                    <div style="flex:1;">
+                                        <div style="font-size:12px;color:#9b59b6;font-weight:bold;">#${idx + 1} - ${time}</div>
+                                        <div style="font-size:11px;color:#888;">第${roll.memoryIndex + 1}章 ${promptPreview}</div>
+                                    </div>
+                                    <button class="ttw-use-roll-btn" data-roll-id="${roll.id}" style="background:rgba(39,174,96,0.5);border:none;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:11px;color:#fff;">✅ 使用</button>
+                                </div>
+                            `;
+                        });
+                        newHistoryHtml += '</div>';
+                    }
+                    modal.querySelector('#ttw-entry-roll-history').innerHTML = newHistoryHtml;
+                    
+                    // 重新绑定事件
+                    modal.querySelectorAll('.ttw-use-roll-btn').forEach(btn => {
+                        btn.addEventListener('click', async (e) => {
+                            e.stopPropagation();
+                            const rollId = parseInt(btn.dataset.rollId);
+                            const roll = await MemoryHistoryDB.getEntryRollById(rollId);
+                            if (roll && roll.result) {
+                                const keywords = Array.isArray(roll.result['关键词']) 
+                                    ? roll.result['关键词'].join(', ') 
+                                    : (roll.result['关键词'] || '');
+                                modal.querySelector('#ttw-entry-keywords-edit').value = keywords;
+                                modal.querySelector('#ttw-entry-content-edit').value = roll.result['内容'] || '';
+                                
+                                if (!generatedWorldbook[category]) {
+                                    generatedWorldbook[category] = {};
+                                }
+                                generatedWorldbook[category][entryName] = JSON.parse(JSON.stringify(roll.result));
+                                updateWorldbookPreview();
+                                
+                                btn.textContent = '✅ 已应用';
+                                setTimeout(() => { btn.textContent = '✅ 使用'; }, 1500);
+                            }
+                        });
+                    });
+                    
+                    if (callback) callback();
+                }
             } catch (error) {
                 if (error.message !== 'ABORTED') {
-                    alert(`❌ 重Roll失败: ${error.message}`);
+                    progressDiv.textContent = `❌ 错误: ${error.message}`;
                 }
+            } finally {
+                isRerollingEntries = false;
                 confirmBtn.disabled = false;
-                confirmBtn.textContent = '🎯 开始重Roll';
+                confirmBtn.style.display = 'inline-block';
+                stopBtn.style.display = 'none';
             }
+        });
+    }
+
+    // ========== 新增：批量重Roll多个条目（支持多选不同条目） ==========
+    async function showBatchRerollModal(callback) {
+        const existingModal = document.getElementById('ttw-batch-reroll-modal');
+        if (existingModal) existingModal.remove();
+
+        // 收集所有条目
+        const allEntries = [];
+        for (const category in generatedWorldbook) {
+            for (const entryName in generatedWorldbook[category]) {
+                const sources = findEntrySourceMemories(category, entryName);
+                if (sources.length > 0) {
+                    allEntries.push({ category, entryName, sources });
+                }
+            }
+        }
+
+        if (allEntries.length === 0) {
+            alert('没有可重Roll的条目（没有找到来源章节）');
+            return;
+        }
+
+        let entriesHtml = '';
+        allEntries.forEach((entry, idx) => {
+            entriesHtml += `
+                <label style="display:flex;align-items:center;gap:8px;padding:6px;background:rgba(230,126,34,0.1);border-radius:4px;margin-bottom:4px;cursor:pointer;">
+                    <input type="checkbox" name="ttw-batch-entry" data-category="${entry.category}" data-entry="${entry.entryName}">
+                    <span style="font-size:12px;"><span style="color:#e67e22;">[${entry.category}]</span> ${entry.entryName}</span>
+                    <span style="font-size:10px;color:#888;margin-left:auto;">${entry.sources.length}章</span>
+                </label>
+            `;
+        });
+
+        const modal = document.createElement('div');
+        modal.id = 'ttw-batch-reroll-modal';
+        modal.className = 'ttw-modal-container';
+        modal.innerHTML = `
+            <div class="ttw-modal" style="max-width:600px;">
+                <div class="ttw-modal-header">
+                    <span class="ttw-modal-title">🎲 批量重Roll条目</span>
+                    <button class="ttw-modal-close" type="button">✕</button>
+                </div>
+                <div class="ttw-modal-body" style="max-height:60vh;overflow-y:auto;">
+                    <div style="margin-bottom:12px;display:flex;gap:8px;">
+                        <button id="ttw-select-all-entries" class="ttw-btn ttw-btn-small">全选</button>
+                        <button id="ttw-deselect-all-entries" class="ttw-btn ttw-btn-small">取消全选</button>
+                    </div>
+                    <div id="ttw-batch-entries" style="max-height:300px;overflow-y:auto;">${entriesHtml}</div>
+                    <div style="margin-top:12px;">
+                        <label style="display:block;margin-bottom:8px;font-weight:bold;font-size:13px;">📝 统一提示词</label>
+                        <textarea id="ttw-batch-prompt" rows="3" placeholder="对所有选中条目使用相同的提示词..." style="width:100%;padding:8px;border:1px solid #555;border-radius:6px;background:rgba(0,0,0,0.3);color:#fff;font-size:12px;box-sizing:border-box;"></textarea>
+                    </div>
+                    <div style="margin-top:12px;display:flex;align-items:center;gap:10px;">
+                        <label style="font-size:12px;color:#3498db;">⚡ 并发数:</label>
+                        <input type="number" id="ttw-batch-concurrency" value="${parallelConfig.concurrency}" min="1" max="10" style="width:60px;padding:4px;border:1px solid #555;border-radius:4px;background:rgba(0,0,0,0.3);color:#fff;text-align:center;">
+                    </div>
+                </div>
+                <div class="ttw-modal-footer">
+                    <div id="ttw-batch-progress" style="flex:1;font-size:12px;color:#888;"></div>
+                    <button class="ttw-btn" id="ttw-cancel-batch">取消</button>
+                    <button class="ttw-btn ttw-btn-secondary" id="ttw-stop-batch" style="display:none;">⏸️ 停止</button>
+                    <button class="ttw-btn ttw-btn-primary" id="ttw-confirm-batch">🎲 开始批量重Roll</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
+        modal.querySelector('#ttw-cancel-batch').addEventListener('click', () => modal.remove());
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+        modal.querySelector('#ttw-select-all-entries').addEventListener('click', () => {
+            modal.querySelectorAll('input[name="ttw-batch-entry"]').forEach(cb => cb.checked = true);
+        });
+        modal.querySelector('#ttw-deselect-all-entries').addEventListener('click', () => {
+            modal.querySelectorAll('input[name="ttw-batch-entry"]').forEach(cb => cb.checked = false);
+        });
+
+        const confirmBtn = modal.querySelector('#ttw-confirm-batch');
+        const stopBtn = modal.querySelector('#ttw-stop-batch');
+        const progressDiv = modal.querySelector('#ttw-batch-progress');
+
+        confirmBtn.addEventListener('click', async () => {
+            const selectedEntries = [];
+            modal.querySelectorAll('input[name="ttw-batch-entry"]:checked').forEach(cb => {
+                selectedEntries.push({
+                    category: cb.dataset.category,
+                    entryName: cb.dataset.entry
+                });
+            });
+
+            if (selectedEntries.length === 0) {
+                alert('请至少选择一个条目');
+                return;
+            }
+
+            const customPrompt = modal.querySelector('#ttw-batch-prompt').value.trim();
+            const concurrency = parseInt(modal.querySelector('#ttw-batch-concurrency').value) || 3;
+
+            confirmBtn.disabled = true;
+            confirmBtn.style.display = 'none';
+            stopBtn.style.display = 'inline-block';
+            isProcessingStopped = false;
+
+            let completed = 0;
+            let failed = 0;
+            const total = selectedEntries.length;
+
+            const updateProgress = () => {
+                progressDiv.textContent = `进度: ${completed}/${total}${failed > 0 ? `, ${failed} 失败` : ''}`;
+            };
+            updateProgress();
+
+            // 并发处理
+            let index = 0;
+            const worker = async () => {
+                while (index < selectedEntries.length && !isProcessingStopped) {
+                    const currentIndex = index++;
+                    const { category, entryName } = selectedEntries[currentIndex];
+                    const sources = findEntrySourceMemories(category, entryName);
+                    
+                    if (sources.length > 0) {
+                        try {
+                            await rerollSingleEntry(sources[0].memoryIndex, category, entryName, customPrompt);
+                            completed++;
+                        } catch (error) {
+                            if (error.message !== 'ABORTED') {
+                                failed++;
+                            }
+                        }
+                    }
+                    updateProgress();
+                }
+            };
+
+            const workers = [];
+            for (let i = 0; i < Math.min(concurrency, selectedEntries.length); i++) {
+                workers.push(worker());
+            }
+            await Promise.all(workers);
+
+            progressDiv.textContent = isProcessingStopped 
+                ? `已停止: ${completed}/${total} 完成` 
+                : `✅ 完成: ${completed}/${total}${failed > 0 ? `, ${failed} 失败` : ''}`;
+            
+            confirmBtn.disabled = false;
+            confirmBtn.style.display = 'inline-block';
+            stopBtn.style.display = 'none';
+
+            if (callback) callback();
+        });
+
+        stopBtn.addEventListener('click', () => {
+            isProcessingStopped = true;
         });
     }
 
@@ -9351,11 +9884,25 @@ ${pairsContent}
                 <div class="ttw-modal-body" id="ttw-worldbook-view-body">${formatWorldbookAsCards(worldbookToShow)}</div>
                 <div class="ttw-modal-footer">
                     <div style="font-size:11px;color:#888;margin-right:auto;">💡 点击⚙️配置，点击🎯单独重Roll条目，点击灯图标切换蓝/绿灯</div>
+                    <button class="ttw-btn ttw-btn-secondary" id="ttw-batch-reroll-btn" title="批量选择多个条目重Roll">🎲 批量重Roll</button>
                     <button class="ttw-btn" id="ttw-close-worldbook-view">关闭</button>
                 </div>
             </div>
         `;
         document.body.appendChild(viewModal);
+        
+        // 绑定批量重Roll按钮
+        viewModal.querySelector('#ttw-batch-reroll-btn').addEventListener('click', () => {
+            showBatchRerollModal(() => {
+                // 刷新视图
+                const bodyContainer = viewModal.querySelector('#ttw-worldbook-view-body');
+                const worldbookToRefresh = useVolumeMode ? getAllVolumesWorldbook() : generatedWorldbook;
+                bodyContainer.innerHTML = formatWorldbookAsCards(worldbookToRefresh);
+                bindLightToggleEvents(bodyContainer);
+                bindConfigButtonEvents(bodyContainer);
+                bindEntryRerollEvents(bodyContainer);
+            });
+        });
         
         // 绑定阈值应用事件
         viewModal.querySelector('#ttw-apply-threshold').addEventListener('click', () => {
@@ -9517,6 +10064,7 @@ ${pairsContent}
         rerollSingleEntry,
         findEntrySourceMemories,
         showRerollEntryModal,
+        showBatchRerollModal, // 新增：批量重Roll多条目
         showRollHistory: showRollHistorySelector,
         importAndMerge: importAndMergeWorldbook,
         getCategoryLightSettings: () => categoryLightSettings,
@@ -9537,8 +10085,11 @@ ${pairsContent}
         getEntryConfig,
         setEntryConfig,
         setCategoryDefaultConfig,
-        getDefaultWorldbookEntriesUI: () => defaultWorldbookEntriesUI
+        getDefaultWorldbookEntriesUI: () => defaultWorldbookEntriesUI,
+        // 新增：条目Roll历史相关
+        getEntryRollHistory: (cat, entry) => MemoryHistoryDB.getEntryRollResults(cat, entry),
+        clearEntryRollHistory: (cat, entry) => MemoryHistoryDB.clearEntryRollResults(cat, entry)
     };
 
-    console.log('📚 TxtToWorldbook v3.0.2 已加载');
+    console.log('📚 TxtToWorldbook v3.0.3 已加载 - 新增: 多选并发重Roll、条目编辑、条目Roll历史');
 })();
