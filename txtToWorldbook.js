@@ -1,7 +1,7 @@
 
 /**
- * TXT转世界书独立模块 v3.0.0
- * 新增: 查找高亮、批量替换、多选整理分类、条目位置/深度/顺序配置、默认世界书UI化、新增默认勾选2递归选项
+ * TXT转世界书独立模块 v3.0.1
+ * 新增: 查找高亮、批量替换、多选整理分类、条目位置/深度/顺序配置、默认世界书UI化、新增默认勾选2递归选项、Token计数与阈值高亮
  */
 
 (function () {
@@ -178,41 +178,41 @@
         const str = String(text);
         // 简单估算：中文字符约1.5-2 token，英文单词约1 token，标点符号等
         let tokens = 0;
-
+        
         // 中文字符计数 (大约每个中文字符1.5-2个token)
         const chineseChars = (str.match(/[\u4e00-\u9fa5]/g) || []).length;
         tokens += chineseChars * 1.5;
-
+        
         // 英文单词计数
         const englishWords = (str.match(/[a-zA-Z]+/g) || []).length;
         tokens += englishWords;
-
+        
         // 数字
         const numbers = (str.match(/\d+/g) || []).length;
         tokens += numbers;
-
+        
         // 标点和特殊字符
         const punctuation = (str.match(/[^\u4e00-\u9fa5a-zA-Z0-9\s]/g) || []).length;
         tokens += punctuation * 0.5;
-
+        
         return Math.ceil(tokens);
     }
 
     function getEntryTotalTokens(entry) {
         if (!entry || typeof entry !== 'object') return 0;
         let total = 0;
-
+        
         // 计算关键词tokens
         if (entry['关键词']) {
             const keywords = Array.isArray(entry['关键词']) ? entry['关键词'].join(', ') : entry['关键词'];
             total += estimateTokenCount(keywords);
         }
-
+        
         // 计算内容tokens
         if (entry['内容']) {
             total += estimateTokenCount(entry['内容']);
         }
-
+        
         return total;
     }
 
@@ -6881,7 +6881,7 @@ ${pairsContent}
         helpModal.innerHTML = `
         <div class="ttw-modal" style="max-width:700px;">
             <div class="ttw-modal-header">
-                <span class="ttw-modal-title">❓ TXT转世界书 v3.0.0 帮助</span>
+                <span class="ttw-modal-title">❓ TXT转世界书 v3.0.1 帮助</span>
                 <button class="ttw-modal-close" type="button">✕</button>
             </div>
             <div class="ttw-modal-body" style="max-height:75vh;overflow-y:auto;">
@@ -7091,6 +7091,19 @@ ${pairsContent}
                         <li><strong>剧情大纲导出配置</strong>：单独配置剧情大纲分类的默认位置/深度/顺序</li>
                         <li>单个条目配置<strong>覆盖</strong>分类默认配置</li>
                         <li>导出SillyTavern格式时每个条目独立group</li>
+                    </ul>
+                </div>
+
+                <div style="margin-bottom:16px;">
+                    <h4 style="color:#f1c40f;margin:0 0 10px;">🔢 Token计数与检测</h4>
+                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
+                        <li><strong>条目Token计数</strong>：每个条目右侧显示预估Token数</li>
+                        <li><strong>分类Token统计</strong>：分类标题显示该分类总Token数</li>
+                        <li><strong>展开详情</strong>：关键词和内容分别显示各自Token数</li>
+                        <li><strong>全局统计</strong>：顶部显示所有条目总Token数</li>
+                        <li><strong>阈值高亮</strong>：输入阈值后，低于该值的条目红色高亮显示</li>
+                        <li><strong>截断检测</strong>：用于快速发现可能被截断的条目</li>
+                        <li>Token估算：中文~1.5tk/字，英文~1tk/词，标点~0.5tk</li>
                     </ul>
                 </div>
 
@@ -8847,7 +8860,7 @@ ${pairsContent}
         let totalEntries = 0;
         let totalTokens = 0;
         let belowThresholdCount = 0;
-
+        
         for (const category in worldbook) {
             const entries = worldbook[category];
             const entryCount = typeof entries === 'object' ? Object.keys(entries).length : 0;
@@ -8872,7 +8885,7 @@ ${pairsContent}
                     <span style="font-size:12px;">${entryCount} 条目 | <span style="color:#f1c40f;">~${categoryTokens} tk</span></span>
                 </div>
                 <div style="background:#2d2d2d;display:none;">`;
-
+            
             for (const entryName in entries) {
                 const entry = entries[entryName];
                 const config = getEntryConfig(category, entryName);
@@ -8889,11 +8902,11 @@ ${pairsContent}
 
                 // 计算条目token数
                 const entryTokens = getEntryTotalTokens(entry);
-
+                
                 // 判断是否低于阈值需要高亮
                 const isBelowThreshold = tokenHighlightThreshold > 0 && entryTokens < tokenHighlightThreshold;
                 if (isBelowThreshold) belowThresholdCount++;
-
+                
                 const highlightStyle = isBelowThreshold ? 'background:#7f1d1d;border-left:3px solid #ef4444;' : 'border-left:3px solid #3498db;';
                 const tokenStyle = isBelowThreshold ? 'color:#ef4444;font-weight:bold;' : 'color:#f1c40f;';
                 const warningIcon = isBelowThreshold ? '⚠️ ' : '';
@@ -8941,12 +8954,12 @@ ${pairsContent}
             }
             html += `</div></div>`;
         }
-
+        
         // 统计信息
-        const thresholdInfo = tokenHighlightThreshold > 0
-            ? ` | <span style="color:#ef4444;">⚠️ ${belowThresholdCount}个条目低于${tokenHighlightThreshold}tk</span>`
+        const thresholdInfo = tokenHighlightThreshold > 0 
+            ? ` | <span style="color:#ef4444;">⚠️ ${belowThresholdCount}个条目低于${tokenHighlightThreshold}tk</span>` 
             : '';
-
+        
         return `<div style="margin-bottom:12px;font-size:13px;">共 ${Object.keys(worldbook).filter(k => Object.keys(worldbook[k]).length > 0).length} 个分类, ${totalEntries} 个条目 | <span style="color:#f1c40f;">总计 ~${totalTokens} tk</span>${thresholdInfo}</div>` + html;
     }
 
@@ -9014,7 +9027,7 @@ ${pairsContent}
             </div>
         `;
         document.body.appendChild(viewModal);
-
+        
         // 绑定阈值应用事件
         viewModal.querySelector('#ttw-apply-threshold').addEventListener('click', () => {
             const input = viewModal.querySelector('#ttw-token-threshold-input');
@@ -9025,14 +9038,14 @@ ${pairsContent}
             bindLightToggleEvents(bodyContainer);
             bindConfigButtonEvents(bodyContainer);
         });
-
+        
         // 支持回车键应用
         viewModal.querySelector('#ttw-token-threshold-input').addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 viewModal.querySelector('#ttw-apply-threshold').click();
             }
         });
-
+        
         bindLightToggleEvents(viewModal.querySelector('#ttw-worldbook-view-body'));
         bindConfigButtonEvents(viewModal.querySelector('#ttw-worldbook-view-body'));
         viewModal.querySelector('.ttw-modal-close').addEventListener('click', () => viewModal.remove());
@@ -9193,5 +9206,5 @@ ${pairsContent}
         getDefaultWorldbookEntriesUI: () => defaultWorldbookEntriesUI
     };
 
-    console.log('📚 TxtToWorldbook v3.0.0 已加载');
+    console.log('📚 TxtToWorldbook v3.0.1 已加载');
 })();
