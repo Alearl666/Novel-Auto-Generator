@@ -1,9 +1,9 @@
 
 /**
- * TXT转世界书独立模块 v3.0.3
+ * TXT转世界书独立模块 v3.0.4
  * 新增: 查找高亮、批量替换、多选整理分类、条目位置/深度/顺序配置、默认世界书UI化、新增默认勾选2递归选项、Token计数与阈值高亮
  * v3.0.2 新增: 单独重Roll条目功能 - 对生成结果的某个条目不满意时可单独重Roll该条目（支持自定义提示词），不影响已整理/合并的其他条目
- * v3.0.3 新增: 
+ * v3.0.4 新增: 
  *   - 单独重Roll支持多选条目 + 并发处理
  *   - 生成结果的关键词和内容允许直接编辑
  *   - 单独重Roll条目有独立历史记录，可挑选任意一次Roll结果（不影响其他条目）
@@ -2696,7 +2696,7 @@ ${generateDynamicJsonTemplate()}
         }
     }
 
-    // ========== 新增：显示单独重Roll条目弹窗（v3.0.3 升级版：多选+并发+编辑+历史） ==========
+    // ========== 新增：显示单独重Roll条目弹窗（v3.0.4 升级版：多选+并发+编辑+历史） ==========
     async function showRerollEntryModal(category, entryName, callback) {
         const existingModal = document.getElementById('ttw-reroll-entry-modal');
         if (existingModal) existingModal.remove();
@@ -4881,10 +4881,14 @@ tochao">thinking\ntucao\ntochao</textarea>
 
     // ========== 别名识别与合并 ==========
     function findPotentialDuplicateCharacters() {
-        const characters = generatedWorldbook['角色'];
-        if (!characters) return [];
+        return findPotentialDuplicates('角色');
+    }
 
-        const names = Object.keys(characters);
+    function findPotentialDuplicates(categoryName) {
+        const entries = generatedWorldbook[categoryName];
+        if (!entries) return [];
+
+        const names = Object.keys(entries);
         const suspectedGroups = [];
         const processed = new Set();
 
@@ -4892,12 +4896,12 @@ tochao">thinking\ntucao\ntochao</textarea>
             if (processed.has(names[i])) continue;
 
             const group = [names[i]];
-            const keywordsA = new Set(characters[names[i]]['关键词'] || []);
+            const keywordsA = new Set(entries[names[i]]['关键词'] || []);
 
             for (let j = i + 1; j < names.length; j++) {
                 if (processed.has(names[j])) continue;
 
-                const keywordsB = new Set(characters[names[j]]['关键词'] || []);
+                const keywordsB = new Set(entries[names[j]]['关键词'] || []);
 
                 const intersection = [...keywordsA].filter(k => keywordsB.has(k));
 
@@ -4985,10 +4989,10 @@ tochao">thinking\ntucao\ntochao</textarea>
         }
     }
 
-    async function verifyDuplicatesWithAI(suspectedGroups, useParallel = true, threshold = 5) {
+    async function verifyDuplicatesWithAI(suspectedGroups, useParallel = true, threshold = 5, categoryName = '角色') {
         if (suspectedGroups.length === 0) return { pairResults: [], mergedGroups: [] };
 
-        const characters = generatedWorldbook['角色'];
+        const entries = generatedWorldbook[categoryName];
 
         const allPairs = [];
         const allNames = new Set();
@@ -5008,8 +5012,8 @@ tochao">thinking\ntucao\ntochao</textarea>
         const buildPairContent = (pairs, startIndex = 0) => {
             return pairs.map((pair, i) => {
                 const [nameA, nameB] = pair;
-                const entryA = characters[nameA];
-                const entryB = characters[nameB];
+                const entryA = entries[nameA];
+                const entryB = entries[nameB];
 
                 const keywordsA = entryA?.['关键词']?.join(', ') || '无';
                 const keywordsB = entryB?.['关键词']?.join(', ') || '无';
@@ -5024,30 +5028,31 @@ tochao">thinking\ntucao\ntochao</textarea>
             }).join('\n\n');
         };
 
+        const categoryLabel = categoryName === '角色' ? '角色' : `「${categoryName}」分类的条目`;
         const buildPrompt = (pairsContent, pairCount) => {
-            return getLanguagePrefix() + `你是角色识别专家。请对以下每一对角色进行判断，判断它们是否为同一人物。
+            return getLanguagePrefix() + `你是${categoryName}识别专家。请对以下每一对${categoryLabel}进行判断，判断它们是否为同一${categoryName === '角色' ? '人物' : '事物'}。
 
-## 待判断的角色配对
+## 待判断的${categoryLabel}配对
 ${pairsContent}
 
 ## 判断依据
-- 仔细阅读每个角色的关键词和内容摘要
-- 根据描述的性别、身份、背景、外貌等信息判断
-- 考虑：全名vs昵称、姓vs名、绰号等称呼变化
-- 如果内容描述明显指向同一个人，则判定为同一人
-- 【重要】即使名字相似，如果性别、身份、背景明显不同，也要判定为不同人
+- 仔细阅读每个条目的关键词和内容摘要
+- 根据描述的核心特征、身份、背景等信息判断
+- 考虑：全名vs简称、别名、昵称、代号等称呼变化
+- 如果内容描述明显指向同一${categoryName === '角色' ? '个人' : '个事物'}，则判定为相同
+- 【重要】即使名字相似，如果核心特征明显不同，也要判定为不同
 
 ## 要求
 - 对每一对分别判断
-- 如果是同一人，选择更完整/更常用的名称作为mainName
-- 如果不是同一人，说明原因
+- 如果是同一${categoryName === '角色' ? '人' : '事物'}，选择更完整/更常用的名称作为mainName
+- 如果不是同一${categoryName === '角色' ? '人' : '事物'}，说明原因
 - 返回JSON格式
 
 ## 输出格式
 {
     "results": [
-        {"pair": 1, "nameA": "角色A名", "nameB": "角色B名", "isSamePerson": true, "mainName": "保留的名称", "reason": "判断依据"},
-        {"pair": 2, "nameA": "角色A名", "nameB": "角色B名", "isSamePerson": false, "reason": "不是同一人的原因"}
+        {"pair": 1, "nameA": "条目A名", "nameB": "条目B名", "isSamePerson": true, "mainName": "保留的名称", "reason": "判断依据"},
+        {"pair": 2, "nameA": "条目A名", "nameB": "条目B名", "isSamePerson": false, "reason": "不是同一${categoryName === '角色' ? '人' : '事物'}的原因"}
     ]
 }`;
         };
@@ -5163,7 +5168,7 @@ ${pairsContent}
             if (!mainName) {
                 let maxLen = 0;
                 for (const name of group) {
-                    const len = (characters[name]?.['内容'] || '').length;
+                    const len = (entries[name]?.['内容'] || '').length;
                     if (len > maxLen) {
                         maxLen = len;
                         mainName = name;
@@ -5183,8 +5188,8 @@ ${pairsContent}
 
 
 
-    async function mergeConfirmedDuplicates(aiResult) {
-        const characters = generatedWorldbook['角色'];
+    async function mergeConfirmedDuplicates(aiResult, categoryName = '角色') {
+        const entries = generatedWorldbook[categoryName];
         let mergedCount = 0;
 
         const mergedGroups = aiResult.mergedGroups || [];
@@ -5197,23 +5202,23 @@ ${pairsContent}
             let mergedContent = '';
 
             for (const name of names) {
-                if (characters[name]) {
-                    mergedKeywords.push(...(characters[name]['关键词'] || []));
+                if (entries[name]) {
+                    mergedKeywords.push(...(entries[name]['关键词'] || []));
                     mergedKeywords.push(name);
-                    if (characters[name]['内容']) {
-                        mergedContent += characters[name]['内容'] + '\n\n---\n\n';
+                    if (entries[name]['内容']) {
+                        mergedContent += entries[name]['内容'] + '\n\n---\n\n';
                     }
                 }
             }
 
-            characters[mainName] = {
+            entries[mainName] = {
                 '关键词': [...new Set(mergedKeywords)],
                 '内容': mergedContent.replace(/\n\n---\n\n$/, '')
             };
 
             for (const name of names) {
-                if (name !== mainName && characters[name]) {
-                    delete characters[name];
+                if (name !== mainName && entries[name]) {
+                    delete entries[name];
                 }
             }
 
@@ -5225,20 +5230,109 @@ ${pairsContent}
 
 
     async function showAliasMergeUI() {
-        updateStreamContent('\n🔍 第一阶段：扫描疑似同人...\n');
-        const suspected = findPotentialDuplicateCharacters();
+        // ====== 第0步：让用户勾选要扫描的分类 ======
+        const availableCategories = Object.keys(generatedWorldbook).filter(cat => {
+            const entries = generatedWorldbook[cat];
+            return entries && typeof entries === 'object' && Object.keys(entries).length >= 2;
+        });
 
-        if (suspected.length === 0) {
-            alert('未发现疑似同人角色');
+        if (availableCategories.length === 0) {
+            alert('当前世界书中没有包含2个以上条目的分类，无法进行别名合并');
             return;
         }
 
+        // 弹出分类选择弹窗
+        const selectedCategories = await new Promise((resolve) => {
+            const existingModal = document.getElementById('ttw-alias-cat-modal');
+            if (existingModal) existingModal.remove();
+
+            const catModal = document.createElement('div');
+            catModal.id = 'ttw-alias-cat-modal';
+            catModal.className = 'ttw-modal-container';
+
+            let catListHtml = availableCategories.map(cat => {
+                const count = Object.keys(generatedWorldbook[cat]).length;
+                const isChecked = cat === '角色' ? 'checked' : '';
+                return `
+                    <label style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(155,89,182,0.1);border-radius:6px;margin-bottom:6px;cursor:pointer;">
+                        <input type="checkbox" class="ttw-alias-cat-cb" data-cat="${cat}" ${isChecked} style="width:16px;height:16px;accent-color:#9b59b6;">
+                        <span style="color:#e67e22;font-weight:bold;font-size:13px;">${cat}</span>
+                        <span style="color:#888;font-size:11px;margin-left:auto;">${count} 个条目</span>
+                    </label>
+                `;
+            }).join('');
+
+            catModal.innerHTML = `
+                <div class="ttw-modal" style="max-width:500px;">
+                    <div class="ttw-modal-header">
+                        <span class="ttw-modal-title">🔗 别名合并 - 选择要扫描的分类</span>
+                        <button class="ttw-modal-close" type="button">✕</button>
+                    </div>
+                    <div class="ttw-modal-body">
+                        <div style="margin-bottom:12px;padding:10px;background:rgba(52,152,219,0.15);border-radius:6px;font-size:12px;color:#3498db;">
+                            💡 请勾选需要让AI识别别名并合并的分类。将对每个选中的分类独立扫描重复条目。
+                        </div>
+                        <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
+                            <label style="font-size:12px;cursor:pointer;"><input type="checkbox" id="ttw-alias-cat-select-all"> 全选</label>
+                        </div>
+                        <div style="max-height:300px;overflow-y:auto;background:rgba(0,0,0,0.2);border-radius:6px;padding:8px;">
+                            ${catListHtml}
+                        </div>
+                    </div>
+                    <div class="ttw-modal-footer">
+                        <button class="ttw-btn" id="ttw-alias-cat-cancel">取消</button>
+                        <button class="ttw-btn ttw-btn-primary" id="ttw-alias-cat-confirm">📍 开始扫描</button>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(catModal);
+
+            catModal.querySelector('#ttw-alias-cat-select-all').addEventListener('change', (e) => {
+                catModal.querySelectorAll('.ttw-alias-cat-cb').forEach(cb => cb.checked = e.target.checked);
+            });
+
+            catModal.querySelector('.ttw-modal-close').addEventListener('click', () => { catModal.remove(); resolve(null); });
+            catModal.querySelector('#ttw-alias-cat-cancel').addEventListener('click', () => { catModal.remove(); resolve(null); });
+            catModal.addEventListener('click', (e) => { if (e.target === catModal) { catModal.remove(); resolve(null); } });
+
+            catModal.querySelector('#ttw-alias-cat-confirm').addEventListener('click', () => {
+                const checked = [...catModal.querySelectorAll('.ttw-alias-cat-cb:checked')].map(cb => cb.dataset.cat);
+                catModal.remove();
+                resolve(checked.length > 0 ? checked : null);
+            });
+        });
+
+        if (!selectedCategories || selectedCategories.length === 0) return;
+
+        // ====== 第一阶段：扫描所有选中分类的疑似重复 ======
+        updateStreamContent('\n🔍 第一阶段：扫描疑似重复条目...\n');
+
+        // 按分类收集所有疑似组，每组附带分类信息
+        const allSuspectedByCategory = {};
+        let totalGroups = 0;
         let totalPairs = 0;
-        for (const group of suspected) {
-            totalPairs += (group.length * (group.length - 1)) / 2;
+
+        for (const cat of selectedCategories) {
+            const suspected = findPotentialDuplicates(cat);
+            if (suspected.length > 0) {
+                allSuspectedByCategory[cat] = suspected;
+                totalGroups += suspected.length;
+                for (const group of suspected) {
+                    totalPairs += (group.length * (group.length - 1)) / 2;
+                }
+                updateStreamContent(`  [${cat}] 发现 ${suspected.length} 组疑似重复\n`);
+            } else {
+                updateStreamContent(`  [${cat}] 未发现重复\n`);
+            }
         }
 
-        updateStreamContent(`发现 ${suspected.length} 组疑似同人，共 ${totalPairs} 对需要判断\n`);
+        if (totalGroups === 0) {
+            alert('在所有选中的分类中未发现疑似重复条目');
+            return;
+        }
+
+        updateStreamContent(`共发现 ${totalGroups} 组疑似重复，${totalPairs} 对需要判断\n`);
 
         const existingModal = document.getElementById('ttw-alias-modal');
         if (existingModal) existingModal.remove();
@@ -5247,25 +5341,39 @@ ${pairsContent}
         modal.id = 'ttw-alias-modal';
         modal.className = 'ttw-modal-container';
 
-        const characters = generatedWorldbook['角色'];
-        let groupsHtml = suspected.map((group, i) => {
-            const pairCount = (group.length * (group.length - 1)) / 2;
-            const groupInfo = group.map(name => {
-                const entry = characters[name];
-                const keywords = (entry?.['关键词'] || []).slice(0, 3).join(', ');
-                return `${name}${keywords ? ` [${keywords}]` : ''}`;
-            }).join(' / ');
+        // 构建分类分组的显示
+        let groupsHtml = '';
+        let globalGroupIndex = 0;
+        const groupCategoryMap = []; // 记录每个全局index对应的分类和本地index
 
-            return `
-                <label style="display:flex;align-items:flex-start;gap:8px;padding:8px 12px;background:rgba(155,89,182,0.1);border-radius:6px;margin-bottom:6px;cursor:pointer;">
-                    <input type="checkbox" class="ttw-alias-group-cb" data-index="${i}" checked style="margin-top:3px;">
-                    <div>
-                        <div style="color:#9b59b6;font-weight:bold;font-size:12px;">组${i + 1} <span style="color:#888;font-weight:normal;">(${group.length}人, ${pairCount}对)</span></div>
-                        <div style="font-size:11px;color:#ccc;word-break:break-all;">${groupInfo}</div>
-                    </div>
-                </label>
-            `;
-        }).join('');
+        for (const cat of Object.keys(allSuspectedByCategory)) {
+            const suspected = allSuspectedByCategory[cat];
+            const entries = generatedWorldbook[cat];
+
+            groupsHtml += `<div style="margin-bottom:8px;padding:6px 8px;background:rgba(230,126,34,0.15);border-radius:4px;font-size:12px;color:#e67e22;font-weight:bold;">📂 ${cat} (${suspected.length}组)</div>`;
+
+            suspected.forEach((group, localIdx) => {
+                const pairCount = (group.length * (group.length - 1)) / 2;
+                const groupInfo = group.map(name => {
+                    const entry = entries[name];
+                    const keywords = (entry?.['关键词'] || []).slice(0, 3).join(', ');
+                    return `${name}${keywords ? ` [${keywords}]` : ''}`;
+                }).join(' / ');
+
+                groupsHtml += `
+                    <label style="display:flex;align-items:flex-start;gap:8px;padding:8px 12px;background:rgba(155,89,182,0.1);border-radius:6px;margin-bottom:6px;cursor:pointer;">
+                        <input type="checkbox" class="ttw-alias-group-cb" data-index="${globalGroupIndex}" data-category="${cat}" checked style="margin-top:3px;">
+                        <div>
+                            <div style="color:#9b59b6;font-weight:bold;font-size:12px;">组${globalGroupIndex + 1} <span style="color:#888;font-weight:normal;">(${group.length}条, ${pairCount}对)</span></div>
+                            <div style="font-size:11px;color:#ccc;word-break:break-all;">${groupInfo}</div>
+                        </div>
+                    </label>
+                `;
+
+                groupCategoryMap.push({ category: cat, localIndex: localIdx });
+                globalGroupIndex++;
+            });
+        }
 
         modal.innerHTML = `
             <div class="ttw-modal" style="max-width:750px;">
@@ -5277,7 +5385,8 @@ ${pairsContent}
                     <div style="margin-bottom:16px;padding:12px;background:rgba(52,152,219,0.15);border-radius:8px;">
                         <div style="font-weight:bold;color:#3498db;margin-bottom:8px;">📊 第一阶段：本地检测结果</div>
                         <div style="font-size:13px;color:#ccc;">
-                            基于关键词交集和名称相似度，发现 <span style="color:#9b59b6;font-weight:bold;">${suspected.length}</span> 组疑似同人角色，
+                            扫描了 <span style="color:#e67e22;font-weight:bold;">${selectedCategories.length}</span> 个分类，
+                            发现 <span style="color:#9b59b6;font-weight:bold;">${totalGroups}</span> 组疑似重复，
                             共 <span style="color:#e67e22;font-weight:bold;">${totalPairs}</span> 对需要AI判断
                         </div>
                     </div>
@@ -5293,7 +5402,7 @@ ${pairsContent}
                     </div>
 
                            <div style="margin-bottom:16px;padding:10px;background:rgba(230,126,34,0.1);border-radius:6px;font-size:11px;color:#f39c12;">
-                        💡 <strong>两两判断模式</strong>：AI会对每一对角色分别判断是否同一人，然后自动合并确认的结果。<br>
+                        💡 <strong>两两判断模式</strong>：AI会对每一对条目分别判断是否相同，然后自动合并确认的结果。<br>
                         例如：[A,B,C] 会拆成 (A,B) (A,C) (B,C) 三对分别判断，如果A=B且B=C，则A、B、C会被合并。
                     </div>
 
@@ -5338,7 +5447,8 @@ ${pairsContent}
 
         document.body.appendChild(modal);
 
-        let aiResult = null;
+        // aiResult现在按分类存储: { categoryName: { pairResults, mergedGroups, _allPairs } }
+        let aiResultByCategory = {};
 
         modal.querySelector('#ttw-select-all-alias').addEventListener('change', (e) => {
             modal.querySelectorAll('.ttw-alias-group-cb').forEach(cb => cb.checked = e.target.checked);
@@ -5349,13 +5459,22 @@ ${pairsContent}
         modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
 
         modal.querySelector('#ttw-ai-verify-alias').addEventListener('click', async () => {
-            const selectedIndices = [...modal.querySelectorAll('.ttw-alias-group-cb:checked')].map(cb => parseInt(cb.dataset.index));
-            if (selectedIndices.length === 0) {
+            // 按分类分组选中的组
+            const checkedCbs = [...modal.querySelectorAll('.ttw-alias-group-cb:checked')];
+            if (checkedCbs.length === 0) {
                 alert('请选择要判断的组');
                 return;
             }
 
-            const selectedGroups = selectedIndices.map(i => suspected[i]);
+            // 按分类归类选中的组
+            const selectedByCategory = {};
+            for (const cb of checkedCbs) {
+                const cat = cb.dataset.category;
+                const globalIdx = parseInt(cb.dataset.index);
+                const { localIndex } = groupCategoryMap[globalIdx];
+                if (!selectedByCategory[cat]) selectedByCategory[cat] = [];
+                selectedByCategory[cat].push(allSuspectedByCategory[cat][localIndex]);
+            }
 
             const btn = modal.querySelector('#ttw-ai-verify-alias');
             const stopBtn = modal.querySelector('#ttw-stop-alias');
@@ -5368,37 +5487,70 @@ ${pairsContent}
                 const threshold = parseInt(modal.querySelector('#ttw-alias-threshold')?.value) || 5;
 
                 updateStreamContent(`\n🤖 第二阶段：两两配对判断...\n并发: ${useParallel ? '开启' : '关闭'}, 阈值: ${threshold}\n`);
-                aiResult = await verifyDuplicatesWithAI(selectedGroups, useParallel, threshold);
 
+                // 对每个分类分别调用AI判断
+                aiResultByCategory = {};
+                for (const cat of Object.keys(selectedByCategory)) {
+                    updateStreamContent(`\n📂 处理分类「${cat}」...\n`);
+                    aiResultByCategory[cat] = await verifyDuplicatesWithAI(selectedByCategory[cat], useParallel, threshold, cat);
+                }
 
                 const resultDiv = modal.querySelector('#ttw-alias-result');
                 const pairResultsDiv = modal.querySelector('#ttw-pair-results');
                 const mergePlanDiv = modal.querySelector('#ttw-merge-plan');
                 resultDiv.style.display = 'block';
 
+                // 显示所有分类的配对结果
                 let pairHtml = '';
-                for (const result of aiResult.pairResults || []) {
-                    const icon = result.isSamePerson ? '✅' : '❌';
-                    const color = result.isSamePerson ? '#27ae60' : '#e74c3c';
-                    pairHtml += `
-                        <div style="display:inline-flex;align-items:center;gap:4px;padding:4px 8px;background:rgba(0,0,0,0.2);border-radius:4px;margin:2px;font-size:11px;border-left:2px solid ${color};">
-                            <span style="color:${color};">${icon}</span>
-                            <span>「${result.nameA}」vs「${result.nameB}」</span>
-                            ${result.isSamePerson ? `<span style="color:#888;">→${result.mainName}</span>` : ''}
-                        </div>
-                    `;
+                for (const cat of Object.keys(aiResultByCategory)) {
+                    const catResult = aiResultByCategory[cat];
+                    if (catResult.pairResults && catResult.pairResults.length > 0) {
+                        pairHtml += `<div style="font-size:11px;color:#e67e22;font-weight:bold;margin:6px 0 4px;">📂 ${cat}</div>`;
+                        for (const result of catResult.pairResults) {
+                            const icon = result.isSamePerson ? '✅' : '❌';
+                            const color = result.isSamePerson ? '#27ae60' : '#e74c3c';
+                            pairHtml += `
+                                <div style="display:inline-flex;align-items:center;gap:4px;padding:4px 8px;background:rgba(0,0,0,0.2);border-radius:4px;margin:2px;font-size:11px;border-left:2px solid ${color};">
+                                    <span style="color:${color};">${icon}</span>
+                                    <span>「${result.nameA}」vs「${result.nameB}」</span>
+                                    ${result.isSamePerson ? `<span style="color:#888;">→${result.mainName}</span>` : ''}
+                                </div>
+                            `;
+                        }
+                    }
                 }
                 pairResultsDiv.innerHTML = pairHtml || '<div style="color:#888;">无配对结果</div>';
 
+                // 显示所有分类的合并方案
                 let mergePlanHtml = '';
-                if (aiResult.mergedGroups && aiResult.mergedGroups.length > 0) {
+                let hasAnyMerge = false;
+                let globalMergeGroupIndex = 0;
+
+                // 先统计是否有合并项
+                for (const cat of Object.keys(aiResultByCategory)) {
+                    if (aiResultByCategory[cat].mergedGroups && aiResultByCategory[cat].mergedGroups.length > 0) {
+                        hasAnyMerge = true;
+                        break;
+                    }
+                }
+
+                if (hasAnyMerge) {
                     mergePlanHtml += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><span style="font-size:11px;color:#888;">取消勾选可排除不想合并的组</span><label style="font-size:11px;cursor:pointer;"><input type="checkbox" id="ttw-select-all-merge-groups" checked> 全选</label></div>';
-                    for (var gi = 0; gi < aiResult.mergedGroups.length; gi++) {
-                        var group = aiResult.mergedGroups[gi];
-                        mergePlanHtml += '<label style="display:flex;align-items:flex-start;gap:8px;padding:8px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:6px;border-left:3px solid #27ae60;cursor:pointer;"><input type="checkbox" class="ttw-merge-group-cb" data-group-index="' + gi + '" checked style="margin-top:2px;width:16px;height:16px;accent-color:#27ae60;flex-shrink:0;"><div><div style="color:#27ae60;font-weight:bold;font-size:12px;">→ 合并为「' + group.mainName + '」</div><div style="font-size:11px;color:#ccc;margin-top:4px;">包含: ' + group.names.join(', ') + '</div></div></label>';
+
+                    for (const cat of Object.keys(aiResultByCategory)) {
+                        const catResult = aiResultByCategory[cat];
+                        if (!catResult.mergedGroups || catResult.mergedGroups.length === 0) continue;
+
+                        mergePlanHtml += `<div style="font-size:11px;color:#e67e22;font-weight:bold;margin:8px 0 4px;">📂 ${cat}</div>`;
+
+                        for (var gi = 0; gi < catResult.mergedGroups.length; gi++) {
+                            var group = catResult.mergedGroups[gi];
+                            mergePlanHtml += '<label style="display:flex;align-items:flex-start;gap:8px;padding:8px;background:rgba(0,0,0,0.2);border-radius:4px;margin-bottom:6px;border-left:3px solid #27ae60;cursor:pointer;"><input type="checkbox" class="ttw-merge-group-cb" data-group-index="' + gi + '" data-category="' + cat + '" checked style="margin-top:2px;width:16px;height:16px;accent-color:#27ae60;flex-shrink:0;"><div><div style="color:#27ae60;font-weight:bold;font-size:12px;">→ 合并为「' + group.mainName + '」</div><div style="font-size:11px;color:#ccc;margin-top:4px;">包含: ' + group.names.join(', ') + '</div></div></label>';
+                            globalMergeGroupIndex++;
+                        }
                     }
                 } else {
-                    mergePlanHtml = '<div style="color:#888;font-size:12px;">没有需要合并的角色（所有配对都是不同人）</div>';
+                    mergePlanHtml = '<div style="color:#888;font-size:12px;">没有需要合并的条目（所有配对都是不同事物）</div>';
                 }
                 mergePlanDiv.innerHTML = mergePlanHtml;
 
@@ -5412,7 +5564,7 @@ ${pairsContent}
                     });
                 }
 
-                if (aiResult.mergedGroups && aiResult.mergedGroups.length > 0) {
+                if (hasAnyMerge) {
                     modal.querySelector('#ttw-confirm-alias').style.display = 'inline-block';
                 }
                 btn.style.display = 'none';
@@ -5438,38 +5590,38 @@ ${pairsContent}
         });
 
         modal.querySelector('#ttw-confirm-alias').addEventListener('click', async function () {
-            if (!aiResult || !aiResult.mergedGroups || aiResult.mergedGroups.length === 0) {
-                alert('没有需要合并的角色');
-                modal.remove();
-                return;
-            }
-
+            // 按分类收集选中的合并组
             var checkedBoxes = modal.querySelectorAll('.ttw-merge-group-cb:checked');
-            var selectedIndices = [];
-            for (var i = 0; i < checkedBoxes.length; i++) {
-                selectedIndices.push(parseInt(checkedBoxes[i].getAttribute('data-group-index')));
-            }
-
-            if (selectedIndices.length === 0) {
+            if (checkedBoxes.length === 0) {
                 alert('没有勾选任何合并组');
                 return;
             }
 
-            var selectedGroups = [];
-            for (var j = 0; j < selectedIndices.length; j++) {
-                if (aiResult.mergedGroups[selectedIndices[j]]) {
-                    selectedGroups.push(aiResult.mergedGroups[selectedIndices[j]]);
+            // 按分类归类
+            var mergeByCategory = {};
+            for (var i = 0; i < checkedBoxes.length; i++) {
+                var cat = checkedBoxes[i].getAttribute('data-category');
+                var gi = parseInt(checkedBoxes[i].getAttribute('data-group-index'));
+                if (!mergeByCategory[cat]) mergeByCategory[cat] = [];
+                if (aiResultByCategory[cat] && aiResultByCategory[cat].mergedGroups[gi]) {
+                    mergeByCategory[cat].push(aiResultByCategory[cat].mergedGroups[gi]);
                 }
             }
 
-            if (!confirm('确定合并选中的 ' + selectedGroups.length + ' 组同人角色？\n（共 ' + aiResult.mergedGroups.length + ' 组中选了 ' + selectedGroups.length + ' 组）')) return;
+            var totalSelected = checkedBoxes.length;
+            var categoryList = Object.keys(mergeByCategory).map(c => `${c}(${mergeByCategory[c].length}组)`).join('、');
+            if (!confirm('确定合并选中的 ' + totalSelected + ' 组条目？\n涉及分类: ' + categoryList)) return;
 
-            var filteredResult = { pairResults: aiResult.pairResults, mergedGroups: selectedGroups };
-            var mergedCount = await mergeConfirmedDuplicates(filteredResult);
+            var totalMerged = 0;
+            for (var cat in mergeByCategory) {
+                var filteredResult = { pairResults: aiResultByCategory[cat].pairResults, mergedGroups: mergeByCategory[cat] };
+                var mergedCount = await mergeConfirmedDuplicates(filteredResult, cat);
+                totalMerged += mergedCount;
+            }
 
             updateWorldbookPreview();
             modal.remove();
-            alert('合并完成！合并了 ' + mergedCount + ' 组角色。\n\n建议使用"整理条目"功能清理合并后的重复内容。');
+            alert('合并完成！共合并了 ' + totalMerged + ' 组条目。\n\n建议使用"整理条目"功能清理合并后的重复内容。');
         });
 
     }
@@ -7707,13 +7859,13 @@ ${pairsContent}
         helpModal.innerHTML = `
         <div class="ttw-modal" style="max-width:700px;">
             <div class="ttw-modal-header">
-                <span class="ttw-modal-title">❓ TXT转世界书 v3.0.3 帮助</span>
+                <span class="ttw-modal-title">❓ TXT转世界书 v3.0.4 帮助</span>
                 <button class="ttw-modal-close" type="button">✕</button>
             </div>
             <div class="ttw-modal-body" style="max-height:75vh;overflow-y:auto;">
 
                 <div style="margin-bottom:16px;padding:12px;background:rgba(155,89,182,0.15);border-radius:8px;border-left:4px solid #9b59b6;">
-                    <h4 style="color:#9b59b6;margin:0 0 10px;">🆕 v3.0.3 新功能</h4>
+                    <h4 style="color:#9b59b6;margin:0 0 10px;">🆕 v3.0.4 新功能</h4>
                     <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
                         <li><strong>单独重Roll多选并发</strong>：可同时选择多个来源章节进行重Roll，支持配置并发数</li>
                         <li><strong>条目内容可编辑</strong>：重Roll弹窗中可直接编辑关键词和内容，保存后立即生效</li>
@@ -8000,7 +8152,7 @@ ${pairsContent}
                         <li>遇到乱码？用<strong>🔍查找</strong>定位 → <strong>🎲批量重Roll</strong>修复</li>
                         <li>某个条目不满意？点击条目旁的<strong>🎯</strong>按钮单独重Roll，可添加提示词指导</li>
                         <li>AI输出了thinking标签？用<strong>🏷️清除标签</strong>一键清理</li>
-                        <li>同一角色多个名字？用<strong>🔗别名合并</strong>自动识别</li>
+                        <li>同一事物多个名字？用<strong>🔗别名合并</strong>选择分类后自动识别</li>
                         <li>条目内容太杂乱？用<strong>🧹整理条目</strong>让AI优化</li>
                         <li>担心进度丢失？随时<strong>📤导出任务</strong>保存</li>
                         <li>想复用设置？<strong>📤导出配置</strong>下次直接导入</li>
@@ -8446,7 +8598,7 @@ ${pairsContent}
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v3.0.3 </span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v3.0.4 </span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -8802,7 +8954,7 @@ ${pairsContent}
                                 <button id="ttw-view-history" class="ttw-btn">📜 修改历史</button>
                                  <button id="ttw-consolidate-entries" class="ttw-btn" title="用AI整理条目，去除重复信息">🧹 整理条目</button>
                                 <button id="ttw-clean-tags" class="ttw-btn" title="清除条目中的标签内容（不消耗Token）">🏷️ 清除标签</button>
-                                <button id="ttw-alias-merge" class="ttw-btn" title="识别同一角色的不同称呼并合并">🔗 别名合并</button>
+                                <button id="ttw-alias-merge" class="ttw-btn" title="识别各分类中同一事物的不同称呼并合并">🔗 别名合并</button>
                                 <button id="ttw-export-json" class="ttw-btn">📥 导出JSON</button>
                                 <button id="ttw-export-volumes" class="ttw-btn" style="display:none;">📦 分卷导出</button>
                                 <button id="ttw-export-st" class="ttw-btn ttw-btn-primary">📥 导出SillyTavern格式</button>
@@ -10106,5 +10258,5 @@ ${pairsContent}
         clearEntryRollHistory: (cat, entry) => MemoryHistoryDB.clearEntryRollResults(cat, entry)
     };
 
-    console.log('📚 TxtToWorldbook v3.0.3 已加载 - 新增: 多选并发重Roll、条目编辑、条目Roll历史');
+    console.log('📚 TxtToWorldbook v3.0.4 已加载 - 新增: 多选并发重Roll、条目编辑、条目Roll历史');
 })();
