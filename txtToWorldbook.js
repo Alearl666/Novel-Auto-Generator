@@ -1,12 +1,15 @@
 
 /**
- * TXT转世界书独立模块 v3.0.4
+ * TXT转世界书独立模块 v3.0.5
  * 新增: 查找高亮、批量替换、多选整理分类、条目位置/深度/顺序配置、默认世界书UI化、新增默认勾选2递归选项、Token计数与阈值高亮
  * v3.0.2 新增: 单独重Roll条目功能 - 对生成结果的某个条目不满意时可单独重Roll该条目（支持自定义提示词），不影响已整理/合并的其他条目
  * v3.0.4 新增: 
  *   - 单独重Roll支持多选条目 + 并发处理
  *   - 生成结果的关键词和内容允许直接编辑
  *   - 单独重Roll条目有独立历史记录，可挑选任意一次Roll结果（不影响其他条目）
+ * v3.0.5 修复:
+ *   - 修复isTokenLimitError误匹配：/exceeded/i过于宽泛导致正常AI响应被误判为Token超限
+ *   - 新增「导出名称」输入框：小说名持久化存储，关闭UI重开/导入任务后导出文件名不再丢失
  */
 
 (function () {
@@ -29,6 +32,9 @@
     let startFromIndex = 0;
     let userSelectedStartIndex = null;
     let isRerolling = false;
+
+    // 新增：小说名称（持久化，不随UI关闭丢失）
+    let savedNovelName = '';
 
     // 新增：导入数据暂存
     let pendingImportData = null;
@@ -579,6 +585,7 @@
                     worldbookVolumes: JSON.parse(JSON.stringify(worldbookVolumes)),
                     currentVolumeIndex,
                     fileHash: currentFileHash,
+                    novelName: savedNovelName || '',
                     timestamp: Date.now()
                 };
                 const request = store.put(state);
@@ -887,12 +894,15 @@
 
     function isTokenLimitError(errorMsg) {
         if (!errorMsg) return false;
+        // 【修复】只检查前500字符（错误信息不会太长，避免在AI正常响应内容中误匹配）
+        const checkStr = String(errorMsg).substring(0, 500);
         const patterns = [
             /prompt is too long/i, /tokens? >\s*\d+\s*maximum/i, /max_prompt_tokens/i,
-            /exceeded/i, /input tokens/i, /context_length/i, /too many tokens/i,
+            /tokens?.*exceeded/i, /context.?length.*exceeded/i, /exceeded.*(?:token|limit|context|maximum)/i,
+            /input tokens/i, /context_length/i, /too many tokens/i,
             /token limit/i, /maximum.*tokens/i, /20015.*limit/i, /INVALID_ARGUMENT/i
         ];
-        return patterns.some(pattern => pattern.test(errorMsg));
+        return patterns.some(pattern => pattern.test(checkStr));
     }
 
     async function detectBestEncoding(file) {
@@ -7026,19 +7036,30 @@ ${pairsContent}
     }
 
 
+    // 【新增】统一获取导出基础名：优先用UI输入框的小说名 > currentFile > fallback
+    function getExportBaseName(fallback) {
+        // 1. 优先使用用户手动输入的小说名称
+        if (savedNovelName && savedNovelName.trim()) {
+            return savedNovelName.trim();
+        }
+        // 2. 其次使用原始文件对象
+        if (currentFile) {
+            return currentFile.name.replace(/\.[^/.]+$/, '');
+        }
+        // 3. 再看UI输入框（可能还没同步到savedNovelName）
+        const inputEl = document.getElementById('ttw-novel-name-input');
+        if (inputEl && inputEl.value.trim()) {
+            return inputEl.value.trim();
+        }
+        // 4. 最后用fallback
+        return fallback || '未命名';
+    }
+
+
     function exportWorldbook() {
         const timeString = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[:/\s]/g, '').replace(/,/g, '-');
 
-        // 【修复】优先用currentFile，其次用UI显示的文件名
-        let baseName = '世界书';
-        if (currentFile) {
-            baseName = currentFile.name.replace(/\.[^/.]+$/, '');
-        } else {
-            const fileNameEl = document.getElementById('ttw-file-name');
-            if (fileNameEl && fileNameEl.textContent && fileNameEl.textContent !== '已加载的文件' && fileNameEl.textContent !== '已恢复的任务') {
-                baseName = fileNameEl.textContent.replace(/\.[^/.]+$/, '');
-            }
-        }
+        const baseName = getExportBaseName('世界书');
 
         const fileName = `${baseName}-世界书-${timeString}`;
         const exportData = useVolumeMode ? { volumes: worldbookVolumes, currentVolume: generatedWorldbook, merged: getAllVolumesWorldbook() } : generatedWorldbook;
@@ -7058,16 +7079,7 @@ ${pairsContent}
             const worldbookToExport = useVolumeMode ? getAllVolumesWorldbook() : generatedWorldbook;
             const sillyTavernWorldbook = convertToSillyTavernFormat(worldbookToExport);
 
-            // 【修复】优先用currentFile，其次用UI显示的文件名
-            let baseName = '酒馆书';
-            if (currentFile) {
-                baseName = currentFile.name.replace(/\.[^/.]+$/, '');
-            } else {
-                const fileNameEl = document.getElementById('ttw-file-name');
-                if (fileNameEl && fileNameEl.textContent && fileNameEl.textContent !== '已加载的文件' && fileNameEl.textContent !== '已恢复的任务') {
-                    baseName = fileNameEl.textContent.replace(/\.[^/.]+$/, '');
-                }
-            }
+            const baseName = getExportBaseName('酒馆书');
 
             const fileName = `${baseName}-酒馆书-${timeString}`;
             const blob = new Blob([JSON.stringify(sillyTavernWorldbook, null, 2)], { type: 'application/json' });
@@ -7089,7 +7101,7 @@ ${pairsContent}
         const timeString = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[:/\s]/g, '').replace(/,/g, '-');
         for (let i = 0; i < worldbookVolumes.length; i++) {
             const volume = worldbookVolumes[i];
-            const fileName = currentFile ? `${currentFile.name.replace(/\.[^/.]+$/, '')}-世界书-卷${i + 1}-${timeString}.json` : `世界书-卷${i + 1}-${timeString}.json`;
+            const fileName = `${getExportBaseName('世界书')}-世界书-卷${i + 1}-${timeString}.json`;
             const blob = new Blob([JSON.stringify(volume.worldbook, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -7102,10 +7114,6 @@ ${pairsContent}
     }
 
     async function exportTaskState() {
-        // 尝试从UI获取文件名
-        const fileNameEl = document.getElementById('ttw-file-name');
-        const displayedFileName = fileNameEl ? fileNameEl.textContent : null;
-
         const state = {
             version: '2.9.0',
             timestamp: Date.now(),
@@ -7122,17 +7130,12 @@ ${pairsContent}
             defaultWorldbookEntriesUI,
             categoryDefaultConfig,
             entryPositionConfig,
-            originalFileName: currentFile ? currentFile.name : displayedFileName // 保存原始文件名
+            originalFileName: currentFile ? currentFile.name : null,
+            novelName: savedNovelName || '' // 【新增】保存小说名称
         };
         const timeString = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[:/\s]/g, '').replace(/,/g, '-');
 
-        // 优先用currentFile，其次用保存的原始文件名，最后用显示的文件名
-        let baseName = '任务状态';
-        if (currentFile) {
-            baseName = currentFile.name.replace(/\.[^/.]+$/, '');
-        } else if (displayedFileName && displayedFileName !== '已加载的文件' && displayedFileName !== '已恢复的任务') {
-            baseName = displayedFileName.replace(/\.[^/.]+$/, '');
-        }
+        const baseName = getExportBaseName('任务状态');
         const fileName = `${baseName}-任务状态-${timeString}.json`;
 
         const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
@@ -7170,11 +7173,25 @@ ${pairsContent}
                 if (state.defaultWorldbookEntriesUI) defaultWorldbookEntriesUI = state.defaultWorldbookEntriesUI;
                 if (state.categoryDefaultConfig) categoryDefaultConfig = state.categoryDefaultConfig;
                 if (state.entryPositionConfig) entryPositionConfig = state.entryPositionConfig;
+                // 恢复小说名称：优先用novelName字段，其次从originalFileName提取
+                if (state.novelName) {
+                    savedNovelName = state.novelName;
+                } else if (state.originalFileName) {
+                    savedNovelName = state.originalFileName.replace(/\.[^/.]+$/, '');
+                }
                 // 恢复文件名显示
                 const fileNameEl = document.getElementById('ttw-file-name');
                 if (fileNameEl && state.originalFileName) {
                     fileNameEl.textContent = state.originalFileName;
                 }
+                // 恢复小说名输入框
+                const novelNameInput = document.getElementById('ttw-novel-name-input');
+                if (novelNameInput && savedNovelName) {
+                    novelNameInput.value = savedNovelName;
+                }
+                // 显示小说名行
+                const novelNameRow = document.getElementById('ttw-novel-name-row');
+                if (novelNameRow) novelNameRow.style.display = 'flex';
 
 
                 if (Object.keys(generatedWorldbook).length === 0) {
@@ -8893,6 +8910,10 @@ ${pairsContent}
                                 <span id="ttw-file-size"></span>
                                 <button id="ttw-clear-file" class="ttw-btn-small">清除</button>
                             </div>
+                            <div id="ttw-novel-name-row" style="display:none;margin-top:6px;padding:6px 10px;background:rgba(52,152,219,0.1);border-radius:6px;border:1px solid rgba(52,152,219,0.25);display:flex;align-items:center;gap:8px;">
+                                <span style="font-size:12px;color:#3498db;white-space:nowrap;">📖 导出名称:</span>
+                                <input type="text" id="ttw-novel-name-input" placeholder="输入小说名（用于导出文件名）" style="flex:1;background:rgba(0,0,0,0.3);border:1px solid #555;border-radius:4px;padding:4px 8px;color:#eee;font-size:12px;outline:none;" />
+                            </div>
                         </div>
                     </div>
                     <!-- 记忆队列 -->
@@ -9341,6 +9362,10 @@ ${pairsContent}
         fileInput.addEventListener('change', (e) => { if (e.target.files.length > 0) handleFileSelect(e.target.files[0]); });
 
         document.getElementById('ttw-clear-file').addEventListener('click', clearFile);
+        // 【新增】小说名称输入框事件 - 实时同步到全局变量
+        document.getElementById('ttw-novel-name-input').addEventListener('input', (e) => {
+            savedNovelName = e.target.value.trim();
+        });
         document.getElementById('ttw-start-btn').addEventListener('click', startConversion);
         document.getElementById('ttw-stop-btn').addEventListener('click', stopProcessing);
         document.getElementById('ttw-repair-btn').addEventListener('click', startRepairFailedMemories);
@@ -9489,7 +9514,8 @@ ${pairsContent}
                     worldbookVolumes = savedState.worldbookVolumes || [];
                     currentVolumeIndex = savedState.currentVolumeIndex || 0;
                     currentFileHash = savedState.fileHash;
-
+                    // 【新增】从DB恢复小说名称
+                    if (savedState.novelName) savedNovelName = savedState.novelName;
                     if (Object.keys(generatedWorldbook).length === 0) {
                         rebuildWorldbookFromMemories();
                     }
@@ -9513,6 +9539,11 @@ ${pairsContent}
                     document.getElementById('ttw-file-name').textContent = '已恢复的任务';
                     const totalChars = memoryQueue.reduce((sum, m) => sum + m.content.length, 0);
                     document.getElementById('ttw-file-size').textContent = `(${(totalChars / 1024).toFixed(1)} KB, ${memoryQueue.length}章)`;
+                    // 【新增】恢复小说名输入框
+                    const novelNameRow = document.getElementById('ttw-novel-name-row');
+                    if (novelNameRow) novelNameRow.style.display = 'flex';
+                    const novelNameInput = document.getElementById('ttw-novel-name-input');
+                    if (novelNameInput && savedNovelName) novelNameInput.value = savedNovelName;
                 } else {
                     await MemoryHistoryDB.clearState();
                 }
@@ -9543,6 +9574,12 @@ ${pairsContent}
             document.getElementById('ttw-file-info').style.display = 'flex';
             document.getElementById('ttw-file-name').textContent = file.name;
             document.getElementById('ttw-file-size').textContent = `(${(content.length / 1024).toFixed(1)} KB, ${encoding})`;
+            // 【新增】自动提取文件名作为小说名
+            savedNovelName = file.name.replace(/\.[^/.]+$/, '');
+            const novelNameInput = document.getElementById('ttw-novel-name-input');
+            if (novelNameInput) novelNameInput.value = savedNovelName;
+            const novelNameRow = document.getElementById('ttw-novel-name-row');
+            if (novelNameRow) novelNameRow.style.display = 'flex';
             splitContentIntoMemory(content);
             showQueueSection(true);
             updateMemoryQueueUI();
@@ -9696,6 +9733,7 @@ ${pairsContent}
 
     async function clearFile() {
         currentFile = null;
+        savedNovelName = '';
         memoryQueue = [];
         generatedWorldbook = {};
         worldbookVolumes = [];
@@ -9719,6 +9757,11 @@ ${pairsContent}
         document.getElementById('ttw-upload-area').style.display = 'block';
         document.getElementById('ttw-file-info').style.display = 'none';
         document.getElementById('ttw-file-input').value = '';
+        // 【新增】清空小说名输入框
+        const novelNameRow = document.getElementById('ttw-novel-name-row');
+        if (novelNameRow) novelNameRow.style.display = 'none';
+        const novelNameInput = document.getElementById('ttw-novel-name-input');
+        if (novelNameInput) novelNameInput.value = '';
         document.getElementById('ttw-start-btn').disabled = true;
         document.getElementById('ttw-start-btn').textContent = '🚀 开始转换';
         showQueueSection(false);
@@ -10258,5 +10301,5 @@ ${pairsContent}
         clearEntryRollHistory: (cat, entry) => MemoryHistoryDB.clearEntryRollResults(cat, entry)
     };
 
-    console.log('📚 TxtToWorldbook v3.0.4 已加载 - 新增: 多选并发重Roll、条目编辑、条目Roll历史');
+    console.log('📚 TxtToWorldbook v3.0.5 已加载 - 修复: Token误判、导出名称持久化');
 })();
