@@ -1,15 +1,13 @@
 
 /**
- * TXT转世界书独立模块 v3.0.5
- * 新增: 查找高亮、批量替换、多选整理分类、条目位置/深度/顺序配置、默认世界书UI化、新增默认勾选2递归选项、Token计数与阈值高亮
- * v3.0.2 新增: 单独重Roll条目功能 - 对生成结果的某个条目不满意时可单独重Roll该条目（支持自定义提示词），不影响已整理/合并的其他条目
- * v3.0.4 新增: 
- *   - 单独重Roll支持多选条目 + 并发处理
- *   - 生成结果的关键词和内容允许直接编辑
- *   - 单独重Roll条目有独立历史记录，可挑选任意一次Roll结果（不影响其他条目）
+ * TXT转世界书独立模块 v3.0.6
  * v3.0.5 修复:
  *   - 修复isTokenLimitError误匹配：/exceeded/i过于宽泛导致正常AI响应被误判为Token超限
  *   - 新增「导出名称」输入框：小说名持久化存储，关闭UI重开/导入任务后导出文件名不再丢失
+ * v3.0.6 修复:
+ *   - 修复AI输出JSON中未转义双引号导致内容截断（如"发神"中的"被误认为JSON字符串结束）
+ *   - parseAIResponse新增repairJsonUnescapedQuotes修复步骤
+ *   - extractWorldbookDataByRegex的"内容"提取改为智能判断"是否为真正的字符串结束引号
  */
 
 (function () {
@@ -1741,11 +1739,21 @@
                         const char = entryContent[contentEndPos];
                         if (escaped) { escaped = false; }
                         else if (char === '\\') { escaped = true; }
-                        else if (char === '"') { break; }
+                        else if (char === '"') {
+                            // 【v3.0.6修复】不再无条件break，判断这个"是否是真正的字符串结束引号
+                            // 向后跳过空白，看下一个有意义字符是否是JSON结构字符
+                            let peekPos = contentEndPos + 1;
+                            while (peekPos < entryContent.length && /[\s\r\n]/.test(entryContent[peekPos])) peekPos++;
+                            const nextChar = entryContent[peekPos];
+                            if (nextChar === ',' || nextChar === '}' || nextChar === ']' || nextChar === undefined) {
+                                break; // 真正的字符串结束
+                            }
+                            // 否则是内容中未转义的引号，跳过继续
+                        }
                         contentEndPos++;
                     }
                     content = entryContent.substring(contentStartPos, contentEndPos);
-                    try { content = JSON.parse(`"${content}"`); }
+                    try { content = JSON.parse(`"${content.replace(/(?<!\\)"/g, '\\"')}"`); }
                     catch (e) { content = content.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\'); }
                 }
                 if (content || keywords.length > 0) {
@@ -1754,6 +1762,65 @@
             }
             if (Object.keys(result[category]).length === 0) delete result[category];
         }
+        return result;
+    }
+
+    // 【v3.0.6新增】修复JSON字符串值中未转义的双引号
+    // AI常见错误：输出 "搜索传说生物"发神"" 而非 "搜索传说生物\"发神\""
+    // 状态机扫描JSON，识别出字符串值内部的未转义 " 并转义为 \"
+    function repairJsonUnescapedQuotes(jsonStr) {
+        let result = '';
+        let inString = false;
+        let i = 0;
+
+        while (i < jsonStr.length) {
+            const char = jsonStr[i];
+
+            // 在字符串内遇到反斜杠，保留转义序列原样
+            if (inString && char === '\\') {
+                result += char;
+                if (i + 1 < jsonStr.length) {
+                    result += jsonStr[i + 1];
+                    i += 2;
+                } else {
+                    i++;
+                }
+                continue;
+            }
+
+            if (char === '"') {
+                if (!inString) {
+                    // 进入字符串
+                    inString = true;
+                    result += char;
+                    i++;
+                    continue;
+                }
+
+                // 在字符串内遇到 " —— 判断是字符串结束还是未转义的内容引号
+                // 向后跳过空白，看下一个有意义字符
+                let j = i + 1;
+                while (j < jsonStr.length && /[\s\r\n]/.test(jsonStr[j])) j++;
+                const nextChar = jsonStr[j];
+
+                if (nextChar === ':' || nextChar === ',' ||
+                    nextChar === '}' || nextChar === ']' ||
+                    nextChar === undefined) {
+                    // 后面是JSON结构字符 → 这是字符串的结束引号
+                    inString = false;
+                    result += char;
+                } else {
+                    // 后面不是JSON结构字符 → 这是内容中的未转义引号，修复它
+                    result += '\\"';
+                }
+                i++;
+                continue;
+            }
+
+            result += char;
+            i++;
+        }
+
         return result;
     }
 
@@ -1789,11 +1856,26 @@
             try {
                 return JSON.parse(clean);
             } catch (e2) {
+                // 【v3.0.6修复】尝试修复JSON字符串值中未转义的双引号（AI常见格式错误）
+                try {
+                    const repaired = repairJsonUnescapedQuotes(clean);
+                    return JSON.parse(repaired);
+                } catch (e2b) {
+                    debugLog('修复未转义引号后仍解析失败，进入bracket补全/regex fallback');
+                }
                 const open = (clean.match(/{/g) || []).length;
                 const close = (clean.match(/}/g) || []).length;
                 if (open > close) {
-                    try { return JSON.parse(clean + '}'.repeat(open - close)); }
-                    catch (e3) { return extractWorldbookDataByRegex(clean); }
+                    let patched = clean + '}'.repeat(open - close);
+                    try { return JSON.parse(patched); }
+                    catch (e3) {
+                        // 【v3.0.6】补全括号后也尝试修复引号
+                        try {
+                            const repairedPatched = repairJsonUnescapedQuotes(patched);
+                            return JSON.parse(repairedPatched);
+                        } catch (e3b) { /* fall through */ }
+                        return extractWorldbookDataByRegex(clean);
+                    }
                 }
                 return extractWorldbookDataByRegex(clean);
             }
@@ -10485,5 +10567,5 @@ ${pairsContent}
         clearEntryRollHistory: (cat, entry) => MemoryHistoryDB.clearEntryRollResults(cat, entry)
     };
 
-    console.log('📚 TxtToWorldbook v3.0.5 已加载 - 修复: Token误判、导出名称持久化');
+    console.log('📚 TxtToWorldbook v3.0.6 已加载 - 修复: AI输出未转义双引号导致内容截断');
 })();
