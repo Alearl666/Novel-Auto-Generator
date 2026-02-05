@@ -7876,7 +7876,7 @@ ${pairsContent}
         helpModal.innerHTML = `
         <div class="ttw-modal" style="max-width:700px;">
             <div class="ttw-modal-header">
-                <span class="ttw-modal-title">❓ TXT转世界书 v3.0.4 帮助</span>
+                <span class="ttw-modal-title">❓ TXT转世界书 v3.0.5 帮助</span>
                 <button class="ttw-modal-close" type="button">✕</button>
             </div>
             <div class="ttw-modal-body" style="max-height:75vh;overflow-y:auto;">
@@ -8615,7 +8615,7 @@ ${pairsContent}
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v3.0.4 </span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v3.0.5 </span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -8910,9 +8910,9 @@ ${pairsContent}
                                 <span id="ttw-file-size"></span>
                                 <button id="ttw-clear-file" class="ttw-btn-small">清除</button>
                             </div>
-                            <div id="ttw-novel-name-row" style="display:none;margin-top:6px;padding:6px 10px;background:rgba(52,152,219,0.1);border-radius:6px;border:1px solid rgba(52,152,219,0.25);display:flex;align-items:center;gap:8px;">
+                            <div id="ttw-novel-name-row" style="display:none;margin-top:6px;padding:6px 10px;background:rgba(52,152,219,0.1);border-radius:6px;border:1px solid rgba(52,152,219,0.25);align-items:center;gap:8px;">
                                 <span style="font-size:12px;color:#3498db;white-space:nowrap;">📖 导出名称:</span>
-                                <input type="text" id="ttw-novel-name-input" placeholder="输入小说名（用于导出文件名）" style="flex:1;background:rgba(0,0,0,0.3);border:1px solid #555;border-radius:4px;padding:4px 8px;color:#eee;font-size:12px;outline:none;" />
+                                <input type="text" id="ttw-novel-name-input" placeholder="输入小说名（用于导出文件名）" style="flex:1;min-width:0;background:rgba(0,0,0,0.3);border:1px solid #555;border-radius:4px;padding:4px 8px;color:#eee;font-size:12px;outline:none;box-sizing:border-box;" />
                             </div>
                         </div>
                     </div>
@@ -9009,6 +9009,13 @@ ${pairsContent}
             document.getElementById('ttw-file-name').textContent = currentFile ? currentFile.name : '已加载的文件';
             const totalChars = memoryQueue.reduce((sum, m) => sum + m.content.length, 0);
             document.getElementById('ttw-file-size').textContent = `(${(totalChars / 1024).toFixed(1)} KB, ${memoryQueue.length}章)`;
+            // 【新增】恢复小说名输入框
+            if (savedNovelName) {
+                const novelNameRow = document.getElementById('ttw-novel-name-row');
+                if (novelNameRow) novelNameRow.style.display = 'flex';
+                const novelNameInput = document.getElementById('ttw-novel-name-input');
+                if (novelNameInput) novelNameInput.value = savedNovelName;
+            }
 
             // 【修复】确保每个已处理的memory都有result
             for (let i = 0; i < memoryQueue.length; i++) {
