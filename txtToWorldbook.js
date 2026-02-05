@@ -7471,7 +7471,11 @@ ${pairsContent}
         if (filterTagsEl) filterTagsEl.value = settings.filterResponseTags || 'thinking,/think';
 
         const debugModeEl = document.getElementById('ttw-debug-mode');
-        if (debugModeEl) debugModeEl.checked = settings.debugMode || false;
+        if (debugModeEl) {
+            debugModeEl.checked = settings.debugMode || false;
+            const copyBtn = document.getElementById('ttw-copy-stream');
+            if (copyBtn) copyBtn.style.display = settings.debugMode ? 'inline-block' : 'none';
+        }
 
     }
 
@@ -9015,7 +9019,10 @@ ${pairsContent}
                             <div id="ttw-stream-container" class="ttw-stream-container">
                                 <div class="ttw-stream-header">
                                     <span>📤 实时输出</span>
-                                    <button id="ttw-clear-stream" class="ttw-btn-small">清空</button>
+                                    <div style="display:flex;gap:6px;">
+                                        <button id="ttw-copy-stream" class="ttw-btn-small" style="display:none;">📋 复制全部</button>
+                                        <button id="ttw-clear-stream" class="ttw-btn-small">清空</button>
+                                    </div>
                                 </div>
                                 <pre id="ttw-stream-content" class="ttw-stream-content"></pre>
                             </div>
@@ -9447,6 +9454,35 @@ ${pairsContent}
 
         document.getElementById('ttw-toggle-stream').addEventListener('click', () => { const container = document.getElementById('ttw-stream-container'); container.style.display = container.style.display === 'none' ? 'block' : 'none'; });
         document.getElementById('ttw-clear-stream').addEventListener('click', () => updateStreamContent('', true));
+        // 【新增】复制实时输出按钮
+        document.getElementById('ttw-copy-stream').addEventListener('click', () => {
+            const streamEl = document.getElementById('ttw-stream-content');
+            if (streamEl && streamEl.textContent) {
+                navigator.clipboard.writeText(streamEl.textContent).then(() => {
+                    const btn = document.getElementById('ttw-copy-stream');
+                    const orig = btn.textContent;
+                    btn.textContent = '✅ 已复制';
+                    setTimeout(() => { btn.textContent = orig; }, 1500);
+                }).catch(() => {
+                    // fallback
+                    const ta = document.createElement('textarea');
+                    ta.value = streamEl.textContent;
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(ta);
+                    const btn = document.getElementById('ttw-copy-stream');
+                    const orig = btn.textContent;
+                    btn.textContent = '✅ 已复制';
+                    setTimeout(() => { btn.textContent = orig; }, 1500);
+                });
+            }
+        });
+        // 【新增】调试模式勾选变化时，切换复制按钮可见性
+        document.getElementById('ttw-debug-mode').addEventListener('change', (e) => {
+            const copyBtn = document.getElementById('ttw-copy-stream');
+            if (copyBtn) copyBtn.style.display = e.target.checked ? 'inline-block' : 'none';
+        });
 
         // 新增：查找和替换按钮
         document.getElementById('ttw-search-btn').addEventListener('click', showSearchModal);
