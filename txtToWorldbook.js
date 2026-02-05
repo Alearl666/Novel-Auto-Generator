@@ -331,6 +331,7 @@
         customSuffixPrompt: '',
         allowRecursion: false,
         filterResponseTags: 'thinking,/think',
+        debugMode: false,
 
     };
 
@@ -940,6 +941,14 @@
             streamEl.scrollTop = streamEl.scrollHeight;
         }
     }
+
+    // 【新增】调试模式日志 - 带时间戳输出到实时输出面板
+    function debugLog(msg) {
+        if (!settings.debugMode) return;
+        const now = new Date();
+        const ts = now.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+        updateStreamContent(`[${ts}] 🔍 ${msg}\n`);
+    }
     // 位置值转中文显示
     function getPositionDisplayName(position) {
         const positionNames = {
@@ -1062,6 +1071,7 @@
         const timeout = settings.apiTimeout || 120000;
         const logPrefix = taskId !== null ? `[任务${taskId}]` : '';
         updateStreamContent(`\n📤 ${logPrefix} 发送请求到酒馆API...\n`);
+        debugLog(`${logPrefix} 酒馆API开始调用, prompt长度=${prompt.length}, 超时=${timeout / 1000}秒`);
 
         try {
             if (typeof SillyTavern === 'undefined' || !SillyTavern.getContext) {
@@ -1069,24 +1079,30 @@
             }
 
             const context = SillyTavern.getContext();
+            debugLog(`${logPrefix} 获取到SillyTavern上下文`);
             const timeoutPromise = new Promise((_, reject) => {
                 setTimeout(() => reject(new Error(`API请求超时 (${timeout / 1000}秒)`)), timeout);
             });
 
             let apiPromise;
             if (typeof context.generateQuietPrompt === 'function') {
+                debugLog(`${logPrefix} 使用generateQuietPrompt`);
                 apiPromise = context.generateQuietPrompt(prompt, false, false);
             } else if (typeof context.generateRaw === 'function') {
+                debugLog(`${logPrefix} 使用generateRaw`);
                 apiPromise = context.generateRaw(prompt, '', false);
             } else {
                 throw new Error('无法找到可用的生成函数');
             }
 
+            debugLog(`${logPrefix} 等待API响应中...`);
             const result = await Promise.race([apiPromise, timeoutPromise]);
+            debugLog(`${logPrefix} 收到响应, 长度=${result.length}字符`);
             updateStreamContent(`📥 ${logPrefix} 收到响应 (${result.length}字符)\n`);
             return result;
 
         } catch (error) {
+            debugLog(`${logPrefix} 酒馆API出错: ${error.message}`);
             updateStreamContent(`\n❌ ${logPrefix} 错误: ${error.message}\n`);
             throw error;
         }
@@ -1104,6 +1120,7 @@
         const model = settings.customApiModel;
 
         updateStreamContent(`\n📤 发送请求到自定义API (${provider})...\n`);
+        debugLog(`自定义API开始调用, provider=${provider}, model=${model}, prompt长度=${prompt.length}, 重试=${retryCount}`);
 
         switch (provider) {
             case 'deepseek':
@@ -1229,8 +1246,10 @@
         requestOptions.signal = controller.signal;
 
         try {
+            debugLog(`自定义API发送fetch请求到: ${requestUrl.substring(0, 80)}...`);
             const response = await fetch(requestUrl, requestOptions);
             clearTimeout(timeoutId);
+            debugLog(`自定义API收到HTTP响应, status=${response.status}`);
 
             if (!response.ok) {
                 const errorText = await response.text();
@@ -1251,6 +1270,7 @@
             }
 
             const data = await response.json();
+            debugLog(`自定义API JSON解析完成, 开始提取内容`);
             let result;
 
             if (provider === 'gemini') {
@@ -1265,11 +1285,13 @@
                 result = data.choices?.[0]?.message?.content || '';
             }
 
+            debugLog(`自定义API提取完成, 结果长度=${result.length}字符`);
             updateStreamContent(`📥 收到响应 (${result.length}字符)\n`);
             return result;
 
         } catch (error) {
             clearTimeout(timeoutId);
+            debugLog(`自定义API出错: ${error.name} - ${error.message}`);
             if (error.name === 'AbortError') {
                 throw new Error(`API请求超时 (${timeout / 1000}秒)`);
             }
@@ -1546,16 +1568,20 @@
     }
 
     async function mergeWorldbookDataWithHistory(target, source, memoryIndex, memoryTitle) {
+        debugLog(`合并世界书[${memoryTitle}] 开始, 深拷贝快照...`);
         const previousWorldbook = JSON.parse(JSON.stringify(target));
         if (incrementalOutputMode) {
             mergeWorldbookDataIncremental(target, source);
         } else {
             mergeWorldbookData(target, source);
         }
+        debugLog(`合并世界书[${memoryTitle}] 合并完成, 计算差异...`);
         const changedEntries = findChangedEntries(previousWorldbook, target);
         if (changedEntries.length > 0) {
+            debugLog(`合并世界书[${memoryTitle}] 发现${changedEntries.length}处变更, 保存历史...`);
             await MemoryHistoryDB.saveHistory(memoryIndex, memoryTitle, previousWorldbook, target, changedEntries);
         }
+        debugLog(`合并世界书[${memoryTitle}] 全部完成`);
         return changedEntries;
     }
 
@@ -1651,6 +1677,7 @@
     }
 
     function parseAIResponse(response) {
+        debugLog(`解析响应开始, 响应长度=${response.length}字符`);
         // 【修复】获取用户配置的过滤标签
         const filterTagsStr = settings.filterResponseTags || 'thinking,/think';
         const filterTags = filterTagsStr.split(',').map(t => t.trim()).filter(t => t);
@@ -1950,8 +1977,10 @@
 
 
         updateStreamContent(`\n🔄 [第${chapterIndex}章] 开始处理: ${memory.title}\n`);
+        debugLog(`[第${chapterIndex}章] 开始, prompt长度=${prompt.length}字符, 重试=${retryCount}`);
 
         try {
+            debugLog(`[第${chapterIndex}章] 调用API...`);
             const response = await callAPI(prompt, taskId);
 
             if (!isRerolling && isProcessingStopped) {
@@ -1959,12 +1988,16 @@
                 throw new Error('ABORTED');
             }
 
+            debugLog(`[第${chapterIndex}章] 检查TokenLimit...`);
             if (isTokenLimitError(response)) throw new Error('Token limit exceeded');
 
+            debugLog(`[第${chapterIndex}章] 解析AI响应...`);
             let memoryUpdate = parseAIResponse(response);
 
+            debugLog(`[第${chapterIndex}章] 后处理章节索引...`);
             memoryUpdate = postProcessResultWithChapterIndex(memoryUpdate, chapterIndex);
 
+            debugLog(`[第${chapterIndex}章] 处理完成`);
             updateStreamContent(`✅ [第${chapterIndex}章] 处理完成\n`);
             return memoryUpdate;
 
@@ -1999,6 +2032,7 @@
         if (tasks.length === 0) return { tokenLimitIndices };
 
         updateStreamContent(`\n🚀 并行处理 ${tasks.length} 个记忆块 (并发: ${parallelConfig.concurrency})\n${'='.repeat(50)}\n`);
+        debugLog(`并行处理开始: ${tasks.length}任务, 并发=${parallelConfig.concurrency}, 范围=${startIndex}-${endIndex}`);
 
         let completed = 0;
         globalSemaphore = new Semaphore(parallelConfig.concurrency);
@@ -2012,6 +2046,7 @@
             activeParallelTasks.add(task.index);
 
             try {
+                debugLog(`[任务${task.index + 1}] 获取信号量成功, 开始处理`);
                 updateProgress(((startIndex + completed) / memoryQueue.length) * 100, `🚀 并行处理中 (${completed}/${tasks.length})`);
                 const result = await processMemoryChunkIndependent(task.index);
 
@@ -2023,8 +2058,11 @@
                 completed++;
 
                 if (result) {
+                    debugLog(`[任务${task.index + 1}] 开始合并世界书...`);
                     await mergeWorldbookDataWithHistory(generatedWorldbook, result, task.index, task.memory.title);
+                    debugLog(`[任务${task.index + 1}] 保存Roll结果...`);
                     await MemoryHistoryDB.saveRollResult(task.index, result);
+                    debugLog(`[任务${task.index + 1}] 合并+保存完成`);
                 }
 
                 updateMemoryQueueUI();
@@ -2066,6 +2104,7 @@
         const maxRetries = 3;
         const chapterIndex = index + 1;
 
+        debugLog(`[串行][第${chapterIndex}章] 开始, 重试=${retryCount}`);
         updateProgress(progress, `正在处理: ${memory.title} (第${chapterIndex}章)${retryCount > 0 ? ` (重试 ${retryCount})` : ''}`);
 
         memory.processing = true;
@@ -2104,11 +2143,13 @@
         }
 
         try {
+            debugLog(`[串行][第${chapterIndex}章] 调用API, prompt长度=${prompt.length}`);
             const response = await callAPI(prompt);
             memory.processing = false;
 
             if (isProcessingStopped) { updateMemoryQueueUI(); return; }
 
+            debugLog(`[串行][第${chapterIndex}章] 检查TokenLimit...`);
             if (isTokenLimitError(response)) {
                 if (useVolumeMode) {
                     startNewVolume();
@@ -2126,11 +2167,15 @@
                 }
             }
 
+            debugLog(`[串行][第${chapterIndex}章] 解析AI响应...`);
             let memoryUpdate = parseAIResponse(response);
             memoryUpdate = postProcessResultWithChapterIndex(memoryUpdate, chapterIndex);
 
+            debugLog(`[串行][第${chapterIndex}章] 合并世界书...`);
             await mergeWorldbookDataWithHistory(generatedWorldbook, memoryUpdate, index, memory.title);
+            debugLog(`[串行][第${chapterIndex}章] 保存Roll结果...`);
             await MemoryHistoryDB.saveRollResult(index, memoryUpdate);
+            debugLog(`[串行][第${chapterIndex}章] 完成`);
 
             memory.processed = true;
             memory.result = memoryUpdate;
@@ -2254,6 +2299,7 @@
 
         const enabledCatNames = getEnabledCategories().map(c => c.name).join(', ');
         updateStreamContent(`🚀 开始处理...\n📊 处理模式: ${parallelConfig.enabled ? `并行 (${parallelConfig.concurrency}并发)` : '串行'}\n🔧 API模式: ${settings.useTavernApi ? '酒馆API' : '自定义API (' + settings.customApiProvider + ')'}\n📌 强制章节标记: ${settings.forceChapterMarker ? '开启' : '关闭'}\n🏷️ 启用分类: ${enabledCatNames}\n${'='.repeat(50)}\n`);
+        debugLog(`调试模式已开启 - 将记录每步耗时`);
 
         const effectiveStartIndex = userSelectedStartIndex !== null ? userSelectedStartIndex : startFromIndex;
 
@@ -7424,6 +7470,9 @@ ${pairsContent}
         const filterTagsEl = document.getElementById('ttw-filter-tags');
         if (filterTagsEl) filterTagsEl.value = settings.filterResponseTags || 'thinking,/think';
 
+        const debugModeEl = document.getElementById('ttw-debug-mode');
+        if (debugModeEl) debugModeEl.checked = settings.debugMode || false;
+
     }
 
     function updateChapterRegexUI() {
@@ -8763,6 +8812,15 @@ ${pairsContent}
                                     <input type="text" id="ttw-filter-tags" class="ttw-input" value="thinking,/think" placeholder="例如: thinking,/think,tucao" style="font-size:12px;">
                                 </div>
 
+                                <!-- 调试模式 -->
+                                <div style="margin-top:10px;">
+<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;">
+    <input type="checkbox" id="ttw-debug-mode">
+    <span>🔍 调试模式</span>
+    <span style="color:#888;font-size:11px;">（在实时输出中打印每步操作和耗时）</span>
+</label>
+                                </div>
+
                                 
                             </div>
                             <div id="ttw-volume-indicator" class="ttw-volume-indicator"></div>
@@ -9463,6 +9521,8 @@ ${pairsContent}
         settings.allowRecursion = document.getElementById('ttw-allow-recursion')?.checked ?? false;
 
         settings.filterResponseTags = document.getElementById('ttw-filter-tags')?.value || 'thinking,/think';
+
+        settings.debugMode = document.getElementById('ttw-debug-mode')?.checked ?? false;
 
         settings.plotOutlineExportConfig = plotOutlineExportConfig;
 
