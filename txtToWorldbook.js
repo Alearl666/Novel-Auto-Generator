@@ -1232,7 +1232,8 @@
                         model: openaiModel,
                         messages: [{ role: 'user', content: prompt }],
                         temperature: 0.3,
-                        max_tokens: 64000
+                        max_tokens: 64000,
+                        stream: true
                     }),
                 };
                 break;
@@ -1244,6 +1245,13 @@
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeout);
         requestOptions.signal = controller.signal;
+
+        // 检测是否为流式请求（openai-compatible启用stream:true）
+        let isStreamRequest = false;
+        try {
+            const bodyObj = JSON.parse(requestOptions.body);
+            isStreamRequest = bodyObj.stream === true;
+        } catch (e) { }
 
         try {
             debugLog(`自定义API发送fetch请求到: ${requestUrl.substring(0, 80)}...`);
@@ -1269,6 +1277,79 @@
                 throw new Error(`API请求失败: ${response.status} ${response.statusText}`);
             }
 
+            // ========== 流式SSE响应处理 ==========
+            if (isStreamRequest && response.body) {
+                debugLog(`自定义API开始读取流式响应...`);
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let fullContent = '';
+                let buffer = '';
+                // 活动超时：如果超过inactivityTimeout没有收到新数据，中断
+                const inactivityTimeout = Math.min(timeout, 120000); // 最多等2分钟无数据
+                let lastDataTime = Date.now();
+                let inactivityTimer = null;
+
+                const resetInactivityTimer = () => {
+                    lastDataTime = Date.now();
+                    if (inactivityTimer) clearTimeout(inactivityTimer);
+                    inactivityTimer = setTimeout(() => {
+                        debugLog(`流式响应无数据超时 (${inactivityTimeout / 1000}秒无新数据)`);
+                        try { reader.cancel(); } catch (e) { }
+                    }, inactivityTimeout);
+                };
+
+                resetInactivityTimer();
+
+                try {
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        resetInactivityTimer();
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() || '';
+
+                        for (const line of lines) {
+                            const trimmed = line.trim();
+                            if (!trimmed || trimmed.startsWith(':')) continue; // SSE注释或空行
+                            if (trimmed.startsWith('data: ')) {
+                                const dataStr = trimmed.slice(6).trim();
+                                if (dataStr === '[DONE]') continue;
+                                try {
+                                    const parsed = JSON.parse(dataStr);
+                                    const delta = parsed.choices?.[0]?.delta?.content || '';
+                                    if (delta) {
+                                        fullContent += delta;
+                                    }
+                                } catch (e) {
+                                    // 非JSON的data行，跳过
+                                }
+                            }
+                        }
+                    }
+                } finally {
+                    if (inactivityTimer) clearTimeout(inactivityTimer);
+                }
+
+                // 处理buffer中剩余数据
+                if (buffer.trim()) {
+                    const trimmed = buffer.trim();
+                    if (trimmed.startsWith('data: ') && trimmed.slice(6).trim() !== '[DONE]') {
+                        try {
+                            const parsed = JSON.parse(trimmed.slice(6).trim());
+                            const delta = parsed.choices?.[0]?.delta?.content || '';
+                            if (delta) fullContent += delta;
+                        } catch (e) { }
+                    }
+                }
+
+                debugLog(`自定义API流式读取完成, 结果长度=${fullContent.length}字符`);
+                updateStreamContent(`📥 收到流式响应 (${fullContent.length}字符)\n`);
+                return fullContent;
+            }
+
+            // ========== 非流式响应处理（Gemini等） ==========
             const data = await response.json();
             debugLog(`自定义API JSON解析完成, 开始提取内容`);
             let result;
