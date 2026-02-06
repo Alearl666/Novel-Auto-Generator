@@ -8096,32 +8096,20 @@ ${pairsContent}
         helpModal.innerHTML = `
         <div class="ttw-modal" style="max-width:700px;">
             <div class="ttw-modal-header">
-                <span class="ttw-modal-title">❓ TXT转世界书 v3.0.5 帮助</span>
+                <span class="ttw-modal-title">❓ TXT转世界书 v3.0.7 帮助</span>
                 <button class="ttw-modal-close" type="button">✕</button>
             </div>
             <div class="ttw-modal-body" style="max-height:75vh;overflow-y:auto;">
-
-                <div style="margin-bottom:16px;padding:12px;background:rgba(155,89,182,0.15);border-radius:8px;border-left:4px solid #9b59b6;">
-                    <h4 style="color:#9b59b6;margin:0 0 10px;">🆕 v3.0.4 新功能</h4>
-                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                        <li><strong>单独重Roll多选并发</strong>：可同时选择多个来源章节进行重Roll，支持配置并发数</li>
-                        <li><strong>条目内容可编辑</strong>：重Roll弹窗中可直接编辑关键词和内容，保存后立即生效</li>
-                        <li><strong>条目级Roll历史</strong>：每个条目有独立的Roll历史记录，可选择任意历史版本使用（不影响其他条目）</li>
-                        <li><strong>批量重Roll按钮</strong>：世界书详细视图新增"🎲 批量重Roll"按钮，可一次性选择多个不同条目重Roll</li>
-                        <li><strong>Token数显示</strong>：批量重Roll列表显示每个条目的Token数（低于100的红色高亮）</li>
-                    </ul>
-                </div>
 
                 <div style="margin-bottom:16px;">
                     <h4 style="color:#e67e22;margin:0 0 10px;">📌 基本功能</h4>
                     <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
                         <li>将TXT小说转换为SillyTavern世界书格式</li>
                         <li>自动检测文件编码（UTF-8/GBK/GB2312/GB18030/Big5）</li>
-                        <li>基于正则的<strong>章回自动检测</strong>和智能分块</li>
-                        <li>支持<strong>并行/串行</strong>两种处理模式，并行模式支持配置并发数</li>
-                        <li><strong>增量输出模式</strong>：只输出变更条目，减少重复</li>
+                        <li>基于正则的<strong>章回自动检测</strong>和智能分块（支持自定义正则、快速预设、重新分块）</li>
+                        <li>支持<strong>并行/串行</strong>处理，并行支持独立模式和分批模式，可配置并发数</li>
+                        <li><strong>增量输出</strong>：只输出变更条目，减少重复</li>
                         <li><strong>分卷模式</strong>：上下文超限时自动分卷</li>
-                        <li><strong>强制章节标记</strong>：强制AI将每个记忆块视为对应章节编号</li>
                     </ul>
                 </div>
 
@@ -8129,256 +8117,105 @@ ${pairsContent}
                     <h4 style="color:#3498db;margin:0 0 10px;">🔧 API模式</h4>
                     <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
                         <li><strong>酒馆API</strong>：使用SillyTavern当前连接的AI</li>
-                        <li><strong>Gemini</strong>：直连Google Gemini API</li>
-                        <li><strong>Gemini代理</strong>：通过代理访问Gemini，支持原生和OpenAI兼容两种格式</li>
-                        <li><strong>DeepSeek</strong>：直连DeepSeek API</li>
-                        <li><strong>OpenAI兼容</strong>：支持任意OpenAI兼容接口（本地模型/第三方）</li>
-                        <li><strong>拉取模型列表</strong>：从OpenAI兼容接口获取可用模型</li>
-                        <li><strong>快速测试</strong>：一键测试API连接是否正常</li>
-                        <li>所有模式均支持<strong>自动限流重试</strong>（最多3次指数退避）</li>
+                        <li><strong>Gemini / Gemini代理 / DeepSeek / OpenAI兼容</strong>：支持多种直连和代理模式</li>
+                        <li>支持<strong>拉取模型列表</strong>、<strong>快速测试连接</strong>、<strong>自动限流重试</strong></li>
                     </ul>
                 </div>
 
                 <div style="margin-bottom:16px;">
                     <h4 style="color:#9b59b6;margin:0 0 10px;">🏷️ 自定义提取分类</h4>
                     <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                        <li>内置分类：<strong>角色、地点、组织</strong>（可编辑不可删除）</li>
-                        <li>预设分类：<strong>道具、玩法、章节剧情、角色内心</strong>（默认关闭，可启用）</li>
-                        <li>支持<strong>添加/编辑/删除/重置</strong>自定义分类</li>
-                        <li>每个分类可配置：名称、条目示例、关键词示例、内容提取指南</li>
+                        <li>内置分类：<strong>角色、地点、组织</strong>；预设分类：<strong>道具、玩法、章节剧情、角色内心</strong></li>
+                        <li>支持添加/编辑/删除自定义分类，每个分类可配置名称、条目示例、关键词示例、内容提取指南</li>
                         <li>每个分类可配置<strong>默认导出位置/深度/顺序/自动递增</strong></li>
-                        <li>分类配置会自动嵌入提示词的JSON模板占位符 <code>{DYNAMIC_JSON_TEMPLATE}</code></li>
                     </ul>
                 </div>
 
                 <div style="margin-bottom:16px;">
                     <h4 style="color:#27ae60;margin:0 0 10px;">📝 提示词系统</h4>
                     <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                        <li><strong>世界书词条提示词</strong>：核心提示词，必须包含 <code>{DYNAMIC_JSON_TEMPLATE}</code> 占位符</li>
-                        <li><strong>剧情大纲</strong>（可选）：提取主线剧情和支线剧情</li>
-                        <li><strong>文风配置</strong>（可选）：提取叙事视角、语言风格、情感基调</li>
-                        <li><strong>发送给AI最后的提示词</strong>（后缀提示词）：追加到每次请求末尾，可用于强调特定要求</li>
-                        <li>所有提示词支持<strong>恢复默认</strong>和<strong>预览</strong></li>
-                        <li>支持<strong>导出/导入配置</strong>（含提示词、分类、默认条目等所有设置）</li>
+                        <li><strong>世界书词条提示词</strong>（核心，含 <code>{DYNAMIC_JSON_TEMPLATE}</code> 占位符）</li>
+                        <li>可选：<strong>剧情大纲</strong>、<strong>文风配置</strong>、<strong>后缀提示词</strong></li>
+                        <li>所有提示词支持恢复默认和预览，支持<strong>导出/导入配置</strong></li>
                     </ul>
                 </div>
 
                 <div style="margin-bottom:16px;">
                     <h4 style="color:#e67e22;margin:0 0 10px;">📚 默认世界书条目</h4>
                     <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                        <li>可视化<strong>添加/编辑/删除</strong>默认条目</li>
-                        <li>每个条目可配置：分类、名称、关键词、内容</li>
-                        <li>每个条目可配置<strong>位置/深度/顺序</strong></li>
-                        <li>每次开始转换时<strong>自动添加</strong>到世界书</li>
-                        <li>支持<strong>立即应用</strong>到当前世界书</li>
-                        <li>条目配置会同步到导出时的位置/深度/顺序</li>
-                    </ul>
-                </div>
-
-                <div style="margin-bottom:16px;">
-                    <h4 style="color:#f39c12;margin:0 0 10px;">📖 章回正则与分块</h4>
-                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                        <li><strong>章回正则</strong>：自定义章节检测正则表达式</li>
-                        <li>快速预设：<strong>中文通用</strong>、<strong>英文Chapter</strong>、<strong>数字章节</strong></li>
-                        <li><strong>检测按钮</strong>：测试正则能匹配到多少章节</li>
-                        <li><strong>每块字数</strong>：控制分块大小（1000~500000）</li>
-                        <li><strong>重新分块</strong>：修改字数或正则后重新切分</li>
-                        <li>智能合并：过短的尾部章节自动合并到前一章</li>
-                        <li>智能拆分：超长章节自动按段落/句子边界拆分</li>
+                        <li>可视化添加/编辑/删除默认条目，每个条目可配置分类、名称、关键词、内容、位置/深度/顺序</li>
+                        <li>转换时<strong>自动添加</strong>到世界书，也可<strong>立即应用</strong>到当前世界书</li>
                     </ul>
                 </div>
 
                 <div style="margin-bottom:16px;">
                     <h4 style="color:#1abc9c;margin:0 0 10px;">📋 章节管理</h4>
                     <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                        <li><strong>点击章节</strong>：查看/编辑原文内容，实时字数统计</li>
-                        <li><strong>复制内容</strong>：一键复制章节原文</li>
-                        <li><strong>合并章节</strong>：⬆️合并到上一章末尾 / ⬇️合并到下一章开头</li>
-                        <li><strong>🗑️ 多选删除</strong>：进入多选模式，勾选后批量删除</li>
-                        <li><strong>📍 选择起始</strong>：从任意章节开始处理</li>
-                        <li><strong>📊 已处理</strong>：左右分栏查看各章节处理结果，支持复制</li>
-                        <li><strong>🎲 Roll历史</strong>：从章节详情页跳转到Roll历史</li>
-                        <li><strong>🗑️ 删除</strong>：删除单个章节</li>
+                        <li>点击章节查看/编辑原文，支持复制、合并（⬆️⬇️）、删除、多选批量删除</li>
+                        <li><strong>📍选择起始</strong>：从任意章节开始处理</li>
+                        <li><strong>📊已处理</strong>：左右分栏查看各章节处理结果</li>
                     </ul>
                 </div>
 
                 <div style="margin-bottom:16px;">
                     <h4 style="color:#e74c3c;margin:0 0 10px;">🎲 处理控制与重Roll</h4>
                     <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                        <li><strong>⏸️ 暂停/继续</strong>：随时暂停，下次从断点继续</li>
-                        <li><strong>🔧 修复失败</strong>：自动重试所有失败章节，支持Token超限自动分裂</li>
-                        <li><strong>🎲 重Roll</strong>：重新生成某章节的世界书条目</li>
-                        <li><strong>🎯 单独重Roll条目</strong>：对某个条目不满意？点击条目旁的🎯按钮单独重Roll，支持自定义提示词，不影响已整理/合并的其他条目</li>
-                        <li><strong>Roll历史</strong>：查看所有历史Roll版本，选择任意版本使用</li>
-                        <li>Roll历史支持<strong>在线编辑JSON</strong>并保存</li>
-                        <li>Roll历史支持<strong>粘贴JSON导入</strong>（自动解析代码块格式）</li>
-                        <li>当前处理结果支持<strong>直接编辑</strong>并保存应用</li>
-                        <li><strong>自定义重Roll提示词</strong>：为重Roll添加额外要求</li>
-                        <li><strong>实时输出窗口</strong>：查看API请求/响应的实时日志</li>
+                        <li><strong>⏸️暂停/继续</strong>、<strong>🔧修复失败</strong>（自动重试，Token超限自动分裂）</li>
+                        <li><strong>🎲重Roll章节</strong> / <strong>🎯单独重Roll条目</strong>（支持多选来源、并发、自定义提示词）</li>
+                        <li><strong>🎲批量重Roll</strong>：一次选择多个条目重Roll，显示Token数</li>
+                        <li><strong>Roll历史</strong>：每个条目独立历史记录，可选择任意版本、在线编辑JSON、粘贴导入</li>
+                        <li>当前处理结果支持<strong>直接编辑</strong>并保存</li>
                     </ul>
                 </div>
 
                 <div style="margin-bottom:16px;">
-                    <h4 style="color:#f39c12;margin:0 0 10px;">🔍 查找功能</h4>
+                    <h4 style="color:#2ecc71;margin:0 0 10px;">🧹 世界书工具</h4>
                     <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                        <li>搜索<strong>世界书</strong>和<strong>各章节处理结果</strong>中的内容</li>
-                        <li>同时搜索条目名称、关键词、内容三个字段</li>
-                        <li>搜索结果<strong>高亮显示</strong>匹配内容</li>
-                        <li>点击搜索结果<strong>查看条目详情</strong>（右侧面板）</li>
-                        <li>区分<strong>来自章节处理结果</strong>和<strong>来自合并世界书</strong>的条目</li>
-                        <li>每条结果支持<strong>单独重Roll</strong>对应章节</li>
-                        <li><strong>🎲 批量重Roll所有匹配章节</strong>：支持并行处理</li>
-                        <li><strong>重Roll附加提示词</strong>：为批量重Roll指定额外要求</li>
+                        <li><strong>🔍查找</strong>：搜索关键词高亮定位</li>
+                        <li><strong>🔄替换</strong>：批量查找替换内容</li>
+                        <li><strong>🏷️清除标签</strong>：清理AI输出的thinking等无用标签</li>
+                        <li><strong>🧹整理条目</strong>：AI优化指定分类的条目内容</li>
+                        <li><strong>🔗别名合并</strong>：AI识别同一事物的不同名称并自动合并</li>
                     </ul>
                 </div>
 
                 <div style="margin-bottom:16px;">
-                    <h4 style="color:#e67e22;margin:0 0 10px;">🔄 替换功能</h4>
-                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                        <li>替换<strong>世界书</strong>和/或<strong>各章节处理结果</strong>中的词语</li>
-                        <li>支持替换<strong>条目名称、关键词、内容</strong>三个字段</li>
-                        <li>留空替换内容可<strong>删除</strong>匹配词语</li>
-                        <li><strong>👁️ 预览</strong>：逐条显示替换前后的对比</li>
-                        <li><strong>单项替换</strong>：对每条匹配单独确认后替换</li>
-                        <li><strong>批量替换</strong>：一键替换所有匹配项</li>
-                        <li>条目名称重命名时自动同步<strong>位置/深度/顺序配置</strong></li>
-                    </ul>
-                </div>
-
-                <div style="margin-bottom:16px;">
-                    <h4 style="color:#9b59b6;margin:0 0 10px;">🧹 整理条目</h4>
-                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                        <li>使用AI<strong>去除重复信息</strong>，合并相似描述，优化格式</li>
-                        <li><strong>两级选择</strong>：先选分类，再选具体条目</li>
-                        <li>分类级别<strong>全选/全不选</strong></li>
-                        <li>支持<strong>并发处理</strong>（使用全局并发配置）</li>
-                        <li>失败条目<strong>自动记录</strong>，再次打开可<strong>只选失败项重试</strong></li>
-                        <li>显示每个条目的<strong>处理状态</strong>（成功✅/失败❌）</li>
-                    </ul>
-                </div>
-
-                <div style="margin-bottom:16px;">
-                    <h4 style="color:#3498db;margin:0 0 10px;">🏷️ 清除标签</h4>
-                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                        <li><strong>纯本地处理</strong>，不调用AI，不消耗Token</li>
-                        <li>输入标签名（如thinking、tucao），自动扫描匹配</li>
-                        <li>三种匹配模式：<strong>完整标签</strong> / <strong>开头不闭合</strong> / <strong>末尾不闭合</strong></li>
-                        <li>可选扫描范围：<strong>世界书</strong>和/或<strong>各章节处理结果</strong></li>
-                        <li>逐条显示匹配结果和<strong>前后文上下文</strong></li>
-                        <li>支持<strong>全选/全不选</strong>，逐条确认后删除</li>
-                        <li>自动清理删除后的多余空行</li>
-                    </ul>
-                </div>
-
-                <div style="margin-bottom:16px;">
-                    <h4 style="color:#27ae60;margin:0 0 10px;">🔗 别名识别与合并</h4>
-                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                        <li><strong>第一阶段 - 本地检测</strong>：基于关键词交集和名称相似度找出疑似同人</li>
-                        <li><strong>第二阶段 - AI两两判断</strong>：对每一对角色独立判断是否同一人</li>
-                        <li>使用<strong>并查集</strong>自动合并判断结果（A=B且B=C → A、B、C合并）</li>
-                        <li>支持<strong>并发处理</strong>，可配置阈值和并发数</li>
-                        <li>显示<strong>配对判断结果</strong>和<strong>合并方案</strong></li>
-                        <li>合并方案支持<strong>勾选/取消</strong>每一组，可排除不想合并的组</li>
-                        <li>AI自动选择最完整/最常用的名称作为保留名</li>
-                        <li>合并后建议使用"整理条目"清理重复内容</li>
-                    </ul>
-                </div>
-
-                <div style="margin-bottom:16px;">
-                    <h4 style="color:#e74c3c;margin:0 0 10px;">📥 导入合并世界书</h4>
-                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                        <li>支持导入<strong>SillyTavern格式</strong>和<strong>内部JSON格式</strong></li>
-                        <li>自动检测<strong>文件内部重复</strong>（同一文件中的重名条目）</li>
-                        <li>自动检测<strong>与现有世界书的重复</strong></li>
-                        <li>新条目和重复条目分别显示，支持<strong>分类级别全选/全不选</strong></li>
-                        <li>重复处理方式：
-                            <ul>
-                                <li><strong>🤖 AI智能合并</strong>：使用AI合并内容，支持并发</li>
-                                <li><strong>📝 使用后者覆盖</strong>：用导入的覆盖已有的</li>
-                                <li><strong>🔒 保留前者</strong>：保留已有的，丢弃导入的</li>
-                                <li><strong>📋 重命名保留</strong>：将重复条目添加为新名称</li>
-                                <li><strong>➕ 内容叠加</strong>：将导入内容追加到已有条目后面</li>
-                            </ul>
-                        </li>
-                        <li>AI合并支持<strong>自定义提示词</strong>和<strong>并发数配置</strong></li>
-                    </ul>
-                </div>
-
-                <div style="margin-bottom:16px;">
-                    <h4 style="color:#9b59b6;margin:0 0 10px;">⚙️ 导出配置系统</h4>
+                    <h4 style="color:#9b59b6;margin:0 0 10px;">⚙️ 导出配置</h4>
                     <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
                         <li><strong>🔵蓝灯/🟢绿灯</strong>：蓝灯=常驻（constant）/ 绿灯=触发式（selective）</li>
-                        <li>点击分类名旁的灯图标<strong>切换蓝灯/绿灯</strong></li>
-                        <li><strong>条目位置</strong>：在角色定义之前/之后、作者注释之前/之后、自定义深度</li>
-                        <li><strong>条目深度</strong>：仅自定义深度时生效</li>
-                        <li><strong>条目顺序</strong>：数字越小越靠前</li>
-                        <li><strong>分类默认配置</strong>：批量设置同分类下所有条目的位置/深度/顺序</li>
-                        <li><strong>📈 顺序自动递增</strong>：同分类下条目顺序从起始值开始递增</li>
-                        <li><strong>🔄 允许条目递归</strong>：条目可被其他条目激活并触发递归</li>
-                        <li><strong>剧情大纲导出配置</strong>：单独配置剧情大纲分类的默认位置/深度/顺序</li>
-                        <li>单个条目配置<strong>覆盖</strong>分类默认配置</li>
-                        <li>导出SillyTavern格式时每个条目独立group</li>
+                        <li>条目位置/深度/顺序可按分类默认配置或单个条目覆盖</li>
+                        <li>支持<strong>📈顺序自动递增</strong>和<strong>🔄允许条目递归</strong></li>
                     </ul>
                 </div>
 
                 <div style="margin-bottom:16px;">
-                    <h4 style="color:#f1c40f;margin:0 0 10px;">🔢 Token计数与检测</h4>
+                    <h4 style="color:#f1c40f;margin:0 0 10px;">🔢 Token计数</h4>
                     <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                        <li><strong>条目Token计数</strong>：每个条目右侧显示预估Token数</li>
-                        <li><strong>分类Token统计</strong>：分类标题显示该分类总Token数</li>
-                        <li><strong>展开详情</strong>：关键词和内容分别显示各自Token数</li>
-                        <li><strong>全局统计</strong>：顶部显示所有条目总Token数</li>
-                        <li><strong>阈值高亮</strong>：输入阈值后，低于该值的条目红色高亮显示</li>
-                        <li><strong>截断检测</strong>：用于快速发现可能被截断的条目</li>
-                        <li>Token估算：中文~1.5tk/字，英文~1tk/词，标点~0.5tk</li>
+                        <li>每个条目/分类/全局显示Token数，支持<strong>阈值高亮</strong>快速发现截断条目</li>
                     </ul>
                 </div>
 
                 <div style="margin-bottom:16px;">
                     <h4 style="color:#95a5a6;margin:0 0 10px;">📜 修改历史</h4>
                     <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                        <li>自动记录每次世界书变更（添加/修改/删除）</li>
-                        <li><strong>左右分栏</strong>查看历史记录和变更详情</li>
-                        <li>支持<strong>⏪ 回退到任意版本</strong>（回退后删除后续记录）</li>
-                        <li>自动<strong>去重</strong>：同名记忆只保留最新一条</li>
-                        <li>数据存储在<strong>IndexedDB</strong>中，刷新页面不丢失</li>
+                        <li>自动记录变更，左右分栏查看，支持<strong>⏪回退到任意版本</strong>，数据存IndexedDB不丢失</li>
+                    </ul>
+                </div>
+
+                <div style="margin-bottom:16px;">
+                    <h4 style="color:#e74c3c;margin:0 0 10px;">📥 导入合并世界书</h4>
+                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
+                        <li>支持SillyTavern格式和内部JSON格式，自动检测重复</li>
+                        <li>重复处理：<strong>AI智能合并</strong> / 覆盖 / 保留 / 重命名 / 内容叠加</li>
                     </ul>
                 </div>
 
                 <div style="margin-bottom:16px;">
                     <h4 style="color:#e67e22;margin:0 0 10px;">💾 导入导出</h4>
                     <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                        <li><strong>📥 导出JSON</strong>：原始格式，可再次导入合并</li>
-                        <li><strong>📥 导出SillyTavern格式</strong>：直接导入酒馆使用</li>
-                        <li><strong>📤 导出任务</strong>：保存完整进度（含章节队列、世界书、设置等）</li>
-                        <li><strong>📥 导入任务</strong>：恢复进度，支持换设备继续</li>
-                        <li><strong>📤 导出配置</strong>：保存提示词、分类、默认条目、导出配置等所有设置</li>
-                        <li><strong>📥 导入配置</strong>：加载配置文件</li>
-                        <li><strong>📦 分卷导出</strong>：分卷模式时逐卷导出</li>
-                        <li>导出文件名自动包含<strong>原始文件名和时间戳</strong></li>
-                        <li>任务导出包含<strong>原始文件名</strong>，导入时自动恢复显示</li>
-                    </ul>
-                </div>
-
-                <div style="margin-bottom:16px;">
-                    <h4 style="color:#3498db;margin:0 0 10px;">🚀 并行处理</h4>
-                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                        <li><strong>独立模式</strong>：所有章节同时并行处理，最快</li>
-                        <li><strong>分批模式</strong>：按并发数分批处理，批次间累积上下文</li>
-                        <li><strong>并发数</strong>：1~10，控制同时处理的章节数</li>
-                        <li>基于<strong>信号量（Semaphore）</strong>控制并发</li>
-                        <li>暂停时自动<strong>中止所有排队任务</strong></li>
-                        <li>Token超限自动<strong>分裂记忆</strong>后重试</li>
-                    </ul>
-                </div>
-
-                <div style="margin-bottom:16px;">
-                    <h4 style="color:#27ae60;margin:0 0 10px;">🔄 自动恢复</h4>
-                    <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                        <li>处理进度自动保存到<strong>IndexedDB</strong></li>
-                        <li>刷新页面/重新打开时<strong>自动检测未完成任务</strong></li>
-                        <li>恢复后自动从<strong>断点继续</strong></li>
-                        <li>世界书为空时自动从已处理记忆<strong>重建世界书</strong></li>
+                        <li><strong>导出JSON / SillyTavern格式</strong>，支持分卷导出</li>
+                        <li><strong>导出/导入任务</strong>：保存完整进度，支持换设备继续</li>
+                        <li><strong>导出/导入配置</strong>：保存提示词、分类、默认条目等所有设置</li>
                     </ul>
                 </div>
 
@@ -8386,15 +8223,13 @@ ${pairsContent}
                     <div style="font-weight:bold;color:#3498db;margin-bottom:8px;">💡 使用技巧</div>
                     <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;font-size:12px;">
                         <li>长篇小说建议开启<strong>并行模式</strong>（独立模式最快）</li>
-                        <li>遇到乱码？用<strong>🔍查找</strong>定位 → <strong>🎲批量重Roll</strong>修复</li>
-                        <li>某个条目不满意？点击条目旁的<strong>🎯</strong>按钮单独重Roll，可添加提示词指导</li>
-                        <li>AI输出了thinking标签？用<strong>🏷️清除标签</strong>一键清理</li>
-                        <li>同一事物多个名字？用<strong>🔗别名合并</strong>选择分类后自动识别</li>
-                        <li>条目内容太杂乱？用<strong>🧹整理条目</strong>让AI优化</li>
+                        <li>遇到乱码？<strong>🔍查找</strong>定位 → <strong>🎲批量重Roll</strong>修复</li>
+                        <li>某条目不满意？点<strong>🎯</strong>单独重Roll，可添加提示词指导</li>
+                        <li>AI输出thinking标签？<strong>🏷️清除标签</strong>一键清理</li>
+                        <li>同一事物多个名字？<strong>🔗别名合并</strong>自动识别</li>
                         <li>担心进度丢失？随时<strong>📤导出任务</strong>保存</li>
-                        <li>想复用设置？<strong>📤导出配置</strong>下次直接导入</li>
-                        <li>导出时想控制条目位置？点击分类或条目旁的<strong>⚙️</strong>按钮配置</li>
-                        <li>想让剧情条目按章节排序？开启分类的<strong>📈顺序自动递增</strong></li>
+                        <li>导出时控制位置？点分类或条目旁的<strong>⚙️</strong>按钮配置</li>
+                        <li>主UI只能通过右上角<strong>✕按钮</strong>关闭，防止误触退出</li>
                     </ul>
                 </div>
             </div>
@@ -8835,7 +8670,7 @@ ${pairsContent}
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v3.0.5 </span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v3.0.7 </span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
