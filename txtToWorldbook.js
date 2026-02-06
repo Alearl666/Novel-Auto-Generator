@@ -1,6 +1,6 @@
 
 /**
- * TXT转世界书独立模块 v3.0.6
+ * TXT转世界书独立模块 v3.0.7
  * v3.0.5 修复:
  *   - 修复isTokenLimitError误匹配：/exceeded/i过于宽泛导致正常AI响应被误判为Token超限
  *   - 新增「导出名称」输入框：小说名持久化存储，关闭UI重开/导入任务后导出文件名不再丢失
@@ -8,6 +8,10 @@
  *   - 修复AI输出JSON中未转义双引号导致内容截断（如"发神"中的"被误认为JSON字符串结束）
  *   - parseAIResponse新增repairJsonUnescapedQuotes修复步骤
  *   - extractWorldbookDataByRegex的"内容"提取改为智能判断"是否为真正的字符串结束引号
+ * v3.0.7 修复:
+ *   - 新增误触保护：主UI不再响应背景点击关闭，只能通过右上角✕按钮退出
+ *   - ESC键改为只关闭子模态框（世界书预览、历史记录等），不会意外关闭主UI
+ *   - 子模态框（预览/历史/合并等）仍保留背景点击关闭功能
  */
 
 (function () {
@@ -9446,7 +9450,8 @@ ${pairsContent}
 
         modalContainer.querySelector('.ttw-modal-close').addEventListener('click', closeModal);
         modalContainer.querySelector('.ttw-help-btn').addEventListener('click', showHelpModal);
-        modalContainer.addEventListener('click', (e) => { if (e.target === modalContainer) closeModal(); });
+        // 误触保护：主模态框不响应背景点击关闭，只能通过右上角关闭按钮退出
+        // modalContainer.addEventListener('click', (e) => { if (e.target === modalContainer) closeModal(); });
         document.addEventListener('keydown', handleEscKey, true);
 
         document.getElementById('ttw-use-tavern-api').addEventListener('change', () => {
@@ -9675,7 +9680,15 @@ ${pairsContent}
     }
 
     function handleEscKey(e) {
-        if (e.key === 'Escape' && modalContainer) { e.stopPropagation(); e.preventDefault(); closeModal(); }
+        if (e.key === 'Escape') {
+            // 误触保护：ESC只关闭子模态框（世界书预览、历史记录等），不关闭主UI
+            const subModals = document.querySelectorAll('.ttw-modal-container:not(#txt-to-worldbook-modal)');
+            if (subModals.length > 0) {
+                e.stopPropagation(); e.preventDefault();
+                subModals[subModals.length - 1].remove(); // 关闭最顶层的子模态框
+            }
+            // 主模态框不响应ESC，只能通过右上角关闭按钮退出
+        }
     }
 
     function saveCurrentSettings() {
@@ -10567,5 +10580,5 @@ ${pairsContent}
         clearEntryRollHistory: (cat, entry) => MemoryHistoryDB.clearEntryRollResults(cat, entry)
     };
 
-    console.log('📚 TxtToWorldbook v3.0.6 已加载 - 修复: AI输出未转义双引号导致内容截断');
+    console.log('📚 TxtToWorldbook v3.0.7 已加载 - 新增: 主UI误触保护(只能通过✕按钮关闭)');
 })();
