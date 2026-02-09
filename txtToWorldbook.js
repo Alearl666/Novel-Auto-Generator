@@ -1,6 +1,5 @@
-
 /**
- * TXT转世界书独立模块 v3.0.7
+ * TXT转世界书独立模块 v3.0.8
  * v3.0.5 修复:
  *   - 修复isTokenLimitError误匹配：/exceeded/i过于宽泛导致正常AI响应被误判为Token超限
  *   - 新增「导出名称」输入框：小说名持久化存储，关闭UI重开/导入任务后导出文件名不再丢失
@@ -12,6 +11,11 @@
  *   - 新增误触保护：主UI不再响应背景点击关闭，只能通过右上角✕按钮退出
  *   - ESC键改为只关闭子模态框（世界书预览、历史记录等），不会意外关闭主UI
  *   - 子模态框（预览/历史/合并等）仍保留背景点击关闭功能
+ * v3.0.8 新增:
+ *   - 消息链配置：发送给AI的提示词支持多消息格式，每条消息可指定角色（系统/用户/AI助手）
+ *   - 酒馆API优先使用generateRaw消息数组格式（ST 1.13.2+），自动回退兼容旧版
+ *   - 自定义API各provider原生支持多消息：OpenAI兼容/DeepSeek用messages[]，Gemini用systemInstruction+contents[]
+ *   - 修复整理条目结果未过滤响应标签（thinking等标签残留在内容中）的bug
  */
 
 (function () {
@@ -331,6 +335,9 @@
         categoryDefaultConfig: {},
         entryPositionConfig: {},
         customSuffixPrompt: '',
+        promptMessageChain: [
+            { role: 'user', content: '{PROMPT}', enabled: true }
+        ],
         allowRecursion: false,
         filterResponseTags: 'thinking,/think',
         debugMode: false,
@@ -895,6 +902,80 @@
         return settings.language === 'zh' ? '请用中文回复。\n\n' : '';
     }
 
+    // ========== 消息链辅助函数 ==========
+    // 将messages数组转换为拼接字符串（用于回退/日志）
+    function messagesToString(messages) {
+        if (typeof messages === 'string') return messages;
+        if (!Array.isArray(messages) || messages.length === 0) return '';
+        if (messages.length === 1) return messages[0].content || '';
+        return messages.map(m => {
+            const roleLabel = m.role === 'system' ? '[System]' : m.role === 'assistant' ? '[Assistant]' : '[User]';
+            return `${roleLabel}\n${m.content}`;
+        }).join('\n\n');
+    }
+
+    // 将字符串prompt通过消息链模板转换为messages数组
+    function applyMessageChain(prompt) {
+        const chain = settings.promptMessageChain;
+        if (!Array.isArray(chain) || chain.length === 0) {
+            return [{ role: 'user', content: prompt }];
+        }
+        const enabledMessages = chain.filter(m => m.enabled !== false);
+        if (enabledMessages.length === 0) {
+            return [{ role: 'user', content: prompt }];
+        }
+        return enabledMessages.map(msg => ({
+            role: msg.role || 'user',
+            content: (msg.content || '').replace(/\{PROMPT\}/g, prompt)
+        })).filter(m => m.content.trim().length > 0);
+    }
+
+    // 将messages转换为Gemini原生格式
+    function convertToGeminiContents(messages) {
+        const systemMsgs = messages.filter(m => m.role === 'system');
+        const nonSystemMsgs = messages.filter(m => m.role !== 'system');
+
+        // Gemini要求contents中role交替出现，合并连续同角色消息
+        const merged = [];
+        for (const msg of nonSystemMsgs) {
+            const geminiRole = msg.role === 'assistant' ? 'model' : 'user';
+            if (merged.length > 0 && merged[merged.length - 1].role === geminiRole) {
+                merged[merged.length - 1].parts[0].text += '\n\n' + msg.content;
+            } else {
+                merged.push({ role: geminiRole, parts: [{ text: msg.content }] });
+            }
+        }
+        // Gemini要求第一条必须是user
+        if (merged.length > 0 && merged[0].role !== 'user') {
+            merged.unshift({ role: 'user', parts: [{ text: '请根据以下对话执行任务。' }] });
+        }
+
+        const result = { contents: merged };
+        if (systemMsgs.length > 0) {
+            result.systemInstruction = {
+                parts: [{ text: systemMsgs.map(m => m.content).join('\n\n') }]
+            };
+        }
+        return result;
+    }
+
+    // 响应内容过滤（移除thinking等标签）
+    function filterResponseContent(text) {
+        if (!text) return text;
+        const filterTagsStr = settings.filterResponseTags || 'thinking,/think';
+        const filterTags = filterTagsStr.split(',').map(t => t.trim()).filter(t => t);
+        let cleaned = text;
+        for (const tag of filterTags) {
+            if (tag.startsWith('/')) {
+                const tagName = tag.substring(1);
+                cleaned = cleaned.replace(new RegExp(`^[\\s\\S]*?<\\/${tagName}>`, 'gi'), '');
+            } else {
+                cleaned = cleaned.replace(new RegExp(`<${tag}>[\\s\\S]*?<\\/${tag}>`, 'gi'), '');
+            }
+        }
+        return cleaned;
+    }
+
     function isTokenLimitError(errorMsg) {
         if (!errorMsg) return false;
         // 【修复】只检查前500字符（错误信息不会太长，避免在AI正常响应内容中误匹配）
@@ -1069,11 +1150,12 @@
 
 
     // ========== API调用 - 酒馆API ==========
-    async function callSillyTavernAPI(prompt, taskId = null) {
+    async function callSillyTavernAPI(messages, taskId = null) {
         const timeout = settings.apiTimeout || 120000;
         const logPrefix = taskId !== null ? `[任务${taskId}]` : '';
-        updateStreamContent(`\n📤 ${logPrefix} 发送请求到酒馆API...\n`);
-        debugLog(`${logPrefix} 酒馆API开始调用, prompt长度=${prompt.length}, 超时=${timeout / 1000}秒`);
+        const combinedPrompt = messagesToString(messages);
+        updateStreamContent(`\n📤 ${logPrefix} 发送请求到酒馆API (${messages.length}条消息)...\n`);
+        debugLog(`${logPrefix} 酒馆API开始调用, 消息数=${messages.length}, 总长度=${combinedPrompt.length}, 超时=${timeout / 1000}秒`);
 
         try {
             if (typeof SillyTavern === 'undefined' || !SillyTavern.getContext) {
@@ -1086,19 +1168,40 @@
                 setTimeout(() => reject(new Error(`API请求超时 (${timeout / 1000}秒)`)), timeout);
             });
 
-            let apiPromise;
-            if (typeof context.generateQuietPrompt === 'function') {
-                debugLog(`${logPrefix} 使用generateQuietPrompt`);
-                apiPromise = context.generateQuietPrompt(prompt, false, false);
-            } else if (typeof context.generateRaw === 'function') {
-                debugLog(`${logPrefix} 使用generateRaw`);
-                apiPromise = context.generateRaw(prompt, '', false);
+            let result;
+
+            if (typeof context.generateRaw === 'function') {
+                try {
+                    // 尝试新版格式：ST 1.13.2+ 支持 generateRaw({ prompt: messages[] })
+                    debugLog(`${logPrefix} 尝试generateRaw消息数组格式 (ST 1.13.2+)`);
+                    result = await Promise.race([
+                        context.generateRaw({ prompt: messages }),
+                        timeoutPromise
+                    ]);
+                    debugLog(`${logPrefix} generateRaw消息数组格式成功`);
+                } catch (rawError) {
+                    // 超时/API本身的错误直接抛出
+                    if (rawError.message?.includes('超时') || rawError.message?.includes('timeout') ||
+                        rawError.message?.includes('API') || rawError.message?.includes('limit')) {
+                        throw rawError;
+                    }
+                    // 其他错误（可能是旧版ST不支持对象参数），回退字符串格式
+                    debugLog(`${logPrefix} 消息数组格式不支持(${rawError.message})，回退字符串模式`);
+                    result = await Promise.race([
+                        context.generateRaw(combinedPrompt, '', false),
+                        timeoutPromise
+                    ]);
+                }
+            } else if (typeof context.generateQuietPrompt === 'function') {
+                debugLog(`${logPrefix} 使用generateQuietPrompt（字符串模式）`);
+                result = await Promise.race([
+                    context.generateQuietPrompt(combinedPrompt, false, false),
+                    timeoutPromise
+                ]);
             } else {
                 throw new Error('无法找到可用的生成函数');
             }
 
-            debugLog(`${logPrefix} 等待API响应中...`);
-            const result = await Promise.race([apiPromise, timeoutPromise]);
             debugLog(`${logPrefix} 收到响应, 长度=${result.length}字符`);
             updateStreamContent(`📥 ${logPrefix} 收到响应 (${result.length}字符)\n`);
             return result;
@@ -1111,7 +1214,7 @@
     }
 
     // ========== API调用 - 自定义API ==========
-    async function callCustomAPI(prompt, retryCount = 0) {
+    async function callCustomAPI(messages, retryCount = 0) {
         const maxRetries = 3;
         const timeout = settings.apiTimeout || 120000;
         let requestUrl, requestOptions;
@@ -1121,8 +1224,12 @@
         const endpoint = settings.customApiEndpoint;
         const model = settings.customApiModel;
 
-        updateStreamContent(`\n📤 发送请求到自定义API (${provider})...\n`);
-        debugLog(`自定义API开始调用, provider=${provider}, model=${model}, prompt长度=${prompt.length}, 重试=${retryCount}`);
+        const combinedPrompt = messagesToString(messages);
+        updateStreamContent(`\n📤 发送请求到自定义API (${provider}, ${messages.length}条消息)...\n`);
+        debugLog(`自定义API开始调用, provider=${provider}, model=${model}, 消息数=${messages.length}, 总长度=${combinedPrompt.length}, 重试=${retryCount}`);
+
+        // 构建OpenAI兼容的messages数组
+        const openaiMessages = messages.map(m => ({ role: m.role, content: m.content }));
 
         switch (provider) {
             case 'deepseek':
@@ -1136,34 +1243,37 @@
                     },
                     body: JSON.stringify({
                         model: model || 'deepseek-chat',
-                        messages: [{ role: 'user', content: prompt }],
+                        messages: openaiMessages,
                         temperature: 0.3,
                         max_tokens: 8192
                     }),
                 };
                 break;
 
-            case 'gemini':
+            case 'gemini': {
                 if (!apiKey) throw new Error('Gemini API Key 未设置');
                 const geminiModel = model || 'gemini-2.5-flash';
                 requestUrl = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`;
+                const geminiData = convertToGeminiContents(messages);
+                const geminiBody = {
+                    ...geminiData,
+                    generationConfig: { maxOutputTokens: 65536, temperature: 0.3 },
+                    safetySettings: [
+                        { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'OFF' },
+                        { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'OFF' },
+                        { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'OFF' },
+                        { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'OFF' }
+                    ]
+                };
                 requestOptions = {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{ parts: [{ text: prompt }] }],
-                        generationConfig: { maxOutputTokens: 65536, temperature: 0.3 },
-                        safetySettings: [
-                            { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'OFF' },
-                            { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'OFF' },
-                            { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'OFF' },
-                            { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'OFF' }
-                        ]
-                    }),
+                    body: JSON.stringify(geminiBody),
                 };
                 break;
+            }
 
-            case 'gemini-proxy':
+            case 'gemini-proxy': {
                 if (!endpoint) throw new Error('Gemini Proxy Endpoint 未设置');
                 if (!apiKey) throw new Error('Gemini Proxy API Key 未设置');
 
@@ -1184,7 +1294,7 @@
                         },
                         body: JSON.stringify({
                             model: geminiProxyModel,
-                            messages: [{ role: 'user', content: prompt }],
+                            messages: openaiMessages,
                             temperature: 0.3,
                             max_tokens: 65536
                         }),
@@ -1194,18 +1304,20 @@
                     requestUrl = finalProxyUrl.includes('?')
                         ? `${finalProxyUrl}&key=${apiKey}`
                         : `${finalProxyUrl}?key=${apiKey}`;
+                    const geminiProxyData = convertToGeminiContents(messages);
                     requestOptions = {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            contents: [{ parts: [{ text: prompt }] }],
+                            ...geminiProxyData,
                             generationConfig: { maxOutputTokens: 65536, temperature: 0.3 }
                         }),
                     };
                 }
                 break;
+            }
 
-            case 'openai-compatible':
+            case 'openai-compatible': {
                 let openaiEndpoint = endpoint || 'http://127.0.0.1:5000/v1/chat/completions';
                 const openaiModel = model || 'local-model';
 
@@ -1232,13 +1344,14 @@
                     headers: headers,
                     body: JSON.stringify({
                         model: openaiModel,
-                        messages: [{ role: 'user', content: prompt }],
+                        messages: openaiMessages,
                         temperature: 0.3,
                         max_tokens: 64000,
                         stream: true
                     }),
                 };
                 break;
+            }
 
             default:
                 throw new Error(`不支持的API提供商: ${provider}`);
@@ -1270,7 +1383,7 @@
                         const delay = Math.pow(2, retryCount) * 1000;
                         updateStreamContent(`⏳ 遇到限流，${delay}ms后重试...\n`);
                         await new Promise(resolve => setTimeout(resolve, delay));
-                        return callCustomAPI(prompt, retryCount + 1);
+                        return callCustomAPI(messages, retryCount + 1);
                     } else {
                         throw new Error(`API限流：已达到最大重试次数`);
                     }
@@ -1542,10 +1655,13 @@
 
     // ========== 统一API调用入口 ==========
     async function callAPI(prompt, taskId = null) {
+        // 将字符串prompt通过消息链模板转换为messages数组
+        const messages = applyMessageChain(prompt);
+        debugLog(`callAPI: 消息链转换完成, ${messages.length}条消息, roles=[${messages.map(m => m.role).join(',')}]`);
         if (settings.useTavernApi) {
-            return await callSillyTavernAPI(prompt, taskId);
+            return await callSillyTavernAPI(messages, taskId);
         } else {
-            return await callCustomAPI(prompt);
+            return await callCustomAPI(messages);
         }
     }
 
@@ -2465,7 +2581,9 @@
         updateStreamContent('', true);
 
         const enabledCatNames = getEnabledCategories().map(c => c.name).join(', ');
-        updateStreamContent(`🚀 开始处理...\n📊 处理模式: ${parallelConfig.enabled ? `并行 (${parallelConfig.concurrency}并发)` : '串行'}\n🔧 API模式: ${settings.useTavernApi ? '酒馆API' : '自定义API (' + settings.customApiProvider + ')'}\n📌 强制章节标记: ${settings.forceChapterMarker ? '开启' : '关闭'}\n🏷️ 启用分类: ${enabledCatNames}\n${'='.repeat(50)}\n`);
+        const chainDesc = (settings.promptMessageChain || []).filter(m => m.enabled !== false);
+        const chainSummary = chainDesc.length <= 1 ? '默认(单条用户消息)' : `${chainDesc.length}条消息[${chainDesc.map(m => m.role === 'system' ? '系统' : m.role === 'assistant' ? 'AI' : '用户').join('→')}]`;
+        updateStreamContent(`🚀 开始处理...\n📊 处理模式: ${parallelConfig.enabled ? `并行 (${parallelConfig.concurrency}并发)` : '串行'}\n🔧 API模式: ${settings.useTavernApi ? '酒馆API' : '自定义API (' + settings.customApiProvider + ')'}\n📌 强制章节标记: ${settings.forceChapterMarker ? '开启' : '关闭'}\n💬 消息链: ${chainSummary}\n🏷️ 启用分类: ${enabledCatNames}\n${'='.repeat(50)}\n`);
         debugLog(`调试模式已开启 - 将记录每步耗时`);
 
         const effectiveStartIndex = userSelectedStartIndex !== null ? userSelectedStartIndex : startFromIndex;
@@ -4427,7 +4545,10 @@ ${generateDynamicJsonTemplate()}
         if (!entry || !entry['内容']) return;
 
         const prompt = defaultConsolidatePrompt.replace('{CONTENT}', entry['内容']);
-        const response = await callAPI(getLanguagePrefix() + prompt);
+        let response = await callAPI(getLanguagePrefix() + prompt);
+
+        // 【v3.0.8修复】应用响应过滤标签（移除thinking等）
+        response = filterResponseContent(response);
 
         entry['内容'] = response.trim();
         if (Array.isArray(entry['关键词'])) {
@@ -7472,7 +7593,8 @@ ${pairsContent}
                 mergePrompt: settings.customMergePrompt,
                 rerollPrompt: settings.customRerollPrompt,
                 defaultWorldbookEntries: settings.defaultWorldbookEntries
-            }
+            },
+            promptMessageChain: settings.promptMessageChain
         };
         const timeString = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[:/\s]/g, '').replace(/,/g, '-');
         const fileName = `TxtToWorldbook-配置-${timeString}.json`;
@@ -7528,6 +7650,10 @@ ${pairsContent}
                 if (data.plotOutlineExportConfig) {
                     plotOutlineExportConfig = data.plotOutlineExportConfig;
                 }
+                // 新增：导入消息链配置
+                if (data.promptMessageChain) {
+                    settings.promptMessageChain = data.promptMessageChain;
+                }
 
                 if (data.prompts) {
                     if (data.prompts.worldbookPrompt !== undefined) {
@@ -7564,6 +7690,108 @@ ${pairsContent}
         input.click();
     }
 
+
+    // ========== 消息链编辑器UI渲染 ==========
+    function renderMessageChainUI() {
+        const container = document.getElementById('ttw-message-chain-list');
+        if (!container) return;
+
+        const chain = settings.promptMessageChain || [{ role: 'user', content: '{PROMPT}', enabled: true }];
+
+        const roleColors = { system: '#3498db', user: '#27ae60', assistant: '#f39c12' };
+        const roleLabels = { system: '🔷 系统', user: '🟢 用户', assistant: '🟡 AI助手' };
+
+        let html = '';
+        chain.forEach((msg, idx) => {
+            const borderColor = roleColors[msg.role] || '#888';
+            const isEnabled = msg.enabled !== false;
+            html += `
+            <div class="ttw-chain-msg-item" data-chain-index="${idx}" style="margin-bottom:8px;padding:10px;border-left:3px solid ${borderColor};background:rgba(0,0,0,0.2);border-radius:0 6px 6px 0;opacity:${isEnabled ? 1 : 0.5};">
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap;">
+                    <select class="ttw-chain-role" data-chain-index="${idx}" style="padding:4px 8px;border-radius:4px;background:rgba(0,0,0,0.3);color:#fff;border:1px solid ${borderColor};font-size:12px;cursor:pointer;">
+                        <option value="system" ${msg.role === 'system' ? 'selected' : ''}>${roleLabels.system}</option>
+                        <option value="user" ${msg.role === 'user' ? 'selected' : ''}>${roleLabels.user}</option>
+                        <option value="assistant" ${msg.role === 'assistant' ? 'selected' : ''}>${roleLabels.assistant}</option>
+                    </select>
+                    <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#aaa;cursor:pointer;">
+                        <input type="checkbox" class="ttw-chain-enabled" data-chain-index="${idx}" ${isEnabled ? 'checked' : ''}> 启用
+                    </label>
+                    <div style="margin-left:auto;display:flex;gap:4px;">
+                        ${idx > 0 ? `<button class="ttw-chain-move-up" data-chain-index="${idx}" style="background:none;border:1px solid #555;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:11px;color:#aaa;" title="上移">⬆️</button>` : ''}
+                        ${idx < chain.length - 1 ? `<button class="ttw-chain-move-down" data-chain-index="${idx}" style="background:none;border:1px solid #555;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:11px;color:#aaa;" title="下移">⬇️</button>` : ''}
+                        <button class="ttw-chain-delete" data-chain-index="${idx}" style="background:rgba(231,76,60,0.3);border:none;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:11px;color:#e74c3c;" title="删除">🗑️</button>
+                    </div>
+                </div>
+                <textarea class="ttw-chain-content ttw-textarea-small" data-chain-index="${idx}" rows="3" placeholder="消息内容。使用 {PROMPT} 作为原始提示词占位符" style="width:100%;box-sizing:border-box;font-size:12px;">${(msg.content || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</textarea>
+            </div>`;
+        });
+
+        if (chain.length === 0) {
+            html = '<div style="text-align:center;color:#888;padding:10px;font-size:11px;">暂无消息，点击「➕ 添加消息」开始配置</div>';
+        }
+
+        container.innerHTML = html;
+
+        // 绑定事件
+        container.querySelectorAll('.ttw-chain-role').forEach(sel => {
+            sel.addEventListener('change', (e) => {
+                const idx = parseInt(e.target.dataset.chainIndex);
+                chain[idx].role = e.target.value;
+                settings.promptMessageChain = chain;
+                renderMessageChainUI();
+                saveCurrentSettings();
+            });
+        });
+
+        container.querySelectorAll('.ttw-chain-enabled').forEach(cb => {
+            cb.addEventListener('change', (e) => {
+                const idx = parseInt(e.target.dataset.chainIndex);
+                chain[idx].enabled = e.target.checked;
+                settings.promptMessageChain = chain;
+                renderMessageChainUI();
+                saveCurrentSettings();
+            });
+        });
+
+        container.querySelectorAll('.ttw-chain-content').forEach(ta => {
+            ta.addEventListener('input', (e) => {
+                const idx = parseInt(e.target.dataset.chainIndex);
+                chain[idx].content = e.target.value;
+                settings.promptMessageChain = chain;
+                saveCurrentSettings();
+            });
+        });
+
+        container.querySelectorAll('.ttw-chain-move-up').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const idx = parseInt(e.target.dataset.chainIndex);
+                if (idx > 0) { [chain[idx], chain[idx - 1]] = [chain[idx - 1], chain[idx]]; }
+                settings.promptMessageChain = chain;
+                renderMessageChainUI();
+                saveCurrentSettings();
+            });
+        });
+
+        container.querySelectorAll('.ttw-chain-move-down').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const idx = parseInt(e.target.dataset.chainIndex);
+                if (idx < chain.length - 1) { [chain[idx], chain[idx + 1]] = [chain[idx + 1], chain[idx]]; }
+                settings.promptMessageChain = chain;
+                renderMessageChainUI();
+                saveCurrentSettings();
+            });
+        });
+
+        container.querySelectorAll('.ttw-chain-delete').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const idx = parseInt(e.target.dataset.chainIndex);
+                chain.splice(idx, 1);
+                settings.promptMessageChain = chain;
+                renderMessageChainUI();
+                saveCurrentSettings();
+            });
+        });
+    }
 
     function updateSettingsUI() {
         const chunkSizeEl = document.getElementById('ttw-chunk-size');
@@ -7629,6 +7857,8 @@ ${pairsContent}
         const suffixPromptEl = document.getElementById('ttw-suffix-prompt');
         if (suffixPromptEl) suffixPromptEl.value = settings.customSuffixPrompt || '';
 
+        // 渲染消息链编辑器
+        renderMessageChainUI();
 
         handleProviderChange();
         const allowRecursionEl = document.getElementById('ttw-allow-recursion');
@@ -8136,6 +8366,9 @@ ${pairsContent}
                     <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
                         <li><strong>世界书词条提示词</strong>（核心，含 <code>{DYNAMIC_JSON_TEMPLATE}</code> 占位符）</li>
                         <li>可选：<strong>剧情大纲</strong>、<strong>文风配置</strong>、<strong>后缀提示词</strong></li>
+                        <li><strong>💬消息链配置</strong>：将提示词按对话补全预设格式发送，每条消息可指定角色（🔷系统/🟢用户/🟡AI助手）</li>
+                        <li>消息链中使用 <code>{PROMPT}</code> 占位符代表实际组装好的提示词内容</li>
+                        <li>酒馆API优先使用 <code>generateRaw</code> 消息数组格式（ST 1.13.2+），自动兼容旧版</li>
                         <li>所有提示词支持恢复默认和预览，支持<strong>导出/导入配置</strong></li>
                     </ul>
                 </div>
@@ -8916,18 +9149,31 @@ ${pairsContent}
                                         <div style="margin-top:8px;"><button class="ttw-btn ttw-btn-small ttw-reset-prompt" data-type="style">🔄 恢复默认</button></div>
                                     </div>
                                 </div>
-                                <!-- 发送给AI最后的提示词 -->
+                                <!-- 消息链配置 + 后缀提示词 -->
                                 <div class="ttw-prompt-section">
                                     <div class="ttw-prompt-header" style="background:rgba(230,126,34,0.15);" data-target="ttw-suffix-content">
                                         <div style="display:flex;align-items:center;gap:8px;">
-                                            <span>📌</span><span style="font-weight:500;color:#e67e22;">发送给AI最后的提示词</span>
+                                            <span>💬</span><span style="font-weight:500;color:#e67e22;">消息链配置</span>
                                             <span class="ttw-badge ttw-badge-gray">可选</span>
                                         </div>
                                         <span class="ttw-collapse-icon">▶</span>
                                     </div>
                                     <div id="ttw-suffix-content" class="ttw-prompt-content">
-                                        <div class="ttw-setting-hint" style="margin-bottom:10px;">此内容会追加到每次发送给AI的消息最后，可用于强调特定要求、修复问题等。</div>
-                                        <textarea id="ttw-suffix-prompt" rows="4" placeholder="例如：请特别注意提取XX信息，修复乱码内容，注意区分同名角色..." class="ttw-textarea-small"></textarea>
+                                        <div style="margin-bottom:12px;padding:10px;background:rgba(230,126,34,0.1);border-radius:6px;">
+                                            <label style="font-size:12px;color:#e67e22;font-weight:bold;">📌 后缀提示词（追加到提示词末尾，在消息链转换之前生效）</label>
+                                            <textarea id="ttw-suffix-prompt" rows="2" placeholder="例如：请特别注意提取XX信息，修复乱码内容，注意区分同名角色..." class="ttw-textarea-small" style="margin-top:6px;"></textarea>
+                                        </div>
+                                        <div style="border-top:1px solid rgba(255,255,255,0.1);padding-top:12px;">
+                                            <div class="ttw-setting-hint" style="margin-bottom:8px;line-height:1.6;">
+                                                💬 配置发送给AI的消息链（类似对话补全预设）。每条消息可指定角色。<br>
+                                                <code style="background:rgba(0,0,0,0.3);padding:2px 6px;border-radius:3px;font-size:11px;">{PROMPT}</code> 占位符会被替换为实际组装好的提示词内容。
+                                            </div>
+                                            <div id="ttw-message-chain-list" style="margin-bottom:8px;"></div>
+                                            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                                                <button id="ttw-add-chain-msg" class="ttw-btn ttw-btn-small" style="background:rgba(52,152,219,0.5);">➕ 添加消息</button>
+                                                <button id="ttw-reset-chain" class="ttw-btn ttw-btn-small">🔄 恢复默认</button>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
 
@@ -9419,6 +9665,22 @@ ${pairsContent}
             });
         });
 
+        // ========== 消息链编辑器 ==========
+        renderMessageChainUI();
+        document.getElementById('ttw-add-chain-msg').addEventListener('click', () => {
+            if (!settings.promptMessageChain) settings.promptMessageChain = [];
+            settings.promptMessageChain.push({ role: 'user', content: '', enabled: true });
+            renderMessageChainUI();
+            saveCurrentSettings();
+        });
+        document.getElementById('ttw-reset-chain').addEventListener('click', () => {
+            if (confirm('确定恢复默认消息链？')) {
+                settings.promptMessageChain = [{ role: 'user', content: '{PROMPT}', enabled: true }];
+                renderMessageChainUI();
+                saveCurrentSettings();
+            }
+        });
+
         document.getElementById('ttw-preview-prompt').addEventListener('click', showPromptPreview);
         document.getElementById('ttw-plot-export-config').addEventListener('click', showPlotOutlineConfigModal);
         document.getElementById('ttw-import-json').addEventListener('click', importAndMergeWorldbook);
@@ -9550,6 +9812,8 @@ ${pairsContent}
 
         settings.customSuffixPrompt = document.getElementById('ttw-suffix-prompt')?.value || '';
 
+        // 消息链配置已通过renderMessageChainUI内的事件实时保存到settings.promptMessageChain
+
         settings.customApiProvider = document.getElementById('ttw-api-provider')?.value || 'gemini';
         settings.customApiKey = document.getElementById('ttw-api-key')?.value || '';
         settings.customApiEndpoint = document.getElementById('ttw-api-endpoint')?.value || '';
@@ -9614,7 +9878,14 @@ ${pairsContent}
         const chapterForce = settings.forceChapterMarker ? getChapterForcePrompt(1) : '(已关闭)';
         const apiMode = settings.useTavernApi ? '酒馆API' : `自定义API (${settings.customApiProvider})`;
         const enabledCats = getEnabledCategories().map(c => c.name).join(', ');
-        alert(`当前提示词预览:\n\nAPI模式: ${apiMode}\n并行模式: ${parallelConfig.enabled ? parallelConfig.mode : '关闭'}\n强制章节标记: ${settings.forceChapterMarker ? '开启' : '关闭'}\n启用分类: ${enabledCats}\n\n【章节强制标记示例】\n${chapterForce}\n\n【系统提示词】\n${prompt.substring(0, 1500)}${prompt.length > 1500 ? '...' : ''}`);
+        const chain = settings.promptMessageChain || [{ role: 'user', content: '{PROMPT}', enabled: true }];
+        const enabledChain = chain.filter(m => m.enabled !== false);
+        const chainInfo = enabledChain.map((m, i) => {
+            const roleLabel = m.role === 'system' ? '🔷系统' : m.role === 'assistant' ? '🟡AI助手' : '🟢用户';
+            const preview = m.content.length > 60 ? m.content.substring(0, 60) + '...' : m.content;
+            return `  ${i + 1}. [${roleLabel}] ${preview}`;
+        }).join('\n');
+        alert(`当前提示词预览:\n\nAPI模式: ${apiMode}\n并行模式: ${parallelConfig.enabled ? parallelConfig.mode : '关闭'}\n强制章节标记: ${settings.forceChapterMarker ? '开启' : '关闭'}\n启用分类: ${enabledCats}\n\n【消息链 (${enabledChain.length}条消息)】\n${chainInfo}\n\n【章节强制标记示例】\n${chapterForce}\n\n【系统提示词】\n${prompt.substring(0, 1500)}${prompt.length > 1500 ? '...' : ''}`);
     }
 
     async function checkAndRestoreState() {
@@ -10415,5 +10686,5 @@ ${pairsContent}
         clearEntryRollHistory: (cat, entry) => MemoryHistoryDB.clearEntryRollResults(cat, entry)
     };
 
-    console.log('📚 TxtToWorldbook v3.0.7 已加载 - 新增: 主UI误触保护(只能通过✕按钮关闭)');
+    console.log('📚 TxtToWorldbook v3.0.8 已加载 - 新增: 消息链配置(多消息角色分配), 修复: 整理条目过滤标签');
 })();
