@@ -1187,6 +1187,7 @@
                     }
                     // 其他错误（可能是旧版ST不支持对象参数），回退字符串格式
                     debugLog(`${logPrefix} 消息数组格式不支持(${rawError.message})，回退字符串模式`);
+                    updateStreamContent(`⚠️ ${logPrefix} 酒馆不支持消息数组格式，已回退为字符串模式\n`);
                     result = await Promise.race([
                         context.generateRaw(combinedPrompt, '', false),
                         timeoutPromise
@@ -1194,6 +1195,7 @@
                 }
             } else if (typeof context.generateQuietPrompt === 'function') {
                 debugLog(`${logPrefix} 使用generateQuietPrompt（字符串模式）`);
+                updateStreamContent(`ℹ️ ${logPrefix} 酒馆API: 使用generateQuietPrompt（字符串模式，消息角色不生效）\n`);
                 result = await Promise.race([
                     context.generateQuietPrompt(combinedPrompt, false, false),
                     timeoutPromise
@@ -7740,6 +7742,7 @@ ${pairsContent}
                 settings.promptMessageChain = chain;
                 renderMessageChainUI();
                 saveCurrentSettings();
+                handleUseTavernApiChange(); // 更新酒馆API警告
             });
         });
 
@@ -7750,6 +7753,7 @@ ${pairsContent}
                 settings.promptMessageChain = chain;
                 renderMessageChainUI();
                 saveCurrentSettings();
+                handleUseTavernApiChange(); // 更新酒馆API警告
             });
         });
 
@@ -8326,7 +8330,7 @@ ${pairsContent}
         helpModal.innerHTML = `
         <div class="ttw-modal" style="max-width:700px;">
             <div class="ttw-modal-header">
-                <span class="ttw-modal-title">❓ TXT转世界书 v3.0.7 帮助</span>
+                <span class="ttw-modal-title">❓ TXT转世界书 v3.0.8 帮助</span>
                 <button class="ttw-modal-close" type="button">✕</button>
             </div>
             <div class="ttw-modal-body" style="max-height:75vh;overflow-y:auto;">
@@ -8346,8 +8350,9 @@ ${pairsContent}
                 <div style="margin-bottom:16px;">
                     <h4 style="color:#3498db;margin:0 0 10px;">🔧 API模式</h4>
                     <ul style="margin:0;padding-left:20px;line-height:1.8;color:#ccc;">
-                        <li><strong>酒馆API</strong>：使用SillyTavern当前连接的AI</li>
-                        <li><strong>Gemini / Gemini代理 / DeepSeek / OpenAI兼容</strong>：支持多种直连和代理模式</li>
+                        <li><strong>酒馆API</strong>：使用SillyTavern当前连接的AI（注意：消息角色会被酒馆后处理覆盖，且可能注入预设JB内容）</li>
+                        <li><strong>自定义API</strong>：直连API，消息链角色设置完全生效，不受酒馆干预</li>
+                        <li>支持 <strong>Gemini / Gemini代理 / DeepSeek / OpenAI兼容</strong> 多种直连和代理模式</li>
                         <li>支持<strong>拉取模型列表</strong>、<strong>快速测试连接</strong>、<strong>自动限流重试</strong></li>
                     </ul>
                 </div>
@@ -8459,6 +8464,7 @@ ${pairsContent}
                         <li>遇到乱码？<strong>🔍查找</strong>定位 → <strong>🎲批量重Roll</strong>修复</li>
                         <li>某条目不满意？点<strong>🎯</strong>单独重Roll，可添加提示词指导</li>
                         <li>AI输出thinking标签？<strong>🏷️清除标签</strong>一键清理</li>
+                        <li>消息链角色不生效？切换<strong>自定义API模式</strong>（酒馆API会覆盖角色设置）</li>
                         <li>同一事物多个名字？<strong>🔗别名合并</strong>自动识别</li>
                         <li>担心进度丢失？随时<strong>📤导出任务</strong>保存</li>
                         <li>导出时控制位置？点分类或条目旁的<strong>⚙️</strong>按钮配置</li>
@@ -8766,6 +8772,13 @@ ${pairsContent}
             customApiSection.style.display = useTavernApi ? 'none' : 'block';
         }
         settings.useTavernApi = useTavernApi;
+        // 显示/隐藏消息链酒馆API警告
+        const chainWarning = document.getElementById('ttw-chain-tavern-warning');
+        if (chainWarning) {
+            const chain = settings.promptMessageChain || [];
+            const hasNonUserRole = chain.some(m => m.enabled !== false && m.role !== 'user');
+            chainWarning.style.display = (useTavernApi && hasNonUserRole) ? 'block' : 'none';
+        }
     }
 
     function handleProviderChange() {
@@ -8903,7 +8916,7 @@ ${pairsContent}
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v3.0.7 </span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v3.0.8 </span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -9167,6 +9180,10 @@ ${pairsContent}
                                             <div class="ttw-setting-hint" style="margin-bottom:8px;line-height:1.6;">
                                                 💬 配置发送给AI的消息链（类似对话补全预设）。每条消息可指定角色。<br>
                                                 <code style="background:rgba(0,0,0,0.3);padding:2px 6px;border-radius:3px;font-size:11px;">{PROMPT}</code> 占位符会被替换为实际组装好的提示词内容。
+                                            </div>
+                                            <div id="ttw-chain-tavern-warning" style="display:none;margin-bottom:8px;padding:8px 10px;background:rgba(231,76,60,0.15);border-left:3px solid #e74c3c;border-radius:0 6px 6px 0;font-size:11px;color:#e74c3c;line-height:1.6;">
+                                                ⚠️ <strong>酒馆API模式下</strong>，消息角色（system/assistant）会被酒馆的提示词后处理覆盖，且可能注入预设JB内容。<br>
+                                                要让角色设置完全生效，请切换到<strong>自定义API模式</strong>（直连API，不经过酒馆处理）。
                                             </div>
                                             <div id="ttw-message-chain-list" style="margin-bottom:8px;"></div>
                                             <div style="display:flex;gap:8px;flex-wrap:wrap;">
