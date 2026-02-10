@@ -6,33 +6,23 @@
 (function () {
     'use strict';
 
-    const MODULE = 'WBExport';
+    let loadedBooks = {};   // name → data
+    let isWorking = false;
 
-    function log(msg, type = 'info') {
-        const icons = { info: '📘', success: '✅', warning: '⚠️', error: '❌', debug: '🔍' };
-        console.log(`[${MODULE}] ${icons[type] || 'ℹ️'} ${msg}`);
-    }
-
-    // ============================================================
+    // ============================================
     // 获取当前已启用的世界书名称
-    // ============================================================
+    // ============================================
 
     function getActiveWorldBookNames() {
         const names = new Set();
 
-        // ---- 方式1: SillyTavern.getContext() ----
+        // 方式1: SillyTavern.getContext()
         try {
             if (typeof SillyTavern !== 'undefined' && SillyTavern.getContext) {
                 const ctx = SillyTavern.getContext();
-
-                // 全局已启用的世界书
                 if (Array.isArray(ctx.selected_world_info)) {
-                    ctx.selected_world_info.forEach(n => {
-                        if (n && typeof n === 'string' && n.trim()) names.add(n.trim());
-                    });
+                    ctx.selected_world_info.forEach(n => { if (n?.trim()) names.add(n.trim()); });
                 }
-
-                // 当前角色绑定的世界书
                 const charData = ctx.characters?.[ctx.characterId]?.data;
                 if (charData?.extensions?.world) {
                     const cw = charData.extensions.world;
@@ -40,35 +30,26 @@
                     if (Array.isArray(cw)) cw.forEach(n => { if (n?.trim()) names.add(n.trim()); });
                 }
             }
-        } catch (e) {
-            log('getContext方式获取失败: ' + e.message, 'warning');
-        }
+        } catch (e) { console.warn('[WBExport] getContext获取失败:', e.message); }
 
-        // ---- 方式2: 从DOM获取已选中的全局世界书 ----
+        // 方式2: DOM
         try {
             $('#world_info option:selected, #world_info_global option:selected').each(function () {
                 const val = $(this).val()?.trim();
-                if (val && val !== 'None' && val !== 'none' && val !== '') {
-                    names.add(val);
-                }
+                if (val && val !== 'None' && val !== 'none' && val !== '') names.add(val);
             });
-            // 世界书标签
             $('.world_info_tag, .tag.world_info_tag, #WorldInfo .tag').each(function () {
                 const val = $(this).data('name') || $(this).attr('data-name') || $(this).text()?.trim();
-                if (val && val !== 'None' && val !== 'none') {
-                    names.add(val.replace(/×$/, '').trim());
-                }
+                if (val && val !== 'None' && val !== 'none') names.add(val.replace(/×$/, '').trim());
             });
             $('#world_info .tag_remove').each(function () {
-                const parent = $(this).parent();
-                const val = parent.data('name') || parent.text()?.trim();
+                const p = $(this).parent();
+                const val = p.data('name') || p.text()?.trim();
                 if (val) names.add(val.replace(/×$/, '').trim());
             });
-        } catch (e) {
-            log('DOM方式获取失败: ' + e.message, 'warning');
-        }
+        } catch (e) { /* ignore */ }
 
-        // ---- 方式3: chat_metadata ----
+        // 方式3: chat_metadata
         try {
             if (typeof SillyTavern !== 'undefined' && SillyTavern.getContext) {
                 const meta = SillyTavern.getContext().chat_metadata;
@@ -80,9 +61,9 @@
             }
         } catch (e) { /* ignore */ }
 
-        // ---- 方式4: 全局变量 ----
+        // 方式4: 全局变量
         try {
-            if (typeof window.selected_world_info !== 'undefined' && Array.isArray(window.selected_world_info)) {
+            if (Array.isArray(window.selected_world_info)) {
                 window.selected_world_info.forEach(n => { if (n?.trim()) names.add(n.trim()); });
             }
         } catch (e) { /* ignore */ }
@@ -90,7 +71,7 @@
         return Array.from(names).sort((a, b) => a.localeCompare(b, 'zh-CN'));
     }
 
-    // 兜底：获取全部世界书名称
+    // 兜底：获取全部世界书
     async function getAllWorldBookNames() {
         const names = new Set();
         $('#world_info option, #world_editor_select option').each(function () {
@@ -116,9 +97,9 @@
         return Array.from(names).sort((a, b) => a.localeCompare(b, 'zh-CN'));
     }
 
-    // ============================================================
+    // ============================================
     // 加载世界书数据
-    // ============================================================
+    // ============================================
 
     async function loadWorldBookData(name) {
         try {
@@ -129,9 +110,7 @@
                     if (data?.entries) return data;
                 }
             }
-        } catch (e) {
-            log(`getContext加载 ${name} 失败: ${e.message}`, 'debug');
-        }
+        } catch (e) { /* fallback */ }
 
         try {
             const resp = await fetch('/api/worldinfo/get', {
@@ -144,20 +123,16 @@
                 if (data?.entries) return data;
                 if (data && typeof data === 'object') {
                     const keys = Object.keys(data);
-                    if (keys.length > 0 && data[keys[0]]?.uid !== undefined) {
-                        return { entries: data };
-                    }
+                    if (keys.length > 0 && data[keys[0]]?.uid !== undefined) return { entries: data };
                 }
             }
-        } catch (e) {
-            log(`fetch加载 ${name} 失败: ${e.message}`, 'error');
-        }
+        } catch (e) { /* ignore */ }
         return null;
     }
 
-    // ============================================================
+    // ============================================
     // 导出工具
-    // ============================================================
+    // ============================================
 
     function downloadJson(data, filename) {
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
@@ -165,10 +140,10 @@
         const a = document.createElement('a');
         a.href = url;
         a.download = filename.endsWith('.json') ? filename : filename + '.json';
-        a.style.display = 'none';
         document.body.appendChild(a);
         a.click();
-        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     }
 
     function mergeWorldBooks(booksMap) {
@@ -189,259 +164,294 @@
     }
 
     function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-    function esc(s) { const d = document.createElement('span'); d.textContent = s; return d.innerHTML; }
 
-    // ============================================================
-    // UI 弹窗 - 从底部弹出，适配手机
-    // ============================================================
-
-    let modalEl = null;
-    let loadedBooks = {};
-    let isWorking = false;
-
-    function injectStyles() {
-        if (document.getElementById('wbe-css')) return;
-        const s = document.createElement('style');
-        s.id = 'wbe-css';
-        s.textContent = `
-/* ===== 底部弹出式弹窗，手机友好 ===== */
-.wbe-overlay {
-    position: fixed; inset: 0;
-    background: rgba(0,0,0,0.7);
-    z-index: 99999;
-    display: flex; align-items: flex-end; justify-content: center;
-    animation: wbeFade .15s ease;
-}
-@keyframes wbeFade { from{opacity:0} to{opacity:1} }
-
-.wbe-dialog {
-    background: var(--SmartThemeBlurTintColor, #1a1a2e);
-    border: 1px solid var(--SmartThemeBorderColor, #444);
-    border-bottom: none;
-    border-radius: 16px 16px 0 0;
-    width: 100%; max-width: 560px;
-    max-height: 75vh;
-    display: flex; flex-direction: column;
-    overflow: hidden;
-    box-shadow: 0 -4px 32px rgba(0,0,0,0.4);
-    animation: wbeSlide .2s ease;
-}
-@keyframes wbeSlide { from{transform:translateY(40%);opacity:0} to{transform:translateY(0);opacity:1} }
-
-.wbe-handle {
-    width: 36px; height: 4px;
-    background: rgba(255,255,255,0.25);
-    border-radius: 2px;
-    margin: 10px auto 4px;
-    flex-shrink: 0;
-}
-.wbe-title-row {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 2px 16px 10px; flex-shrink: 0;
-}
-.wbe-title-row h3 { margin: 0; font-size: 15px; }
-.wbe-close {
-    cursor: pointer; font-size: 20px; opacity: 0.5;
-    padding: 4px 8px; border-radius: 6px; line-height: 1;
-}
-.wbe-close:hover { opacity: 1; background: rgba(255,255,255,0.1); }
-
-/* 进度 */
-.wbe-prog { padding: 0 16px 8px; flex-shrink: 0; }
-.wbe-prog-bg {
-    width: 100%; height: 5px;
-    background: rgba(255,255,255,0.08);
-    border-radius: 3px; overflow: hidden;
-}
-.wbe-prog-fill {
-    height: 100%; width: 0%;
-    background: linear-gradient(90deg, #1abc9c, #2ecc71);
-    border-radius: 3px; transition: width .25s ease;
-}
-.wbe-prog-txt {
-    font-size: 11px; opacity: 0.6;
-    margin-top: 4px; text-align: center;
-    min-height: 16px;
-}
-
-/* 列表 */
-.wbe-list {
-    flex: 1; overflow-y: auto;
-    padding: 2px 16px 6px;
-    min-height: 80px;
-}
-.wbe-list::-webkit-scrollbar { width: 4px; }
-.wbe-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
-
-.wbe-empty {
-    text-align: center; padding: 28px 16px;
-    opacity: 0.5; font-size: 13px; line-height: 1.8;
-}
-
-.wbe-item {
-    display: flex; align-items: center; gap: 8px;
-    padding: 9px 10px;
-    border: 1px solid var(--SmartThemeBorderColor, #333);
-    border-radius: 8px;
-    margin-bottom: 5px;
-    cursor: pointer; user-select: none;
-    transition: .12s;
-}
-.wbe-item:active { transform: scale(0.98); }
-.wbe-item.sel { background: rgba(26,188,156,0.1); border-color: rgba(26,188,156,0.4); }
-.wbe-item.err { opacity: 0.4; cursor: not-allowed; }
-.wbe-item input[type="checkbox"] {
-    width: 17px; height: 17px; flex-shrink: 0;
-    accent-color: #1abc9c; cursor: pointer;
-}
-.wbe-nm {
-    flex: 1; font-size: 13px; font-weight: 600;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.wbe-bds { display: flex; gap: 3px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
-.wbe-bd {
-    font-size: 10px; padding: 1px 6px;
-    border-radius: 9px; white-space: nowrap;
-    background: rgba(255,255,255,0.07);
-}
-.wbe-bd.g { background: rgba(46,204,113,0.2); color: #2ecc71; }
-.wbe-bd.r { background: rgba(231,76,60,0.2); color: #e74c3c; }
-
-/* 底部按钮 */
-.wbe-acts {
-    display: flex; gap: 8px;
-    padding: 10px 16px;
-    padding-bottom: max(10px, env(safe-area-inset-bottom));
-    border-top: 1px solid var(--SmartThemeBorderColor, #444);
-    flex-shrink: 0;
-}
-.wbe-acts .menu_button {
-    flex: 1; padding: 10px 8px !important;
-    font-size: 13px !important; border-radius: 8px; font-weight: 600;
-}
-.wbe-acts .menu_button:disabled { opacity: 0.4; }
-`;
-        document.head.appendChild(s);
-    }
+    // ============================================
+    // 创建弹窗UI（参照epubToTxt风格）
+    // ============================================
 
     function createModal() {
-        if (modalEl) modalEl.remove();
-        injectStyles();
-        loadedBooks = {};
+        $('#wb-export-modal').remove();
 
-        modalEl = document.createElement('div');
-        modalEl.id = 'wbe-modal';
-        modalEl.innerHTML = `
-<div class="wbe-overlay">
-  <div class="wbe-dialog">
-    <div class="wbe-handle"></div>
-    <div class="wbe-title-row">
-      <h3>📤 导出已启用世界书</h3>
-      <span class="wbe-close">✕</span>
-    </div>
-    <div class="wbe-prog" id="wbe-prog">
-      <div class="wbe-prog-bg"><div class="wbe-prog-fill" id="wbe-pf"></div></div>
-      <div class="wbe-prog-txt" id="wbe-pt">准备中...</div>
-    </div>
-    <div id="wbe-list" class="wbe-list">
-      <div class="wbe-empty">⏳ 正在获取已启用的世界书...</div>
-    </div>
-    <div class="wbe-acts">
-      <button id="wbe-sep" class="menu_button" style="background:linear-gradient(135deg,#27ae60,#229954);" disabled>
-        📥 分别导出
-      </button>
-      <button id="wbe-mrg" class="menu_button" style="background:linear-gradient(135deg,#2980b9,#2471a3);" disabled>
-        📦 合并导出
-      </button>
-    </div>
-  </div>
-</div>`;
-        document.body.appendChild(modalEl);
+        const modalHtml = `
+        <div id="wb-export-modal" style="
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.75);
+            z-index: 99999;
+            overflow-y: auto;
+        ">
+            <div style="
+                display: flex;
+                justify-content: center;
+                align-items: flex-start;
+                min-height: 100%;
+                padding: 20px;
+                box-sizing: border-box;
+            ">
+                <div style="
+                    background: var(--SmartThemeBlurTintColor, #1a1a2e);
+                    border: 1px solid var(--SmartThemeBorderColor, #444);
+                    border-radius: 12px;
+                    padding: 20px;
+                    width: 100%;
+                    max-width: 500px;
+                    color: var(--SmartThemeBodyColor, #fff);
+                    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+                    margin: 20px 0;
+                ">
+                    <h3 style="margin: 0 0 15px 0; text-align: center; font-size: 18px;">
+                        📤 导出已启用世界书
+                    </h3>
 
-        // 防止手机touch穿透：300ms内禁止关闭
-        let canClose = false;
-        setTimeout(() => { canClose = true; }, 350);
+                    <div style="display: flex; flex-direction: column; gap: 12px;">
 
-        const tryClose = () => { if (canClose) closeModal(); };
+                        <!-- 进度区 -->
+                        <div id="wbe-progress" style="
+                            display: none;
+                            text-align: center;
+                            padding: 10px;
+                            background: rgba(26, 188, 156, 0.15);
+                            border-radius: 8px;
+                        ">
+                            <div style="
+                                width: 100%; height: 6px;
+                                background: rgba(255,255,255,0.1);
+                                border-radius: 3px;
+                                overflow: hidden;
+                                margin-bottom: 8px;
+                            ">
+                                <div id="wbe-progress-bar" style="
+                                    height: 100%; width: 0%;
+                                    background: linear-gradient(90deg, #1abc9c, #2ecc71);
+                                    border-radius: 3px;
+                                    transition: width 0.25s ease;
+                                "></div>
+                            </div>
+                            <span id="wbe-progress-text" style="font-size: 13px;">⏳ 正在扫描...</span>
+                        </div>
 
-        // 绑定
-        modalEl.querySelector('.wbe-close').onclick = tryClose;
-        modalEl.querySelector('.wbe-overlay').addEventListener('click', e => {
-            if (e.target.classList.contains('wbe-overlay')) tryClose();
+                        <!-- 世界书列表 -->
+                        <div id="wbe-book-list" style="
+                            min-height: 80px;
+                            max-height: 400px;
+                            overflow-y: auto;
+                            border: 1px dashed #666;
+                            border-radius: 8px;
+                            padding: 8px;
+                        ">
+                            <div id="wbe-empty-tip" style="
+                                text-align: center;
+                                color: #888;
+                                padding: 25px 10px;
+                                font-size: 14px;
+                            ">
+                                点击「🔍 扫描世界书」开始
+                            </div>
+                        </div>
+
+                        <!-- 操作按钮 -->
+                        <button id="wbe-scan-btn" class="menu_button" style="
+                            background: linear-gradient(135deg, #1abc9c, #16a085) !important;
+                            padding: 12px 20px !important;
+                            font-size: 15px !important;
+                            border-radius: 8px !important;
+                            width: 100%;
+                        ">
+                            🔍 扫描世界书
+                        </button>
+
+                        <div style="display: flex; gap: 10px;">
+                            <button id="wbe-sel-all-btn" class="menu_button" style="
+                                background: #3498db !important;
+                                padding: 8px 12px !important;
+                                flex: 1;
+                                font-size: 13px !important;
+                            ">
+                                ☑ 全选
+                            </button>
+                            <button id="wbe-sel-none-btn" class="menu_button" style="
+                                background: #2980b9 !important;
+                                padding: 8px 12px !important;
+                                flex: 1;
+                                font-size: 13px !important;
+                            ">
+                                ☐ 全不选
+                            </button>
+                        </div>
+
+                        <div style="display: flex; gap: 10px;">
+                            <button id="wbe-export-sep-btn" class="menu_button" style="
+                                background: linear-gradient(135deg, #27ae60, #229954) !important;
+                                padding: 10px 15px !important;
+                                flex: 1;
+                                font-size: 14px !important;
+                            ">
+                                📥 分别导出
+                            </button>
+                            <button id="wbe-export-merge-btn" class="menu_button" style="
+                                background: linear-gradient(135deg, #2980b9, #2471a3) !important;
+                                padding: 10px 15px !important;
+                                flex: 1;
+                                font-size: 14px !important;
+                            ">
+                                📦 合并导出
+                            </button>
+                        </div>
+
+                        <button id="wbe-close-btn" class="menu_button" style="
+                            background: #555 !important;
+                            padding: 10px 15px !important;
+                            font-size: 14px !important;
+                            width: 100%;
+                        ">
+                            ✖ 关闭
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <style>
+            .wbe-book-item {
+                display: flex;
+                align-items: center;
+                padding: 8px;
+                margin: 4px 0;
+                background: rgba(255,255,255,0.1);
+                border-radius: 6px;
+                gap: 8px;
+                cursor: pointer;
+                user-select: none;
+                transition: background 0.12s;
+            }
+            .wbe-book-item:active {
+                background: rgba(255,255,255,0.15);
+            }
+            .wbe-book-item.selected {
+                background: rgba(26, 188, 156, 0.2);
+            }
+            .wbe-book-item input[type="checkbox"] {
+                width: 17px; height: 17px;
+                flex-shrink: 0;
+                accent-color: #1abc9c;
+                cursor: pointer;
+            }
+            .wbe-book-item .wbe-bk-name {
+                flex: 1;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                font-size: 13px;
+                font-weight: 600;
+                min-width: 0;
+            }
+            .wbe-book-item .wbe-bk-tags {
+                display: flex;
+                gap: 4px;
+                flex-shrink: 0;
+                flex-wrap: wrap;
+                justify-content: flex-end;
+            }
+            .wbe-bk-tag {
+                font-size: 10px;
+                padding: 2px 7px;
+                border-radius: 10px;
+                white-space: nowrap;
+                background: rgba(255,255,255,0.08);
+            }
+            .wbe-bk-tag.tag-on { background: rgba(46,204,113,0.2); color: #2ecc71; }
+            .wbe-bk-tag.tag-off { background: rgba(231,76,60,0.2); color: #e74c3c; }
+            .wbe-bk-tag.tag-err { background: rgba(231,76,60,0.15); color: #e74c3c; }
+        </style>`;
+
+        $('body').append(modalHtml);
+        bindModalEvents();
+    }
+
+    // ============================================
+    // 绑定弹窗事件
+    // ============================================
+
+    function bindModalEvents() {
+        $('#wbe-scan-btn').on('click', startScan);
+        $('#wbe-sel-all-btn').on('click', () => toggleAll(true));
+        $('#wbe-sel-none-btn').on('click', () => toggleAll(false));
+        $('#wbe-export-sep-btn').on('click', doExportSep);
+        $('#wbe-export-merge-btn').on('click', doExportMerge);
+        $('#wbe-close-btn').on('click', closeModal);
+
+        // 点击遮罩关闭
+        $('#wb-export-modal').on('click', function (e) {
+            if (e.target.id === 'wb-export-modal') {
+                closeModal();
+            }
         });
-        // 阻止overlay上的touchend穿透
-        modalEl.querySelector('.wbe-dialog').addEventListener('click', e => { e.stopPropagation(); });
-        const escH = e => { if (e.key === 'Escape' && modalEl) { tryClose(); document.removeEventListener('keydown', escH); } };
-        document.addEventListener('keydown', escH);
-
-        document.getElementById('wbe-sep').onclick = doExportSep;
-        document.getElementById('wbe-mrg').onclick = doExportMerge;
     }
 
-    function closeModal() { if (modalEl) { modalEl.remove(); modalEl = null; } }
+    // ============================================
+    // 进度控制
+    // ============================================
 
-    function prog(pct, txt) {
-        const f = document.getElementById('wbe-pf');
-        const t = document.getElementById('wbe-pt');
-        if (f) f.style.width = Math.min(100, Math.max(0, pct)) + '%';
-        if (t) t.textContent = txt || '';
+    function showProgress(pct, text) {
+        $('#wbe-progress').show();
+        $('#wbe-progress-bar').css('width', Math.min(100, Math.max(0, pct)) + '%');
+        $('#wbe-progress-text').text(text || '');
     }
 
-    function hideProg() {
-        const el = document.getElementById('wbe-prog');
-        if (el) el.style.display = 'none';
+    function hideProgress() {
+        $('#wbe-progress').hide();
     }
 
-    // ============================================================
-    // 主流程
-    // ============================================================
+    // ============================================
+    // 扫描主流程
+    // ============================================
 
     async function startScan() {
         if (isWorking) return;
         isWorking = true;
         loadedBooks = {};
 
-        const listEl = document.getElementById('wbe-list');
-        if (!listEl) { isWorking = false; return; }
-
-        prog(5, '🔍 正在获取已启用的世界书名称...');
-        await sleep(50); // 让UI渲染
+        const listEl = $('#wbe-book-list');
+        showProgress(5, '🔍 正在获取已启用的世界书名称...');
+        await sleep(50);
 
         // 获取已启用的世界书
         let names = getActiveWorldBookNames();
-        let isFallback = false;
-
-        log(`已启用的世界书: [${names.join(', ')}]`, 'debug');
+        console.log('[WBExport] 已启用世界书:', names);
 
         if (names.length === 0) {
-            prog(10, '⚠️ 未检测到已启用世界书，获取全部列表...');
+            showProgress(10, '⚠️ 未检测到已启用世界书，获取全部列表...');
             names = await getAllWorldBookNames();
-            isFallback = true;
             if (names.length > 0) {
                 toastr.info(`未检测到已启用世界书，已列出全部 ${names.length} 个`);
             }
         }
 
         if (names.length === 0) {
-            listEl.innerHTML = `<div class="wbe-empty">
-                😕 未找到任何世界书<br><br>
-                <span style="font-size:11px;">请确保SillyTavern中有世界书<br>且已在当前聊天中启用</span>
-            </div>`;
-            prog(100, '❌ 未找到世界书');
+            listEl.html(`
+                <div style="text-align:center; color:#888; padding:25px 10px; font-size:14px;">
+                    😕 未找到任何世界书<br>
+                    <small>请确保SillyTavern中有世界书且已启用</small>
+                </div>
+            `);
+            showProgress(100, '❌ 未找到世界书');
+            setTimeout(hideProgress, 2000);
             isWorking = false;
             return;
         }
 
-        prog(15, `📚 找到 ${names.length} 个世界书，开始加载...`);
-        listEl.innerHTML = '';
+        showProgress(15, `📚 找到 ${names.length} 个世界书，开始加载数据...`);
+        listEl.empty();
 
         const total = names.length;
         let loaded = 0, failed = 0;
 
         for (const name of names) {
-            const pct = 15 + Math.round(((loaded) / total) * 80);
-            prog(pct, `📖 (${loaded + 1}/${total}) ${name}`);
-            await sleep(30); // 让进度条UI更新
+            const pct = 15 + Math.round((loaded / total) * 80);
+            showProgress(pct, `📖 加载中 (${loaded + 1}/${total}): ${name}`);
+            await sleep(30);
 
             const data = await loadWorldBookData(name);
             loaded++;
@@ -450,81 +460,87 @@
                 loadedBooks[name] = data;
                 const arr = Object.values(data.entries);
                 const en = arr.filter(e => !e.disable).length;
-                listEl.appendChild(mkItem(name, arr.length, en, true));
+                listEl.append(makeBookItem(name, arr.length, en, true));
             } else {
                 failed++;
-                listEl.appendChild(mkItem(name, 0, 0, false));
+                listEl.append(makeBookItem(name, 0, 0, false));
             }
         }
 
         const ok = Object.keys(loadedBooks).length;
-        prog(100, `✅ 加载完成！成功 ${ok} 个` + (failed ? ` / 失败 ${failed} 个` : ''));
-        setTimeout(hideProg, 1500);
+        showProgress(100, `✅ 加载完成！成功 ${ok} 个` + (failed ? ` / 失败 ${failed} 个` : ''));
+        setTimeout(hideProgress, 1500);
 
-        // 默认全选
+        // 默认全选成功的
         toggleAll(true);
-        updateBtns();
+        // 把扫描按钮改为刷新
+        $('#wbe-scan-btn').html('🔄 重新扫描');
+
         isWorking = false;
     }
 
-    function mkItem(name, total, enabled, ok) {
-        const div = document.createElement('div');
-        div.className = 'wbe-item' + (ok ? ' sel' : ' err');
-        div.dataset.name = name;
+    // ============================================
+    // 创建世界书列表项
+    // ============================================
 
-        let bds = '';
+    function makeBookItem(name, total, enabled, ok) {
+        const safeName = $('<span>').text(name).html();
+
+        let tagsHtml = '';
         if (ok) {
-            bds += `<span class="wbe-bd g">✅${enabled}</span>`;
-            if (total - enabled > 0) bds += `<span class="wbe-bd r">⛔${total - enabled}</span>`;
-            bds += `<span class="wbe-bd">共${total}</span>`;
+            tagsHtml += `<span class="wbe-bk-tag tag-on">✅${enabled}启用</span>`;
+            if (total - enabled > 0) tagsHtml += `<span class="wbe-bk-tag tag-off">⛔${total - enabled}禁用</span>`;
+            tagsHtml += `<span class="wbe-bk-tag">共${total}条</span>`;
         } else {
-            bds = `<span class="wbe-bd r">⚠️失败</span>`;
+            tagsHtml = `<span class="wbe-bk-tag tag-err">⚠️加载失败</span>`;
         }
 
-        div.innerHTML = `
-            <input type="checkbox" class="wbe-cb" data-name="${esc(name)}" ${ok ? 'checked' : 'disabled'}>
-            <span class="wbe-nm" title="${esc(name)}">${esc(name)}</span>
-            <div class="wbe-bds">${bds}</div>`;
+        const item = $(`
+            <div class="wbe-book-item ${ok ? 'selected' : ''}" data-name="${safeName}">
+                <input type="checkbox" class="wbe-bk-cb" data-name="${safeName}" ${ok ? 'checked' : 'disabled'}>
+                <span class="wbe-bk-name" title="${safeName}">${safeName}</span>
+                <div class="wbe-bk-tags">${tagsHtml}</div>
+            </div>
+        `);
 
-        div.addEventListener('click', e => {
+        // 点击整行切换
+        item.on('click', function (e) {
             if (!ok) return;
-            const cb = div.querySelector('.wbe-cb');
-            if (e.target !== cb) cb.checked = !cb.checked;
-            div.classList.toggle('sel', cb.checked);
-            updateBtns();
+            const cb = $(this).find('.wbe-bk-cb');
+            if (!$(e.target).is('input')) {
+                cb.prop('checked', !cb.prop('checked'));
+            }
+            $(this).toggleClass('selected', cb.prop('checked'));
         });
-        return div;
+
+        return item;
     }
 
-    function getChecked() {
+    // ============================================
+    // 选择操作
+    // ============================================
+
+    function getCheckedNames() {
         const r = [];
-        document.querySelectorAll('.wbe-cb:checked').forEach(cb => r.push(cb.dataset.name));
+        $('.wbe-bk-cb:checked').each(function () { r.push($(this).data('name')); });
         return r;
     }
 
-    function toggleAll(v) {
-        document.querySelectorAll('.wbe-item:not(.err)').forEach(it => {
-            const cb = it.querySelector('.wbe-cb');
-            cb.checked = v;
-            it.classList.toggle('sel', v);
+    function toggleAll(checked) {
+        $('.wbe-book-item').each(function () {
+            const cb = $(this).find('.wbe-bk-cb');
+            if (cb.prop('disabled')) return;
+            cb.prop('checked', checked);
+            $(this).toggleClass('selected', checked);
         });
-        updateBtns();
     }
 
-    function updateBtns() {
-        const n = getChecked().length;
-        const s = document.getElementById('wbe-sep');
-        const m = document.getElementById('wbe-mrg');
-        if (s) { s.disabled = !n; s.textContent = n ? `📥 分别导出(${n})` : '📥 分别导出'; }
-        if (m) { m.disabled = !n; m.textContent = n ? `📦 合并导出(${n})` : '📦 合并导出'; }
-    }
-
-    // ============================================================
+    // ============================================
     // 导出
-    // ============================================================
+    // ============================================
 
     async function doExportSep() {
-        const names = getChecked();
+        const names = getCheckedNames();
         if (!names.length) { toastr.warning('请先选择世界书'); return; }
         let ok = 0;
         for (let i = 0; i < names.length; i++) {
@@ -536,7 +552,7 @@
     }
 
     async function doExportMerge() {
-        const names = getChecked();
+        const names = getCheckedNames();
         if (!names.length) { toastr.warning('请先选择世界书'); return; }
         const books = {};
         names.forEach(n => { if (loadedBooks[n]) books[n] = loadedBooks[n]; });
@@ -547,21 +563,44 @@
         toastr.success(`已合并 ${Object.keys(books).length} 个世界书，共 ${count} 条`);
     }
 
-    // ============================================================
-    // 公开接口
-    // ============================================================
+    // ============================================
+    // 打开/关闭
+    // ============================================
 
-    async function open() {
-        createModal();
-        try {
-            await startScan();
-        } catch (e) {
-            log('扫描出错: ' + e.message, 'error');
-            prog(100, '❌ 出错: ' + e.message);
-            isWorking = false;
+    function openModal() {
+        if ($('#wb-export-modal').length === 0) {
+            createModal();
         }
+        loadedBooks = {};
+        hideProgress();
+        // 重置列表
+        $('#wbe-book-list').html(`
+            <div style="text-align:center; color:#888; padding:25px 10px; font-size:14px;">
+                点击「🔍 扫描世界书」开始
+            </div>
+        `);
+        $('#wbe-scan-btn').html('🔍 扫描世界书');
+        $('#wb-export-modal').css('display', 'block');
+        $('body').css('overflow', 'hidden');
+
+        // 自动开始扫描
+        setTimeout(() => startScan(), 100);
     }
 
-    window.WorldbookExport = { open };
-    log('世界书导出模块已注册', 'success');
+    function closeModal() {
+        $('#wb-export-modal').hide();
+        $('body').css('overflow', '');
+    }
+
+    // ============================================
+    // 公开接口
+    // ============================================
+
+    window.WorldbookExport = {
+        open: openModal,
+        close: closeModal
+    };
+
+    console.log('[WBExport] 📤 世界书导出模块已加载');
+
 })();
