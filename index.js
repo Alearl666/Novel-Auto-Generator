@@ -72,6 +72,15 @@ function createUI() {
                     <div style="margin-top: 10px; font-size: 12px; opacity: 0.7; text-align: center;">
                         将EPUB电子书转换为TXT纯文本格式
                     </div>
+                    
+                    <div class="nag-btn-row" style="margin-top: 15px;">
+                        <button id="nag-btn-worldbook-export" class="menu_button" style="background: linear-gradient(135deg, #1abc9c, #16a085); width: 100%;">
+                            📤 世界书导出
+                        </button>
+                    </div>
+                    <div style="margin-top: 10px; font-size: 12px; opacity: 0.7; text-align: center;">
+                        一键导出有激活条目的世界书
+                    </div>
                 </div>
             </div>
         </div>
@@ -109,6 +118,26 @@ function bindEvents() {
             toastr.error('EPUB转TXT模块未加载');
         }
     });
+    
+    $('#nag-btn-worldbook-export').on('click', async () => {
+        if (typeof window.WorldbookExport === 'undefined') {
+            try {
+                toastr.info('正在加载世界书导出模块...');
+                await loadScript('worldbookExport.js');
+            } catch (e) {
+                toastr.error('世界书导出模块加载失败');
+                console.error('[NovelGen] 加载worldbookExport.js失败:', e);
+                console.error('[NovelGen] 尝试加载路径:', `${extensionFolderPath}/worldbookExport.js`);
+                return;
+            }
+        }
+        
+        if (typeof window.WorldbookExport !== 'undefined') {
+            window.WorldbookExport.open();
+        } else {
+            toastr.error('世界书导出模块未加载');
+        }
+    });
 }
 
 // ============================================
@@ -126,6 +155,13 @@ jQuery(async () => {
         log('EPUB转TXT模块已加载', 'success');
     } catch (e) {
         log('EPUB转TXT模块将在点击时加载', 'warning');
+    }
+    
+    try {
+        await loadScript('worldbookExport.js');
+        log('世界书导出模块已加载', 'success');
+    } catch (e) {
+        log('世界书导出模块将在点击时加载', 'warning');
     }
     
     log('文件转换工具扩展已加载', 'success');
