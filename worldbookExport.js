@@ -358,12 +358,20 @@
 </div>`;
         document.body.appendChild(modalEl);
 
+        // 防止手机touch穿透：300ms内禁止关闭
+        let canClose = false;
+        setTimeout(() => { canClose = true; }, 350);
+
+        const tryClose = () => { if (canClose) closeModal(); };
+
         // 绑定
-        modalEl.querySelector('.wbe-close').onclick = closeModal;
+        modalEl.querySelector('.wbe-close').onclick = tryClose;
         modalEl.querySelector('.wbe-overlay').addEventListener('click', e => {
-            if (e.target.classList.contains('wbe-overlay')) closeModal();
+            if (e.target.classList.contains('wbe-overlay')) tryClose();
         });
-        const escH = e => { if (e.key === 'Escape' && modalEl) { closeModal(); document.removeEventListener('keydown', escH); } };
+        // 阻止overlay上的touchend穿透
+        modalEl.querySelector('.wbe-dialog').addEventListener('click', e => { e.stopPropagation(); });
+        const escH = e => { if (e.key === 'Escape' && modalEl) { tryClose(); document.removeEventListener('keydown', escH); } };
         document.addEventListener('keydown', escH);
 
         document.getElementById('wbe-sep').onclick = doExportSep;
@@ -545,7 +553,13 @@
 
     async function open() {
         createModal();
-        await startScan();
+        try {
+            await startScan();
+        } catch (e) {
+            log('扫描出错: ' + e.message, 'error');
+            prog(100, '❌ 出错: ' + e.message);
+            isWorking = false;
+        }
     }
 
     window.WorldbookExport = { open };
