@@ -1,21 +1,13 @@
 /**
- * TXT转世界书独立模块 v3.0.8
- * v3.0.5 修复:
- *   - 修复isTokenLimitError误匹配：/exceeded/i过于宽泛导致正常AI响应被误判为Token超限
- *   - 新增「导出名称」输入框：小说名持久化存储，关闭UI重开/导入任务后导出文件名不再丢失
- * v3.0.6 修复:
- *   - 修复AI输出JSON中未转义双引号导致内容截断（如"发神"中的"被误认为JSON字符串结束）
- *   - parseAIResponse新增repairJsonUnescapedQuotes修复步骤
- *   - extractWorldbookDataByRegex的"内容"提取改为智能判断"是否为真正的字符串结束引号
- * v3.0.7 修复:
- *   - 新增误触保护：主UI不再响应背景点击关闭，只能通过右上角✕按钮退出
- *   - ESC键改为只关闭子模态框（世界书预览、历史记录等），不会意外关闭主UI
- *   - 子模态框（预览/历史/合并等）仍保留背景点击关闭功能
+ * TXT转世界书独立模块 v3.0.9
  * v3.0.8 新增:
  *   - 消息链配置：发送给AI的提示词支持多消息格式，每条消息可指定角色（系统/用户/AI助手）
  *   - 酒馆API优先使用generateRaw消息数组格式（ST 1.13.2+），自动回退兼容旧版
  *   - 自定义API各provider原生支持多消息：OpenAI兼容/DeepSeek用messages[]，Gemini用systemInstruction+contents[]
  *   - 修复整理条目结果未过滤响应标签（thinking等标签残留在内容中）的bug
+ * v3.0.9 新增:
+ *   - 整理条目支持自定义提示词：可在整理条目弹窗中编辑提示词，支持重置回默认
+ *   - 整理条目提示词纳入导出/导入配置，跨设备同步
  */
 
 (function () {
@@ -321,6 +313,7 @@
         parallelMode: 'independent',
         useTavernApi: true,
         customMergePrompt: '',
+        customConsolidatePrompt: '',
         categoryLightSettings: null,
         defaultWorldbookEntries: '',
         customRerollPrompt: '',
@@ -4546,7 +4539,8 @@ ${generateDynamicJsonTemplate()}
         const entry = generatedWorldbook[category]?.[entryName];
         if (!entry || !entry['内容']) return;
 
-        const prompt = defaultConsolidatePrompt.replace('{CONTENT}', entry['内容']);
+        const consolidatePromptTemplate = settings.customConsolidatePrompt?.trim() || defaultConsolidatePrompt;
+        const prompt = consolidatePromptTemplate.replace('{CONTENT}', entry['内容']);
         let response = await callAPI(getLanguagePrefix() + prompt);
 
         // 【v3.0.8修复】应用响应过滤标签（移除thinking等）
@@ -4631,6 +4625,16 @@ ${generateDynamicJsonTemplate()}
                 <div class="ttw-modal-body" style="max-height:65vh;overflow-y:auto;">
                     <div style="margin-bottom:12px;padding:12px;background:rgba(52,152,219,0.15);border-radius:8px;">
                         <div style="font-size:12px;color:#ccc;">展开分类可多选具体条目。AI将去除重复信息并优化格式。</div>
+                    </div>
+                    <div style="margin-bottom:12px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                            <span style="font-weight:bold;font-size:12px;color:#e67e22;">📝 整理提示词</span>
+                            <button class="ttw-btn ttw-btn-small" id="ttw-consolidate-reset-prompt" style="font-size:10px;">🔄 恢复默认</button>
+                        </div>
+                        <textarea id="ttw-consolidate-prompt-input" rows="4" style="width:100%;padding:8px;border:1px solid #555;border-radius:6px;background:rgba(0,0,0,0.3);color:#fff;font-size:11px;resize:vertical;line-height:1.5;" placeholder="留空使用默认提示词...必须包含 {CONTENT} 占位符">${settings.customConsolidatePrompt || ''}</textarea>
+                        <div style="font-size:10px;color:#888;margin-top:4px;">
+                            留空使用默认。<code style="background:rgba(0,0,0,0.3);padding:1px 4px;border-radius:3px;color:#f39c12;">{CONTENT}</code> 占位符会被替换为条目原始内容。
+                        </div>
                     </div>
                     ${hasAnyFailed ? `
                     <div style="margin-bottom:12px;padding:10px;background:rgba(231,76,60,0.15);border:1px solid rgba(231,76,60,0.3);border-radius:6px;">
@@ -4753,6 +4757,22 @@ ${generateDynamicJsonTemplate()}
         modal.querySelector('.ttw-modal-close').addEventListener('click', () => modal.remove());
         modal.querySelector('#ttw-cancel-consolidate').addEventListener('click', () => modal.remove());
         modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+        // 整理提示词：恢复默认
+        modal.querySelector('#ttw-consolidate-reset-prompt').addEventListener('click', () => {
+            const textarea = modal.querySelector('#ttw-consolidate-prompt-input');
+            if (textarea) {
+                textarea.value = '';
+                settings.customConsolidatePrompt = '';
+                saveCurrentSettings();
+            }
+        });
+
+        // 整理提示词：实时保存
+        modal.querySelector('#ttw-consolidate-prompt-input').addEventListener('input', (e) => {
+            settings.customConsolidatePrompt = e.target.value;
+            saveCurrentSettings();
+        });
 
         modal.querySelector('#ttw-start-consolidate').addEventListener('click', async () => {
             const selectedEntries = [...modal.querySelectorAll('.ttw-consolidate-entry-cb:checked')].map(cb => ({
@@ -7594,6 +7614,7 @@ ${pairsContent}
                 stylePrompt: settings.customStylePrompt,
                 mergePrompt: settings.customMergePrompt,
                 rerollPrompt: settings.customRerollPrompt,
+                consolidatePrompt: settings.customConsolidatePrompt,
                 defaultWorldbookEntries: settings.defaultWorldbookEntries
             },
             promptMessageChain: settings.promptMessageChain
@@ -7607,7 +7628,7 @@ ${pairsContent}
         a.download = fileName;
         a.click();
         URL.revokeObjectURL(url);
-        alert('配置已导出！（包含提示词配置和默认世界书条目）');
+        alert('配置已导出！（包含提示词配置、整理条目提示词和默认世界书条目）');
     }
 
     // 修改：导入配置 - 包含默认世界书条目UI
@@ -7672,6 +7693,9 @@ ${pairsContent}
                     }
                     if (data.prompts.rerollPrompt !== undefined) {
                         settings.customRerollPrompt = data.prompts.rerollPrompt;
+                    }
+                    if (data.prompts.consolidatePrompt !== undefined) {
+                        settings.customConsolidatePrompt = data.prompts.consolidatePrompt;
                     }
                     if (data.prompts.defaultWorldbookEntries !== undefined) {
                         settings.defaultWorldbookEntries = data.prompts.defaultWorldbookEntries;
@@ -8412,7 +8436,7 @@ ${pairsContent}
                         <li><strong>🔍查找</strong>：搜索关键词高亮定位</li>
                         <li><strong>🔄替换</strong>：批量查找替换内容</li>
                         <li><strong>🏷️清除标签</strong>：清理AI输出的thinking等无用标签</li>
-                        <li><strong>🧹整理条目</strong>：AI优化指定分类的条目内容</li>
+                        <li><strong>🧹整理条目</strong>：AI优化指定分类的条目内容，支持自定义提示词和重置默认</li>
                         <li><strong>🔗别名合并</strong>：AI识别同一事物的不同名称并自动合并</li>
                     </ul>
                 </div>
@@ -8916,7 +8940,7 @@ ${pairsContent}
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v3.0.8 </span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v3.0.9 </span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -10703,5 +10727,5 @@ ${pairsContent}
         clearEntryRollHistory: (cat, entry) => MemoryHistoryDB.clearEntryRollResults(cat, entry)
     };
 
-    console.log('📚 TxtToWorldbook v3.0.8 已加载 - 新增: 消息链配置(多消息角色分配), 修复: 整理条目过滤标签');
+    console.log('📚 TxtToWorldbook v3.0.9 已加载 - 新增: 整理条目自定义提示词(支持修改/重置/导出导入)');
 })();
