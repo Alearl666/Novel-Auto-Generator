@@ -1,5 +1,16 @@
 /**
  * TXT转世界书独立模块 v3.0.9
+ * v3.0.5 修复:
+ *   - 修复isTokenLimitError误匹配：/exceeded/i过于宽泛导致正常AI响应被误判为Token超限
+ *   - 新增「导出名称」输入框：小说名持久化存储，关闭UI重开/导入任务后导出文件名不再丢失
+ * v3.0.6 修复:
+ *   - 修复AI输出JSON中未转义双引号导致内容截断（如"发神"中的"被误认为JSON字符串结束）
+ *   - parseAIResponse新增repairJsonUnescapedQuotes修复步骤
+ *   - extractWorldbookDataByRegex的"内容"提取改为智能判断"是否为真正的字符串结束引号
+ * v3.0.7 修复:
+ *   - 新增误触保护：主UI不再响应背景点击关闭，只能通过右上角✕按钮退出
+ *   - ESC键改为只关闭子模态框（世界书预览、历史记录等），不会意外关闭主UI
+ *   - 子模态框（预览/历史/合并等）仍保留背景点击关闭功能
  * v3.0.8 新增:
  *   - 消息链配置：发送给AI的提示词支持多消息格式，每条消息可指定角色（系统/用户/AI助手）
  *   - 酒馆API优先使用generateRaw消息数组格式（ST 1.13.2+），自动回退兼容旧版
@@ -4583,22 +4594,27 @@ ${generateDynamicJsonTemplate()}
             entryNames.forEach(name => {
                 const isFailed = lastConsolidateFailedEntries.some(e => e.category === cat && e.name === name);
                 const failedBadge = isFailed ? '<span style="color:#e74c3c;font-size:9px;margin-left:4px;">❗失败</span>' : '';
+                const entryTokens = getEntryTotalTokens(generatedWorldbook[cat][name]);
                 entriesListHtml += `
                     <label style="display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:11px;cursor:pointer;">
                         <input type="checkbox" class="ttw-consolidate-entry-cb" data-category="${cat}" data-entry="${name}" ${isFailed ? 'checked' : ''}>
-                        <span>${name}${failedBadge}</span>
+                        <span style="flex:1;">${name}${failedBadge}</span>
+                        <span style="color:#888;font-size:10px;white-space:nowrap;">${entryTokens}t</span>
                     </label>
                 `;
             });
 
             const hasFailedInCat = lastConsolidateFailedEntries.some(e => e.category === cat);
 
+            let catTotalTokens = 0;
+            entryNames.forEach(name => { catTotalTokens += getEntryTotalTokens(generatedWorldbook[cat][name]); });
+
             categoriesHtml += `
                 <div class="ttw-consolidate-cat-group" style="margin-bottom:10px;">
                     <div style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:rgba(52,152,219,0.15);border-radius:6px;cursor:pointer;" data-cat-toggle="${cat}">
                         <input type="checkbox" class="ttw-consolidate-cat-cb" data-category="${cat}" ${hasFailedInCat ? 'checked' : ''}>
                         <span style="font-weight:bold;font-size:12px;flex:1;">${cat}</span>
-                        <span style="color:#888;font-size:11px;">(${entryCount}条)</span>
+                        <span style="color:#888;font-size:11px;">(${entryCount}条 ~${catTotalTokens}t)</span>
                         ${hasFailedInCat ? '<span style="color:#e74c3c;font-size:10px;">有失败</span>' : ''}
                         <span class="ttw-cat-expand-icon" style="font-size:10px;transition:transform 0.2s;">▶</span>
                     </div>
