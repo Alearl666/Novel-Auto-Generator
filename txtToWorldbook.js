@@ -17,8 +17,11 @@
  *   - 自定义API各provider原生支持多消息：OpenAI兼容/DeepSeek用messages[]，Gemini用systemInstruction+contents[]
  *   - 修复整理条目结果未过滤响应标签（thinking等标签残留在内容中）的bug
  * v3.0.9 新增:
- *   - 整理条目支持自定义提示词：可在整理条目弹窗中编辑提示词，支持重置回默认
- *   - 整理条目提示词纳入导出/导入配置，跨设备同步
+ *   - 整理条目支持多预设提示词：可添加任意数量的命名预设，每个分类可独立指定使用哪个预设
+ *   - 内置「默认」预设不可删除，自定义预设支持添加/编辑名称和内容/删除
+ *   - 每个分类标题旁有预设下拉选择，分类-预设映射持久保存
+ *   - 整理条目预设和分类映射纳入导出/导入配置，旧版单提示词自动迁移为预设
+ *   - 条目列表显示Token数，分类标题显示汇总Token数
  */
 
 (function () {
@@ -236,6 +239,47 @@
         return total;
     }
 
+    // ========== 自然排序（章节号智能排序） ==========
+    function naturalSortEntryNames(names) {
+        return [...names].sort((a, b) => {
+            // 提取章节号的正则：匹配"第X章"格式
+            const chapterRegex = /第([零一二三四五六七八九十百千万\d]+)[章回卷节部篇]/;
+            const matchA = a.match(chapterRegex);
+            const matchB = b.match(chapterRegex);
+            if (matchA && matchB) {
+                const numA = chineseNumToInt(matchA[1]);
+                const numB = chineseNumToInt(matchB[1]);
+                if (numA !== numB) return numA - numB;
+            }
+            // 通用自然排序：按数字段比较
+            return a.localeCompare(b, 'zh-CN', { numeric: true, sensitivity: 'base' });
+        });
+    }
+
+    function chineseNumToInt(str) {
+        // 纯数字直接返回
+        if (/^\d+$/.test(str)) return parseInt(str);
+        const numMap = { '零': 0, '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9 };
+        const unitMap = { '十': 10, '百': 100, '千': 1000, '万': 10000 };
+        let result = 0, section = 0, current = 0;
+        for (const ch of str) {
+            if (numMap[ch] !== undefined) {
+                current = numMap[ch];
+            } else if (unitMap[ch] !== undefined) {
+                const unit = unitMap[ch];
+                if (unit === 10000) {
+                    section = (current === 0 && section === 0) ? unit : (section + current) * unit;
+                    result += section;
+                    section = 0;
+                } else {
+                    section += (current === 0 ? 1 : current) * unit;
+                }
+                current = 0;
+            }
+        }
+        return result + section + current;
+    }
+
     // ========== 默认设置 ==========
     const defaultWorldbookPrompt = `你是专业的小说世界书生成专家。请仔细阅读提供的小说内容，提取其中的关键信息，生成高质量的世界书条目。
 
@@ -324,7 +368,8 @@
         parallelMode: 'independent',
         useTavernApi: true,
         customMergePrompt: '',
-        customConsolidatePrompt: '',
+        consolidatePromptPresets: [],
+        consolidateCategoryPresetMap: {},
         categoryLightSettings: null,
         defaultWorldbookEntries: '',
         customRerollPrompt: '',
@@ -4546,12 +4591,12 @@ ${generateDynamicJsonTemplate()}
     }
 
     // ========== 条目内容整理功能 - 修改为支持多选分类 ==========
-    async function consolidateEntry(category, entryName) {
+    async function consolidateEntry(category, entryName, promptTemplate) {
         const entry = generatedWorldbook[category]?.[entryName];
         if (!entry || !entry['内容']) return;
 
-        const consolidatePromptTemplate = settings.customConsolidatePrompt?.trim() || defaultConsolidatePrompt;
-        const prompt = consolidatePromptTemplate.replace('{CONTENT}', entry['内容']);
+        const template = (promptTemplate && promptTemplate.trim()) ? promptTemplate.trim() : defaultConsolidatePrompt;
+        const prompt = template.replace('{CONTENT}', entry['内容']);
         let response = await callAPI(getLanguagePrefix() + prompt);
 
         // 【v3.0.8修复】应用响应过滤标签（移除thinking等）
@@ -4609,11 +4654,20 @@ ${generateDynamicJsonTemplate()}
             let catTotalTokens = 0;
             entryNames.forEach(name => { catTotalTokens += getEntryTotalTokens(generatedWorldbook[cat][name]); });
 
+            // 构建预设下拉选项
+            const presets = settings.consolidatePromptPresets || [];
+            const currentPreset = (settings.consolidateCategoryPresetMap || {})[cat] || '默认';
+            let presetOptionsHtml = `<option value="默认" ${currentPreset === '默认' ? 'selected' : ''}>默认</option>`;
+            presets.forEach(p => {
+                presetOptionsHtml += `<option value="${p.name}" ${currentPreset === p.name ? 'selected' : ''}>${p.name}</option>`;
+            });
+
             categoriesHtml += `
                 <div class="ttw-consolidate-cat-group" style="margin-bottom:10px;">
                     <div style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:rgba(52,152,219,0.15);border-radius:6px;cursor:pointer;" data-cat-toggle="${cat}">
                         <input type="checkbox" class="ttw-consolidate-cat-cb" data-category="${cat}" ${hasFailedInCat ? 'checked' : ''}>
                         <span style="font-weight:bold;font-size:12px;flex:1;">${cat}</span>
+                        <select class="ttw-consolidate-cat-preset" data-category="${cat}" style="font-size:10px;padding:2px 4px;border:1px solid #666;border-radius:4px;background:rgba(0,0,0,0.4);color:#ccc;max-width:100px;cursor:pointer;" title="选择此分类使用的整理提示词预设" onclick="event.stopPropagation();">${presetOptionsHtml}</select>
                         <span style="color:#888;font-size:11px;">(${entryCount}条 ~${catTotalTokens}t)</span>
                         ${hasFailedInCat ? '<span style="color:#e74c3c;font-size:10px;">有失败</span>' : ''}
                         <span class="ttw-cat-expand-icon" style="font-size:10px;transition:transform 0.2s;">▶</span>
@@ -4643,14 +4697,16 @@ ${generateDynamicJsonTemplate()}
                         <div style="font-size:12px;color:#ccc;">展开分类可多选具体条目。AI将去除重复信息并优化格式。</div>
                     </div>
                     <div style="margin-bottom:12px;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                            <span style="font-weight:bold;font-size:12px;color:#e67e22;">📝 整理提示词</span>
-                            <button class="ttw-btn ttw-btn-small" id="ttw-consolidate-reset-prompt" style="font-size:10px;">🔄 恢复默认</button>
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                            <span style="font-weight:bold;font-size:12px;color:#e67e22;">📝 整理提示词预设</span>
+                            <div style="display:flex;gap:6px;">
+                                <button class="ttw-btn ttw-btn-small" id="ttw-consolidate-add-preset" style="font-size:10px;background:rgba(52,152,219,0.5);">➕ 添加预设</button>
+                            </div>
                         </div>
-                        <textarea id="ttw-consolidate-prompt-input" rows="4" style="width:100%;padding:8px;border:1px solid #555;border-radius:6px;background:rgba(0,0,0,0.3);color:#fff;font-size:11px;resize:vertical;line-height:1.5;" placeholder="留空使用默认提示词...必须包含 {CONTENT} 占位符">${settings.customConsolidatePrompt || ''}</textarea>
-                        <div style="font-size:10px;color:#888;margin-top:4px;">
-                            留空使用默认。<code style="background:rgba(0,0,0,0.3);padding:1px 4px;border-radius:3px;color:#f39c12;">{CONTENT}</code> 占位符会被替换为条目原始内容。
+                        <div style="font-size:10px;color:#888;margin-bottom:8px;">
+                            每个分类可指定不同预设。<code style="background:rgba(0,0,0,0.3);padding:1px 4px;border-radius:3px;color:#f39c12;">{CONTENT}</code> 会被替换为条目原始内容。「默认」预设不可删除。
                         </div>
+                        <div id="ttw-consolidate-presets-list" style="display:flex;flex-direction:column;gap:6px;max-height:220px;overflow-y:auto;"></div>
                     </div>
                     ${hasAnyFailed ? `
                     <div style="margin-bottom:12px;padding:10px;background:rgba(231,76,60,0.15);border:1px solid rgba(231,76,60,0.3);border-radius:6px;">
@@ -4774,32 +4830,188 @@ ${generateDynamicJsonTemplate()}
         modal.querySelector('#ttw-cancel-consolidate').addEventListener('click', () => modal.remove());
         modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
 
-        // 整理提示词：恢复默认
-        modal.querySelector('#ttw-consolidate-reset-prompt').addEventListener('click', () => {
-            const textarea = modal.querySelector('#ttw-consolidate-prompt-input');
-            if (textarea) {
-                textarea.value = '';
-                settings.customConsolidatePrompt = '';
-                saveCurrentSettings();
-            }
+        // ========== 预设管理 ==========
+        function getPresetPromptByName(name) {
+            if (!name || name === '默认') return defaultConsolidatePrompt;
+            const preset = (settings.consolidatePromptPresets || []).find(p => p.name === name);
+            return (preset && preset.prompt && preset.prompt.trim()) ? preset.prompt : defaultConsolidatePrompt;
+        }
+
+        function renderPresetsListUI() {
+            const container = modal.querySelector('#ttw-consolidate-presets-list');
+            if (!container) return;
+            const presets = settings.consolidatePromptPresets || [];
+            let html = '';
+
+            // 默认预设（不可删除）
+            html += `
+                <div class="ttw-consolidate-preset-card" style="padding:8px 10px;background:rgba(46,204,113,0.1);border:1px solid rgba(46,204,113,0.3);border-radius:6px;">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+                        <span style="font-weight:bold;font-size:11px;color:#2ecc71;flex:1;">📌 默认</span>
+                        <span style="font-size:10px;color:#888;">内置·不可删除</span>
+                        <button class="ttw-btn-tiny ttw-consolidate-toggle-preview" data-preset-index="-1" style="font-size:9px;">展开</button>
+                    </div>
+                    <div class="ttw-consolidate-preset-preview" data-preview-index="-1" style="display:none;">
+                        <textarea rows="3" style="width:100%;padding:6px;border:1px solid #555;border-radius:4px;background:rgba(0,0,0,0.3);color:#aaa;font-size:10px;resize:vertical;line-height:1.4;" readonly>${defaultConsolidatePrompt}</textarea>
+                    </div>
+                </div>
+            `;
+
+            // 用户自定义预设
+            presets.forEach((preset, idx) => {
+                html += `
+                    <div class="ttw-consolidate-preset-card" style="padding:8px 10px;background:rgba(230,126,34,0.1);border:1px solid rgba(230,126,34,0.3);border-radius:6px;">
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+                            <input type="text" class="ttw-consolidate-preset-name" data-preset-index="${idx}" value="${preset.name}" style="font-weight:bold;font-size:11px;color:#e67e22;background:transparent;border:1px solid transparent;border-radius:3px;padding:2px 4px;flex:1;min-width:0;" title="点击编辑预设名称">
+                            <button class="ttw-btn-tiny ttw-consolidate-toggle-preview" data-preset-index="${idx}" style="font-size:9px;">展开</button>
+                            <button class="ttw-btn-tiny ttw-consolidate-delete-preset" data-preset-index="${idx}" style="font-size:9px;color:#e74c3c;" title="删除预设">🗑️</button>
+                        </div>
+                        <div class="ttw-consolidate-preset-preview" data-preview-index="${idx}" style="display:none;">
+                            <textarea class="ttw-consolidate-preset-prompt" data-preset-index="${idx}" rows="3" style="width:100%;padding:6px;border:1px solid #555;border-radius:4px;background:rgba(0,0,0,0.3);color:#fff;font-size:10px;resize:vertical;line-height:1.4;" placeholder="输入提示词...必须包含 {CONTENT} 占位符">${preset.prompt || ''}</textarea>
+                        </div>
+                    </div>
+                `;
+            });
+
+            container.innerHTML = html;
+
+            // 展开/收起预览
+            container.querySelectorAll('.ttw-consolidate-toggle-preview').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const idx = btn.dataset.presetIndex;
+                    const preview = container.querySelector(`[data-preview-index="${idx}"]`);
+                    if (preview) {
+                        const isHidden = preview.style.display === 'none';
+                        preview.style.display = isHidden ? 'block' : 'none';
+                        btn.textContent = isHidden ? '收起' : '展开';
+                    }
+                });
+            });
+
+            // 编辑预设名称
+            container.querySelectorAll('.ttw-consolidate-preset-name').forEach(input => {
+                input.addEventListener('focus', () => { input.style.borderColor = '#e67e22'; });
+                input.addEventListener('blur', () => {
+                    input.style.borderColor = 'transparent';
+                    const idx = parseInt(input.dataset.presetIndex);
+                    const newName = input.value.trim();
+                    if (!newName) { input.value = presets[idx].name; return; }
+                    if (newName === '默认') { alert('不能使用"默认"作为预设名'); input.value = presets[idx].name; return; }
+                    if (presets.some((p, i) => i !== idx && p.name === newName)) { alert('预设名已存在'); input.value = presets[idx].name; return; }
+                    const oldName = presets[idx].name;
+                    presets[idx].name = newName;
+                    // 同步更新分类映射中引用旧名称的
+                    const map = settings.consolidateCategoryPresetMap || {};
+                    Object.keys(map).forEach(cat => { if (map[cat] === oldName) map[cat] = newName; });
+                    settings.consolidatePromptPresets = presets;
+                    saveCurrentSettings();
+                    refreshCategoryPresetDropdowns();
+                });
+            });
+
+            // 编辑预设内容
+            container.querySelectorAll('.ttw-consolidate-preset-prompt').forEach(textarea => {
+                textarea.addEventListener('input', () => {
+                    const idx = parseInt(textarea.dataset.presetIndex);
+                    presets[idx].prompt = textarea.value;
+                    settings.consolidatePromptPresets = presets;
+                    saveCurrentSettings();
+                });
+            });
+
+            // 删除预设
+            container.querySelectorAll('.ttw-consolidate-delete-preset').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const idx = parseInt(btn.dataset.presetIndex);
+                    const deletedName = presets[idx].name;
+                    if (!confirm(`确定删除预设「${deletedName}」？`)) return;
+                    presets.splice(idx, 1);
+                    // 清理引用该预设的分类映射
+                    const map = settings.consolidateCategoryPresetMap || {};
+                    Object.keys(map).forEach(cat => { if (map[cat] === deletedName) delete map[cat]; });
+                    settings.consolidatePromptPresets = presets;
+                    saveCurrentSettings();
+                    renderPresetsListUI();
+                    refreshCategoryPresetDropdowns();
+                });
+            });
+        }
+
+        // 刷新所有分类的预设下拉
+        function refreshCategoryPresetDropdowns() {
+            const presets = settings.consolidatePromptPresets || [];
+            const map = settings.consolidateCategoryPresetMap || {};
+            modal.querySelectorAll('.ttw-consolidate-cat-preset').forEach(select => {
+                const cat = select.dataset.category;
+                const current = map[cat] || '默认';
+                let optionsHtml = `<option value="默认" ${current === '默认' ? 'selected' : ''}>默认</option>`;
+                presets.forEach(p => {
+                    optionsHtml += `<option value="${p.name}" ${current === p.name ? 'selected' : ''}>${p.name}</option>`;
+                });
+                select.innerHTML = optionsHtml;
+            });
+        }
+
+        // 添加预设
+        modal.querySelector('#ttw-consolidate-add-preset').addEventListener('click', () => {
+            const name = prompt('输入预设名称:');
+            if (!name || !name.trim()) return;
+            const trimmedName = name.trim();
+            if (trimmedName === '默认') { alert('不能使用"默认"作为预设名'); return; }
+            if (!settings.consolidatePromptPresets) settings.consolidatePromptPresets = [];
+            if (settings.consolidatePromptPresets.some(p => p.name === trimmedName)) { alert('预设名已存在'); return; }
+            settings.consolidatePromptPresets.push({ name: trimmedName, prompt: '' });
+            saveCurrentSettings();
+            renderPresetsListUI();
+            refreshCategoryPresetDropdowns();
+            // 自动展开新预设的编辑区
+            setTimeout(() => {
+                const idx = settings.consolidatePromptPresets.length - 1;
+                const btn = modal.querySelector(`.ttw-consolidate-toggle-preview[data-preset-index="${idx}"]`);
+                if (btn) btn.click();
+            }, 100);
         });
 
-        // 整理提示词：实时保存
-        modal.querySelector('#ttw-consolidate-prompt-input').addEventListener('input', (e) => {
-            settings.customConsolidatePrompt = e.target.value;
-            saveCurrentSettings();
+        // 分类预设下拉变更 → 保存映射
+        modal.querySelectorAll('.ttw-consolidate-cat-preset').forEach(select => {
+            select.addEventListener('change', () => {
+                const cat = select.dataset.category;
+                if (!settings.consolidateCategoryPresetMap) settings.consolidateCategoryPresetMap = {};
+                if (select.value === '默认') {
+                    delete settings.consolidateCategoryPresetMap[cat];
+                } else {
+                    settings.consolidateCategoryPresetMap[cat] = select.value;
+                }
+                saveCurrentSettings();
+            });
         });
+
+        renderPresetsListUI();
 
         modal.querySelector('#ttw-start-consolidate').addEventListener('click', async () => {
-            const selectedEntries = [...modal.querySelectorAll('.ttw-consolidate-entry-cb:checked')].map(cb => ({
-                category: cb.dataset.category,
-                name: cb.dataset.entry
-            }));
+            const selectedEntries = [...modal.querySelectorAll('.ttw-consolidate-entry-cb:checked')].map(cb => {
+                const cat = cb.dataset.category;
+                const presetSelect = modal.querySelector(`.ttw-consolidate-cat-preset[data-category="${cat}"]`);
+                const presetName = presetSelect ? presetSelect.value : '默认';
+                return {
+                    category: cat,
+                    name: cb.dataset.entry,
+                    promptTemplate: getPresetPromptByName(presetName)
+                };
+            });
             if (selectedEntries.length === 0) {
                 alert('请至少选择一个条目');
                 return;
             }
-            if (!confirm(`确定要整理 ${selectedEntries.length} 个条目吗？`)) return;
+            // 汇总各预设使用情况
+            const presetUsage = {};
+            selectedEntries.forEach(e => {
+                const pSelect = modal.querySelector(`.ttw-consolidate-cat-preset[data-category="${e.category}"]`);
+                const pName = pSelect ? pSelect.value : '默认';
+                presetUsage[pName] = (presetUsage[pName] || 0) + 1;
+            });
+            const usageSummary = Object.entries(presetUsage).map(([k, v]) => `「${k}」${v}条`).join('，');
+            if (!confirm(`确定要整理 ${selectedEntries.length} 个条目吗？\n\n预设分配：${usageSummary}`)) return;
             modal.remove();
             await consolidateSelectedEntries(selectedEntries);
         });
@@ -4849,7 +5061,7 @@ ${generateDynamicJsonTemplate()}
 
             try {
                 updateStreamContent(`📝 [${index + 1}/${entries.length}] ${entry.category} - ${entry.name}\n`);
-                await consolidateEntry(entry.category, entry.name);
+                await consolidateEntry(entry.category, entry.name, entry.promptTemplate);
                 completed++;
                 updateProgress(((completed + failed) / entries.length) * 100, `整理中 (${completed}✅ ${failed}❌ / ${entries.length})`);
                 updateStreamContent(`   ✅ 完成\n`);
@@ -7340,7 +7552,7 @@ ${pairsContent}
                 categoryEntryIndex[category] = 0;
             }
 
-            for (const [itemName, itemData] of Object.entries(categoryData)) {
+            for (const [itemName, itemData] of naturalSortEntryNames(Object.keys(categoryData)).map(name => [name, categoryData[name]])) {
                 if (typeof itemData !== 'object' || itemData === null) continue;
                 if (itemData.关键词 && itemData.内容) {
                     let keywords = Array.isArray(itemData.关键词) ? itemData.关键词 : [itemData.关键词];
@@ -7630,9 +7842,10 @@ ${pairsContent}
                 stylePrompt: settings.customStylePrompt,
                 mergePrompt: settings.customMergePrompt,
                 rerollPrompt: settings.customRerollPrompt,
-                consolidatePrompt: settings.customConsolidatePrompt,
                 defaultWorldbookEntries: settings.defaultWorldbookEntries
             },
+            consolidatePromptPresets: settings.consolidatePromptPresets,
+            consolidateCategoryPresetMap: settings.consolidateCategoryPresetMap,
             promptMessageChain: settings.promptMessageChain
         };
         const timeString = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[:/\s]/g, '').replace(/,/g, '-');
@@ -7644,7 +7857,7 @@ ${pairsContent}
         a.download = fileName;
         a.click();
         URL.revokeObjectURL(url);
-        alert('配置已导出！（包含提示词配置、整理条目提示词和默认世界书条目）');
+        alert('配置已导出！（包含提示词配置、整理条目预设和默认世界书条目）');
     }
 
     // 修改：导入配置 - 包含默认世界书条目UI
@@ -7693,6 +7906,13 @@ ${pairsContent}
                 if (data.promptMessageChain) {
                     settings.promptMessageChain = data.promptMessageChain;
                 }
+                // 新增：导入整理条目预设配置
+                if (data.consolidatePromptPresets) {
+                    settings.consolidatePromptPresets = data.consolidatePromptPresets;
+                }
+                if (data.consolidateCategoryPresetMap) {
+                    settings.consolidateCategoryPresetMap = data.consolidateCategoryPresetMap;
+                }
 
                 if (data.prompts) {
                     if (data.prompts.worldbookPrompt !== undefined) {
@@ -7710,8 +7930,12 @@ ${pairsContent}
                     if (data.prompts.rerollPrompt !== undefined) {
                         settings.customRerollPrompt = data.prompts.rerollPrompt;
                     }
-                    if (data.prompts.consolidatePrompt !== undefined) {
-                        settings.customConsolidatePrompt = data.prompts.consolidatePrompt;
+                    // 旧版兼容：单个整理提示词迁移为预设
+                    if (data.prompts.consolidatePrompt && data.prompts.consolidatePrompt.trim()) {
+                        if (!settings.consolidatePromptPresets) settings.consolidatePromptPresets = [];
+                        if (!settings.consolidatePromptPresets.some(p => p.name === '旧版自定义')) {
+                            settings.consolidatePromptPresets.push({ name: '旧版自定义', prompt: data.prompts.consolidatePrompt });
+                        }
                     }
                     if (data.prompts.defaultWorldbookEntries !== undefined) {
                         settings.defaultWorldbookEntries = data.prompts.defaultWorldbookEntries;
@@ -8370,7 +8594,7 @@ ${pairsContent}
         helpModal.innerHTML = `
         <div class="ttw-modal" style="max-width:700px;">
             <div class="ttw-modal-header">
-                <span class="ttw-modal-title">❓ TXT转世界书 v3.0.8 帮助</span>
+                <span class="ttw-modal-title">❓ TXT转世界书 v3.0.9 帮助</span>
                 <button class="ttw-modal-close" type="button">✕</button>
             </div>
             <div class="ttw-modal-body" style="max-height:75vh;overflow-y:auto;">
@@ -8452,7 +8676,7 @@ ${pairsContent}
                         <li><strong>🔍查找</strong>：搜索关键词高亮定位</li>
                         <li><strong>🔄替换</strong>：批量查找替换内容</li>
                         <li><strong>🏷️清除标签</strong>：清理AI输出的thinking等无用标签</li>
-                        <li><strong>🧹整理条目</strong>：AI优化指定分类的条目内容，支持自定义提示词和重置默认</li>
+                        <li><strong>🧹整理条目</strong>：AI优化指定分类的条目内容，支持多预设提示词（按分类指定不同预设）</li>
                         <li><strong>🔗别名合并</strong>：AI识别同一事物的不同名称并自动合并</li>
                     </ul>
                 </div>
@@ -10374,17 +10598,17 @@ ${pairsContent}
                 </div>
                 <div style="background:#2d2d2d;display:none;">`;
             
-            for (const entryName in entries) {
+            for (const entryName of naturalSortEntryNames(Object.keys(entries))) {
                 const entry = entries[entryName];
                 const config = getEntryConfig(category, entryName);
                 const autoIncrement = getCategoryAutoIncrement(category);
                 const baseOrder = getCategoryBaseOrder(category);
 
-                // 计算实际显示顺序
+                // 计算实际显示顺序（基于自然排序后的索引）
                 let displayOrder = config.order;
                 if (autoIncrement) {
-                    const entriesInCategory = Object.keys(entries);
-                    const entryIndex = entriesInCategory.indexOf(entryName);
+                    const sortedNames = naturalSortEntryNames(Object.keys(entries));
+                    const entryIndex = sortedNames.indexOf(entryName);
                     displayOrder = baseOrder + entryIndex;
                 }
 
@@ -10743,5 +10967,5 @@ ${pairsContent}
         clearEntryRollHistory: (cat, entry) => MemoryHistoryDB.clearEntryRollResults(cat, entry)
     };
 
-    console.log('📚 TxtToWorldbook v3.0.9 已加载 - 新增: 整理条目自定义提示词(支持修改/重置/导出导入)');
+    console.log('📚 TxtToWorldbook v3.0.9 已加载 - 新增: 整理条目多预设提示词(按分类指定), 条目Token显示');
 })();
