@@ -7327,9 +7327,17 @@ ${pairsContent}
             }
 
             const result = executeReplace(findText, replaceWith, inWorldbook, inResults);
-            modal.remove();
             updateWorldbookPreview();
-            alert(`替换完成！共替换了 ${result.count} 处`);
+
+            // 刷新预览区域，显示替换结果而非关闭UI
+            const previewDiv = modal.querySelector('#ttw-replace-preview');
+            previewDiv.style.display = 'block';
+            previewDiv.innerHTML = `
+                <div style="text-align:center;padding:20px;">
+                    <div style="color:#27ae60;font-weight:bold;font-size:14px;margin-bottom:8px;">✅ 替换完成！共替换了 ${result.count} 处</div>
+                    <div style="color:#888;font-size:12px;">可继续输入新的查找/替换内容</div>
+                </div>
+            `;
         });
     }
 
