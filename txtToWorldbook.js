@@ -1,21 +1,5 @@
 /**
  * TXT转世界书独立模块 v3.1.0
- * v3.0.5 修复:
- *   - 修复isTokenLimitError误匹配：/exceeded/i过于宽泛导致正常AI响应被误判为Token超限
- *   - 新增「导出名称」输入框：小说名持久化存储，关闭UI重开/导入任务后导出文件名不再丢失
- * v3.0.6 修复:
- *   - 修复AI输出JSON中未转义双引号导致内容截断（如"发神"中的"被误认为JSON字符串结束）
- *   - parseAIResponse新增repairJsonUnescapedQuotes修复步骤
- *   - extractWorldbookDataByRegex的"内容"提取改为智能判断"是否为真正的字符串结束引号
- * v3.0.7 修复:
- *   - 新增误触保护：主UI不再响应背景点击关闭，只能通过右上角✕按钮退出
- *   - ESC键改为只关闭子模态框（世界书预览、历史记录等），不会意外关闭主UI
- *   - 子模态框（预览/历史/合并等）仍保留背景点击关闭功能
- * v3.0.8 新增:
- *   - 消息链配置：发送给AI的提示词支持多消息格式，每条消息可指定角色（系统/用户/AI助手）
- *   - 酒馆API优先使用generateRaw消息数组格式（ST 1.13.2+），自动回退兼容旧版
- *   - 自定义API各provider原生支持多消息：OpenAI兼容/DeepSeek用messages[]，Gemini用systemInstruction+contents[]
- *   - 修复整理条目结果未过滤响应标签（thinking等标签残留在内容中）的bug
  * v3.0.9 新增:
  *   - 整理条目支持多预设提示词：可添加任意数量的命名预设，每个分类可独立指定使用哪个预设
  *   - 内置「默认」预设不可删除，自定义预设支持添加/编辑名称和内容/删除
@@ -7197,6 +7181,24 @@ ${pairsContent}
                         <input type="text" id="ttw-replace-with" class="ttw-input" placeholder="输入替换内容，留空则删除...">
                     </div>
                     <div style="margin-bottom:16px;padding:12px;background:rgba(230,126,34,0.1);border-radius:6px;">
+                        <div style="margin-bottom:8px;font-size:13px;color:#e67e22;font-weight:bold;">🔎 查找范围</div>
+                        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                            <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">
+                                <input type="radio" name="ttw-replace-scope" value="all" checked style="accent-color:#e67e22;"> 全部
+                            </label>
+                            <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">
+                                <input type="radio" name="ttw-replace-scope" value="entryName" style="accent-color:#e67e22;"> 标题
+                            </label>
+                            <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">
+                                <input type="radio" name="ttw-replace-scope" value="keyword" style="accent-color:#e67e22;"> 关键词
+                            </label>
+                            <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">
+                                <input type="radio" name="ttw-replace-scope" value="content" style="accent-color:#e67e22;"> 内容
+                            </label>
+                        </div>
+                    </div>
+                    <div style="margin-bottom:16px;padding:12px;background:rgba(230,126,34,0.1);border-radius:6px;">
+                        <div style="margin-bottom:8px;font-size:13px;color:#e67e22;font-weight:bold;">📂 替换位置</div>
                         <label class="ttw-checkbox-label">
                             <input type="checkbox" id="ttw-replace-in-worldbook" checked>
                             <span>替换世界书中的内容</span>
@@ -7229,13 +7231,14 @@ ${pairsContent}
             const replaceWith = modal.querySelector('#ttw-replace-with').value;
             const inWorldbook = modal.querySelector('#ttw-replace-in-worldbook').checked;
             const inResults = modal.querySelector('#ttw-replace-in-results').checked;
+            const scope = modal.querySelector('input[name="ttw-replace-scope"]:checked')?.value || 'all';
 
             if (!findText) {
                 alert('请输入要查找的内容');
                 return;
             }
 
-            const preview = previewReplace(findText, replaceWith, inWorldbook, inResults);
+            const preview = previewReplace(findText, replaceWith, inWorldbook, inResults, scope);
             const previewDiv = modal.querySelector('#ttw-replace-preview');
             previewDiv.style.display = 'block';
 
@@ -7309,13 +7312,14 @@ ${pairsContent}
             const replaceWith = modal.querySelector('#ttw-replace-with').value;
             const inWorldbook = modal.querySelector('#ttw-replace-in-worldbook').checked;
             const inResults = modal.querySelector('#ttw-replace-in-results').checked;
+            const scope = modal.querySelector('input[name="ttw-replace-scope"]:checked')?.value || 'all';
 
             if (!findText) {
                 alert('请输入要查找的内容');
                 return;
             }
 
-            const preview = previewReplace(findText, replaceWith, inWorldbook, inResults);
+            const preview = previewReplace(findText, replaceWith, inWorldbook, inResults, scope);
             if (preview.count === 0) {
                 alert(`未找到"${findText}"`);
                 return;
@@ -7326,7 +7330,7 @@ ${pairsContent}
                 return;
             }
 
-            const result = executeReplace(findText, replaceWith, inWorldbook, inResults);
+            const result = executeReplace(findText, replaceWith, inWorldbook, inResults, scope);
             updateWorldbookPreview();
 
             // 刷新预览区域，显示替换结果而非关闭UI
@@ -7341,10 +7345,13 @@ ${pairsContent}
         });
     }
 
-    function previewReplace(findText, replaceWith, inWorldbook, inResults) {
+    function previewReplace(findText, replaceWith, inWorldbook, inResults, scope = 'all') {
         const regex = new RegExp(findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
         let count = 0;
         const allMatches = [];
+        const checkEntryName = scope === 'all' || scope === 'entryName';
+        const checkKeyword = scope === 'all' || scope === 'keyword';
+        const checkContent = scope === 'all' || scope === 'content';
 
         if (inWorldbook) {
             for (const category in generatedWorldbook) {
@@ -7352,7 +7359,7 @@ ${pairsContent}
                     const entry = generatedWorldbook[category][entryName];
 
                     // 检查条目名称
-                    if (entryName.includes(findText)) {
+                    if (checkEntryName && entryName.includes(findText)) {
                         count++;
                         allMatches.push({
                             source: 'worldbook',
@@ -7368,7 +7375,7 @@ ${pairsContent}
                     }
 
                     // 检查关键词
-                    if (Array.isArray(entry['关键词'])) {
+                    if (checkKeyword && Array.isArray(entry['关键词'])) {
                         entry['关键词'].forEach((kw, kwIndex) => {
                             if (kw.includes(findText)) {
                                 count++;
@@ -7388,7 +7395,7 @@ ${pairsContent}
                     }
 
                     // 检查内容
-                    if (entry['内容'] && entry['内容'].includes(findText)) {
+                    if (checkContent && entry['内容'] && entry['内容'].includes(findText)) {
                         const matches = entry['内容'].match(regex);
                         const matchCount = matches ? matches.length : 0;
                         count += matchCount;
@@ -7424,7 +7431,7 @@ ${pairsContent}
                         const entry = memory.result[category][entryName];
 
                         // 检查条目名称
-                        if (entryName.includes(findText)) {
+                        if (checkEntryName && entryName.includes(findText)) {
                             count++;
                             allMatches.push({
                                 source: 'memory',
@@ -7440,7 +7447,7 @@ ${pairsContent}
                             });
                         }
 
-                        if (Array.isArray(entry['关键词'])) {
+                        if (checkKeyword && Array.isArray(entry['关键词'])) {
                             entry['关键词'].forEach((kw, kwIndex) => {
                                 if (kw.includes(findText)) {
                                     count++;
@@ -7460,7 +7467,7 @@ ${pairsContent}
                             });
                         }
 
-                        if (entry['内容'] && entry['内容'].includes(findText)) {
+                        if (checkContent && entry['内容'] && entry['内容'].includes(findText)) {
                             const matches = entry['内容'].match(regex);
                             const matchCount = matches ? matches.length : 0;
                             count += matchCount;
@@ -7566,20 +7573,25 @@ ${pairsContent}
 
 
 
-    function executeReplace(findText, replaceWith, inWorldbook, inResults) {
+    function executeReplace(findText, replaceWith, inWorldbook, inResults, scope = 'all') {
         const regex = new RegExp(findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
         let count = 0;
+        const checkEntryName = scope === 'all' || scope === 'entryName';
+        const checkKeyword = scope === 'all' || scope === 'keyword';
+        const checkContent = scope === 'all' || scope === 'content';
 
         if (inWorldbook) {
             // 先收集需要重命名的条目名称（避免遍历中修改对象）
             const renameList = [];
-            for (const category in generatedWorldbook) {
-                for (const entryName in generatedWorldbook[category]) {
-                    if (entryName.includes(findText)) {
-                        const newName = entryName.replace(regex, replaceWith);
-                        if (newName && newName !== entryName) {
-                            renameList.push({ category, oldName: entryName, newName });
-                            count++;
+            if (checkEntryName) {
+                for (const category in generatedWorldbook) {
+                    for (const entryName in generatedWorldbook[category]) {
+                        if (entryName.includes(findText)) {
+                            const newName = entryName.replace(regex, replaceWith);
+                            if (newName && newName !== entryName) {
+                                renameList.push({ category, oldName: entryName, newName });
+                                count++;
+                            }
                         }
                     }
                 }
@@ -7603,7 +7615,7 @@ ${pairsContent}
                 for (const entryName in generatedWorldbook[category]) {
                     const entry = generatedWorldbook[category][entryName];
 
-                    if (Array.isArray(entry['关键词'])) {
+                    if (checkKeyword && Array.isArray(entry['关键词'])) {
                         entry['关键词'] = entry['关键词'].map(kw => {
                             if (kw.includes(findText)) {
                                 count++;
@@ -7613,7 +7625,7 @@ ${pairsContent}
                         }).filter(kw => kw);
                     }
 
-                    if (entry['内容'] && entry['内容'].includes(findText)) {
+                    if (checkContent && entry['内容'] && entry['内容'].includes(findText)) {
                         const matches = entry['内容'].match(regex);
                         count += matches ? matches.length : 0;
                         entry['内容'] = entry['内容'].replace(regex, replaceWith);
@@ -7629,13 +7641,15 @@ ${pairsContent}
 
                 // 先收集需要重命名的
                 const renameList = [];
-                for (const category in memory.result) {
-                    for (const entryName in memory.result[category]) {
-                        if (entryName.includes(findText)) {
-                            const newName = entryName.replace(regex, replaceWith);
-                            if (newName && newName !== entryName) {
-                                renameList.push({ category, oldName: entryName, newName });
-                                count++;
+                if (checkEntryName) {
+                    for (const category in memory.result) {
+                        for (const entryName in memory.result[category]) {
+                            if (entryName.includes(findText)) {
+                                const newName = entryName.replace(regex, replaceWith);
+                                if (newName && newName !== entryName) {
+                                    renameList.push({ category, oldName: entryName, newName });
+                                    count++;
+                                }
                             }
                         }
                     }
@@ -7652,7 +7666,7 @@ ${pairsContent}
                     for (const entryName in memory.result[category]) {
                         const entry = memory.result[category][entryName];
 
-                        if (Array.isArray(entry['关键词'])) {
+                        if (checkKeyword && Array.isArray(entry['关键词'])) {
                             entry['关键词'] = entry['关键词'].map(kw => {
                                 if (kw.includes(findText)) {
                                     count++;
@@ -7662,7 +7676,7 @@ ${pairsContent}
                             }).filter(kw => kw);
                         }
 
-                        if (entry['内容'] && entry['内容'].includes(findText)) {
+                        if (checkContent && entry['内容'] && entry['内容'].includes(findText)) {
                             const matches = entry['内容'].match(regex);
                             count += matches ? matches.length : 0;
                             entry['内容'] = entry['内容'].replace(regex, replaceWith);
