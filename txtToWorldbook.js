@@ -1,16 +1,5 @@
 /**
  * TXT转世界书独立模块 v3.1.0
- * v3.0.5 修复:
- *   - 修复isTokenLimitError误匹配：/exceeded/i过于宽泛导致正常AI响应被误判为Token超限
- *   - 新增「导出名称」输入框：小说名持久化存储，关闭UI重开/导入任务后导出文件名不再丢失
- * v3.0.6 修复:
- *   - 修复AI输出JSON中未转义双引号导致内容截断（如"发神"中的"被误认为JSON字符串结束）
- *   - parseAIResponse新增repairJsonUnescapedQuotes修复步骤
- *   - extractWorldbookDataByRegex的"内容"提取改为智能判断"是否为真正的字符串结束引号
- * v3.0.7 修复:
- *   - 新增误触保护：主UI不再响应背景点击关闭，只能通过右上角✕按钮退出
- *   - ESC键改为只关闭子模态框（世界书预览、历史记录等），不会意外关闭主UI
- *   - 子模态框（预览/历史/合并等）仍保留背景点击关闭功能
  * v3.0.8 新增:
  *   - 消息链配置：发送给AI的提示词支持多消息格式，每条消息可指定角色（系统/用户/AI助手）
  *   - 酒馆API优先使用generateRaw消息数组格式（ST 1.13.2+），自动回退兼容旧版
@@ -206,41 +195,41 @@
         const str = String(text);
         // 简单估算：中文字符约1.5-2 token，英文单词约1 token，标点符号等
         let tokens = 0;
-        
+
         // 中文字符计数 (大约每个中文字符1.5-2个token)
         const chineseChars = (str.match(/[\u4e00-\u9fa5]/g) || []).length;
         tokens += chineseChars * 1.5;
-        
+
         // 英文单词计数
         const englishWords = (str.match(/[a-zA-Z]+/g) || []).length;
         tokens += englishWords;
-        
+
         // 数字
         const numbers = (str.match(/\d+/g) || []).length;
         tokens += numbers;
-        
+
         // 标点和特殊字符
         const punctuation = (str.match(/[^\u4e00-\u9fa5a-zA-Z0-9\s]/g) || []).length;
         tokens += punctuation * 0.5;
-        
+
         return Math.ceil(tokens);
     }
 
     function getEntryTotalTokens(entry) {
         if (!entry || typeof entry !== 'object') return 0;
         let total = 0;
-        
+
         // 计算关键词tokens
         if (entry['关键词']) {
             const keywords = Array.isArray(entry['关键词']) ? entry['关键词'].join(', ') : entry['关键词'];
             total += estimateTokenCount(keywords);
         }
-        
+
         // 计算内容tokens
         if (entry['内容']) {
             total += estimateTokenCount(entry['内容']);
         }
-        
+
         return total;
     }
 
@@ -2006,9 +1995,9 @@
         // 【修复】获取用户配置的过滤标签
         const filterTagsStr = settings.filterResponseTags || 'thinking,/think';
         const filterTags = filterTagsStr.split(',').map(t => t.trim()).filter(t => t);
-        
+
         let cleaned = response;
-        
+
         // 处理用户定义的过滤标签
         for (const tag of filterTags) {
             if (tag.startsWith('/')) {
@@ -2022,7 +2011,7 @@
                 cleaned = cleaned.replace(fullTagRegex, '');
             }
         }
-        
+
         try {
             return JSON.parse(cleaned.trim());
         } catch (e) {
@@ -2197,7 +2186,7 @@
 
         const dynamicTemplate = generateDynamicJsonTemplate();
         worldbookPrompt = worldbookPrompt.replace('{DYNAMIC_JSON_TEMPLATE}', dynamicTemplate);
-        
+
         // 【修复】动态替换启用的分类名称
         const enabledCatNames = getEnabledCategories().map(c => c.name);
         if (settings.enablePlotOutline) enabledCatNames.push('剧情大纲');
@@ -2296,9 +2285,9 @@
         // 添加特殊分类（只有剧情大纲和文风配置有独立的启用开关）
         if (settings.enablePlotOutline) enabledCatNamesList.push('剧情大纲');
         if (settings.enableLiteraryStyle) enabledCatNamesList.push('文风配置');
-        
+
         const enabledCatNamesStr = enabledCatNamesList.join('、');
-        
+
         prompt += `\n\n【输出限制】只允许输出以下分类：${enabledCatNamesStr}。禁止输出未列出的任何其他分类，直接输出JSON。`;
 
         if (settings.forceChapterMarker) {
@@ -2972,17 +2961,17 @@ ${generateDynamicJsonTemplate()}
         // 构建专门针对单个条目的提示词
         let prompt = chapterForcePrompt;
         prompt += getLanguagePrefix();
-        
+
         // 获取分类的配置信息
         const categoryConfig = customWorldbookCategories.find(c => c.name === category);
         const contentGuide = categoryConfig ? categoryConfig.contentGuide : '';
-        
+
         prompt += `\n你是一个专业的小说世界书条目生成助手。请根据以下原文内容，专门重新生成指定的条目。\n`;
         prompt += `\n【任务说明】\n`;
         prompt += `- 只需要生成一个条目：分类="${category}"，条目名称="${entryName}"\n`;
         prompt += `- 请基于原文内容重新分析并生成该条目的信息\n`;
         prompt += `- 输出格式必须是JSON，结构为：{ "${category}": { "${entryName}": { "关键词": [...], "内容": "..." } } }\n`;
-        
+
         if (contentGuide) {
             prompt += `\n【该分类的内容指南】\n${contentGuide}\n`;
         }
@@ -3007,7 +2996,7 @@ ${generateDynamicJsonTemplate()}
         }
 
         prompt += `\n\n请重新分析原文，生成更准确、更详细的条目信息。`;
-        
+
         if (customPrompt) {
             prompt += `\n\n【用户额外要求】\n${customPrompt}`;
         }
@@ -3037,7 +3026,7 @@ ${generateDynamicJsonTemplate()}
             }
 
             let entryUpdate = parseAIResponse(response);
-            
+
             // 验证返回结果
             if (!entryUpdate || !entryUpdate[category] || !entryUpdate[category][entryName]) {
                 // 尝试修正：如果返回了其他名称的条目，使用用户指定的名称
@@ -3062,7 +3051,7 @@ ${generateDynamicJsonTemplate()}
 
                 // 保存到章节历史
                 await MemoryHistoryDB.saveRollResult(memoryIndex, memory.result);
-                
+
                 // 【新增】保存到条目级别历史
                 await MemoryHistoryDB.saveEntryRollResult(category, entryName, memoryIndex, entryUpdate[category][entryName], customPrompt);
 
@@ -3101,17 +3090,17 @@ ${generateDynamicJsonTemplate()}
 
         // 查找条目来源
         const sources = findEntrySourceMemories(category, entryName);
-        
+
         // 获取当前条目数据
         const currentEntry = generatedWorldbook[category]?.[entryName] || {};
-        const currentKeywords = Array.isArray(currentEntry['关键词']) 
-            ? currentEntry['关键词'].join(', ') 
+        const currentKeywords = Array.isArray(currentEntry['关键词'])
+            ? currentEntry['关键词'].join(', ')
             : (currentEntry['关键词'] || '');
         const currentContent = currentEntry['内容'] || '';
-        
+
         // 获取条目Roll历史
         const entryRollHistory = await MemoryHistoryDB.getEntryRollResults(category, entryName);
-        
+
         let sourcesHtml = '';
         if (sources.length === 0) {
             sourcesHtml = '<div style="color:#e74c3c;font-size:12px;">⚠️ 未找到该条目的来源章节（可能是默认条目或导入条目）</div>';
@@ -3129,7 +3118,7 @@ ${generateDynamicJsonTemplate()}
                 `;
             });
         }
-        
+
         // 构建Roll历史HTML
         let historyHtml = '';
         if (entryRollHistory.length === 0) {
@@ -3229,9 +3218,9 @@ ${generateDynamicJsonTemplate()}
         modal.querySelector('#ttw-save-entry-edit').addEventListener('click', () => {
             const keywordsInput = modal.querySelector('#ttw-entry-keywords-edit').value;
             const contentInput = modal.querySelector('#ttw-entry-content-edit').value;
-            
+
             const keywords = keywordsInput.split(/[,，]/).map(k => k.trim()).filter(k => k);
-            
+
             if (!generatedWorldbook[category]) {
                 generatedWorldbook[category] = {};
             }
@@ -3239,9 +3228,9 @@ ${generateDynamicJsonTemplate()}
                 '关键词': keywords,
                 '内容': contentInput
             };
-            
+
             updateWorldbookPreview();
-            
+
             const btn = modal.querySelector('#ttw-save-entry-edit');
             btn.textContent = '✅ 已保存';
             setTimeout(() => { btn.textContent = '💾 保存编辑'; }, 1500);
@@ -3277,19 +3266,19 @@ ${generateDynamicJsonTemplate()}
                 const roll = await MemoryHistoryDB.getEntryRollById(rollId);
                 if (roll && roll.result) {
                     // 更新到编辑区
-                    const keywords = Array.isArray(roll.result['关键词']) 
-                        ? roll.result['关键词'].join(', ') 
+                    const keywords = Array.isArray(roll.result['关键词'])
+                        ? roll.result['关键词'].join(', ')
                         : (roll.result['关键词'] || '');
                     modal.querySelector('#ttw-entry-keywords-edit').value = keywords;
                     modal.querySelector('#ttw-entry-content-edit').value = roll.result['内容'] || '';
-                    
+
                     // 同时更新世界书
                     if (!generatedWorldbook[category]) {
                         generatedWorldbook[category] = {};
                     }
                     generatedWorldbook[category][entryName] = JSON.parse(JSON.stringify(roll.result));
                     updateWorldbookPreview();
-                    
+
                     btn.textContent = '✅ 已应用';
                     setTimeout(() => { btn.textContent = '✅ 使用'; }, 1500);
                 }
@@ -3303,8 +3292,8 @@ ${generateDynamicJsonTemplate()}
                 const rollId = parseInt(item.dataset.rollId);
                 const roll = await MemoryHistoryDB.getEntryRollById(rollId);
                 if (roll && roll.result) {
-                    const keywords = Array.isArray(roll.result['关键词']) 
-                        ? roll.result['关键词'].join(', ') 
+                    const keywords = Array.isArray(roll.result['关键词'])
+                        ? roll.result['关键词'].join(', ')
                         : (roll.result['关键词'] || '');
                     // 显示预览
                     alert(`【Roll #${rollId}】\n\n关键词:\n${keywords}\n\n内容:\n${roll.result['内容'] || '(无)'}\n\n提示词: ${roll.customPrompt || '(无)'}`);
@@ -3316,9 +3305,9 @@ ${generateDynamicJsonTemplate()}
         const confirmBtn = modal.querySelector('#ttw-confirm-reroll-entry');
         const stopBtn = modal.querySelector('#ttw-stop-reroll-entry');
         const progressDiv = modal.querySelector('#ttw-reroll-progress');
-        
+
         let isRerollingEntries = false;
-        
+
         stopBtn.addEventListener('click', () => {
             isProcessingStopped = true;
             isRerollingEntries = false;
@@ -3386,19 +3375,19 @@ ${generateDynamicJsonTemplate()}
 
             try {
                 await processBatch(selectedIndices, concurrency);
-                
+
                 if (!isProcessingStopped) {
                     // 更新编辑区显示最后一次结果
                     if (lastResult) {
-                        const keywords = Array.isArray(lastResult['关键词']) 
-                            ? lastResult['关键词'].join(', ') 
+                        const keywords = Array.isArray(lastResult['关键词'])
+                            ? lastResult['关键词'].join(', ')
                             : (lastResult['关键词'] || '');
                         modal.querySelector('#ttw-entry-keywords-edit').value = keywords;
                         modal.querySelector('#ttw-entry-content-edit').value = lastResult['内容'] || '';
                     }
-                    
+
                     progressDiv.textContent = `✅ 完成! ${completed}/${total} 成功${failed > 0 ? `, ${failed} 失败` : ''}`;
-                    
+
                     // 刷新历史列表
                     const newHistory = await MemoryHistoryDB.getEntryRollResults(category, entryName);
                     let newHistoryHtml = '';
@@ -3422,7 +3411,7 @@ ${generateDynamicJsonTemplate()}
                         newHistoryHtml += '</div>';
                     }
                     modal.querySelector('#ttw-entry-roll-history').innerHTML = newHistoryHtml;
-                    
+
                     // 重新绑定事件
                     modal.querySelectorAll('.ttw-use-roll-btn').forEach(btn => {
                         btn.addEventListener('click', async (e) => {
@@ -3430,24 +3419,24 @@ ${generateDynamicJsonTemplate()}
                             const rollId = parseInt(btn.dataset.rollId);
                             const roll = await MemoryHistoryDB.getEntryRollById(rollId);
                             if (roll && roll.result) {
-                                const keywords = Array.isArray(roll.result['关键词']) 
-                                    ? roll.result['关键词'].join(', ') 
+                                const keywords = Array.isArray(roll.result['关键词'])
+                                    ? roll.result['关键词'].join(', ')
                                     : (roll.result['关键词'] || '');
                                 modal.querySelector('#ttw-entry-keywords-edit').value = keywords;
                                 modal.querySelector('#ttw-entry-content-edit').value = roll.result['内容'] || '';
-                                
+
                                 if (!generatedWorldbook[category]) {
                                     generatedWorldbook[category] = {};
                                 }
                                 generatedWorldbook[category][entryName] = JSON.parse(JSON.stringify(roll.result));
                                 updateWorldbookPreview();
-                                
+
                                 btn.textContent = '✅ 已应用';
                                 setTimeout(() => { btn.textContent = '✅ 使用'; }, 1500);
                             }
                         });
                     });
-                    
+
                     if (callback) callback();
                 }
             } catch (error) {
@@ -3589,7 +3578,7 @@ ${generateDynamicJsonTemplate()}
                     const currentIndex = index++;
                     const { category, entryName } = selectedEntries[currentIndex];
                     const sources = findEntrySourceMemories(category, entryName);
-                    
+
                     if (sources.length > 0) {
                         try {
                             await rerollSingleEntry(sources[0].memoryIndex, category, entryName, customPrompt);
@@ -3610,10 +3599,10 @@ ${generateDynamicJsonTemplate()}
             }
             await Promise.all(workers);
 
-            progressDiv.textContent = isProcessingStopped 
-                ? `已停止: ${completed}/${total} 完成` 
+            progressDiv.textContent = isProcessingStopped
+                ? `已停止: ${completed}/${total} 完成`
                 : `✅ 完成: ${completed}/${total}${failed > 0 ? `, ${failed} 失败` : ''}`;
-            
+
             confirmBtn.disabled = false;
             confirmBtn.style.display = 'inline-block';
             stopBtn.style.display = 'none';
@@ -9102,7 +9091,7 @@ ${pairsContent}
         helpModal.innerHTML = `
         <div class="ttw-modal" style="max-width:700px;">
             <div class="ttw-modal-header">
-                <span class="ttw-modal-title">❓ TXT转世界书 v3.0.9 帮助</span>
+                <span class="ttw-modal-title">❓ TXT转世界书 v3.10.0 帮助</span>
                 <button class="ttw-modal-close" type="button">✕</button>
             </div>
             <div class="ttw-modal-body" style="max-height:75vh;overflow-y:auto;">
@@ -9688,7 +9677,7 @@ ${pairsContent}
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v3.0.9 </span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v3.10.0 </span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -11080,7 +11069,7 @@ ${pairsContent}
         let totalEntries = 0;
         let totalTokens = 0;
         let belowThresholdCount = 0;
-        
+
         for (const category in worldbook) {
             const entries = worldbook[category];
             const entryCount = typeof entries === 'object' ? Object.keys(entries).length : 0;
@@ -11105,7 +11094,7 @@ ${pairsContent}
                     <span style="font-size:12px;">${entryCount} 条目 | <span style="color:#f1c40f;">~${categoryTokens} tk</span></span>
                 </div>
                 <div style="background:#2d2d2d;display:none;">`;
-            
+
             for (const entryName of naturalSortEntryNames(Object.keys(entries))) {
                 const entry = entries[entryName];
                 const config = getEntryConfig(category, entryName);
@@ -11122,11 +11111,11 @@ ${pairsContent}
 
                 // 计算条目token数
                 const entryTokens = getEntryTotalTokens(entry);
-                
+
                 // 判断是否低于阈值需要高亮
                 const isBelowThreshold = tokenHighlightThreshold > 0 && entryTokens < tokenHighlightThreshold;
                 if (isBelowThreshold) belowThresholdCount++;
-                
+
                 const highlightStyle = isBelowThreshold ? 'background:#7f1d1d;border-left:3px solid #ef4444;' : 'border-left:3px solid #3498db;';
                 const tokenStyle = isBelowThreshold ? 'color:#ef4444;font-weight:bold;' : 'color:#f1c40f;';
                 const warningIcon = isBelowThreshold ? '⚠️ ' : '';
@@ -11174,12 +11163,12 @@ ${pairsContent}
             }
             html += `</div></div>`;
         }
-        
+
         // 统计信息
-        const thresholdInfo = tokenHighlightThreshold > 0 
-            ? ` | <span style="color:#ef4444;">⚠️ ${belowThresholdCount}个条目低于${tokenHighlightThreshold}tk</span>` 
+        const thresholdInfo = tokenHighlightThreshold > 0
+            ? ` | <span style="color:#ef4444;">⚠️ ${belowThresholdCount}个条目低于${tokenHighlightThreshold}tk</span>`
             : '';
-        
+
         return `<div style="margin-bottom:12px;font-size:13px;">共 ${Object.keys(worldbook).filter(k => Object.keys(worldbook[k]).length > 0).length} 个分类, ${totalEntries} 个条目 | <span style="color:#f1c40f;">总计 ~${totalTokens} tk</span>${thresholdInfo}</div>` + html;
     }
 
@@ -11275,7 +11264,7 @@ ${pairsContent}
             </div>
         `;
         document.body.appendChild(viewModal);
-        
+
         // 绑定手动合并按钮
         viewModal.querySelector('#ttw-manual-merge-btn').addEventListener('click', () => {
             showManualMergeUI(() => {
@@ -11301,7 +11290,7 @@ ${pairsContent}
                 bindEntryRerollEvents(bodyContainer);
             });
         });
-        
+
         // 绑定阈值应用事件
         viewModal.querySelector('#ttw-apply-threshold').addEventListener('click', () => {
             const input = viewModal.querySelector('#ttw-token-threshold-input');
@@ -11313,14 +11302,14 @@ ${pairsContent}
             bindConfigButtonEvents(bodyContainer);
             bindEntryRerollEvents(bodyContainer);
         });
-        
+
         // 支持回车键应用
         viewModal.querySelector('#ttw-token-threshold-input').addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 viewModal.querySelector('#ttw-apply-threshold').click();
             }
         });
-        
+
         bindLightToggleEvents(viewModal.querySelector('#ttw-worldbook-view-body'));
         bindConfigButtonEvents(viewModal.querySelector('#ttw-worldbook-view-body'));
         bindEntryRerollEvents(viewModal.querySelector('#ttw-worldbook-view-body'));
