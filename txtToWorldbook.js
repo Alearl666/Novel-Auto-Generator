@@ -378,6 +378,7 @@
         categoryLightSettings: null,
         defaultWorldbookEntries: '',
         customRerollPrompt: '',
+        customBatchRerollPrompt: '',
         customApiProvider: 'gemini',
         customApiKey: '',
         customApiEndpoint: '',
@@ -3515,7 +3516,7 @@ ${generateDynamicJsonTemplate()}
                     <div id="ttw-batch-entries" style="max-height:300px;overflow-y:auto;">${entriesHtml}</div>
                     <div style="margin-top:12px;">
                         <label style="display:block;margin-bottom:8px;font-weight:bold;font-size:13px;">📝 统一提示词</label>
-                        <textarea id="ttw-batch-prompt" rows="3" placeholder="对所有选中条目使用相同的提示词..." style="width:100%;padding:8px;border:1px solid #555;border-radius:6px;background:rgba(0,0,0,0.3);color:#fff;font-size:12px;box-sizing:border-box;"></textarea>
+                        <textarea id="ttw-batch-prompt" rows="3" placeholder="对所有选中条目使用相同的提示词..." style="width:100%;padding:8px;border:1px solid #555;border-radius:6px;background:rgba(0,0,0,0.3);color:#fff;font-size:12px;box-sizing:border-box;">${settings.customBatchRerollPrompt || ''}</textarea>
                     </div>
                     <div style="margin-top:12px;display:flex;align-items:center;gap:10px;">
                         <label style="font-size:12px;color:#3498db;">⚡ 并发数:</label>
@@ -3563,6 +3564,8 @@ ${generateDynamicJsonTemplate()}
             }
 
             const customPrompt = modal.querySelector('#ttw-batch-prompt').value.trim();
+            settings.customBatchRerollPrompt = customPrompt;
+            saveCurrentSettings();
             const concurrency = parseInt(modal.querySelector('#ttw-batch-concurrency').value) || 3;
 
             confirmBtn.disabled = true;
@@ -8054,20 +8057,107 @@ ${pairsContent}
     }
 
 
-    function exportWorldbook() {
+    function exportCharacterCard() {
         const timeString = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/[:/\s]/g, '').replace(/,/g, '-');
 
-        const baseName = getExportBaseName('世界书');
+        const baseName = getExportBaseName('角色卡');
 
-        const fileName = `${baseName}-世界书-${timeString}`;
-        const exportData = useVolumeMode ? { volumes: worldbookVolumes, currentVolume: generatedWorldbook, merged: getAllVolumesWorldbook() } : generatedWorldbook;
-        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = fileName + '.json';
-        a.click();
-        URL.revokeObjectURL(url);
+        try {
+            const worldbookToExport = useVolumeMode ? getAllVolumesWorldbook() : generatedWorldbook;
+            const stWorldbook = convertToSillyTavernFormat(worldbookToExport);
+
+            // 将ST内部格式条目转换为V2 spec的character_book entries
+            const v2Entries = stWorldbook.entries.map((entry, index) => ({
+                id: index,
+                keys: Array.isArray(entry.key) ? entry.key : [entry.key],
+                secondary_keys: Array.isArray(entry.keysecondary) ? entry.keysecondary : [],
+                comment: entry.comment || '',
+                content: entry.content || '',
+                constant: !!entry.constant,
+                selective: !!entry.selective,
+                insertion_order: entry.order !== undefined ? entry.order : 100,
+                enabled: !entry.disable,
+                position: entry.position === 1 ? 'after_char' : 'before_char',
+                case_sensitive: !!entry.caseSensitive,
+                name: entry.comment || `条目${index}`,
+                priority: 10,
+                extensions: {
+                    position: entry.position !== undefined ? entry.position : 0,
+                    exclude_recursion: !!entry.excludeRecursion,
+                    prevent_recursion: !!entry.preventRecursion,
+                    delay_until_recursion: !!entry.delayUntilRecursion,
+                    depth: entry.depth !== undefined ? entry.depth : 4,
+                    selectiveLogic: entry.selectiveLogic !== undefined ? entry.selectiveLogic : 0,
+                    group: entry.group || '',
+                    group_override: !!entry.groupOverride,
+                    group_weight: entry.groupWeight !== undefined ? entry.groupWeight : 100,
+                    use_group_scoring: entry.useGroupScoring !== undefined ? entry.useGroupScoring : null,
+                    automation_id: entry.automationId || '',
+                    role: entry.role !== undefined ? entry.role : 0,
+                    vectorized: !!entry.vectorized,
+                    display_index: index,
+                    probability: entry.probability !== undefined ? entry.probability : 100,
+                    sticky: entry.sticky !== undefined ? entry.sticky : null,
+                    cooldown: entry.cooldown !== undefined ? entry.cooldown : null,
+                    delay: entry.delay !== undefined ? entry.delay : null,
+                    addMemo: entry.addMemo !== undefined ? entry.addMemo : true,
+                    scan_depth: entry.scanDepth !== undefined ? entry.scanDepth : null,
+                    match_whole_words: entry.matchWholeWords !== undefined ? entry.matchWholeWords : false
+                }
+            }));
+
+            // 构建V2 spec角色卡
+            const characterCard = {
+                spec: 'chara_card_v2',
+                spec_version: '2.0',
+                data: {
+                    name: baseName,
+                    description: '',
+                    personality: '',
+                    scenario: '',
+                    first_mes: '',
+                    mes_example: '',
+                    creator_notes: '由TXT转世界书功能生成的角色卡，世界书已绑定',
+                    system_prompt: '',
+                    post_history_instructions: '',
+                    alternate_greetings: [],
+                    character_book: {
+                        name: `${baseName}-世界书`,
+                        description: '由TXT转世界书功能生成',
+                        scan_depth: 2,
+                        token_budget: 2048,
+                        recursive_scanning: !!settings.allowRecursion,
+                        extensions: {},
+                        entries: v2Entries
+                    },
+                    tags: ['TxtToWorldbook', '自动生成'],
+                    creator: 'TxtToWorldbook',
+                    character_version: '1.0',
+                    extensions: {
+                        talkativeness: '0.5',
+                        fav: false,
+                        world: '',
+                        depth_prompt: {
+                            prompt: '',
+                            depth: 4,
+                            role: 'system'
+                        }
+                    }
+                }
+            };
+
+            const fileName = `${baseName}-角色卡-${timeString}`;
+            const blob = new Blob([JSON.stringify(characterCard, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName + '.json';
+            a.click();
+            URL.revokeObjectURL(url);
+            alert('已导出SillyTavern角色卡（世界书已绑定到角色卡）');
+        } catch (error) {
+            alert('导出角色卡失败：' + error.message);
+        }
     }
 
 
@@ -8077,9 +8167,9 @@ ${pairsContent}
             const worldbookToExport = useVolumeMode ? getAllVolumesWorldbook() : generatedWorldbook;
             const sillyTavernWorldbook = convertToSillyTavernFormat(worldbookToExport);
 
-            const baseName = getExportBaseName('酒馆书');
+            const baseName = getExportBaseName('世界书');
 
-            const fileName = `${baseName}-酒馆书-${timeString}`;
+            const fileName = `${baseName}-世界书-${timeString}`;
             const blob = new Blob([JSON.stringify(sillyTavernWorldbook, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -8087,7 +8177,7 @@ ${pairsContent}
             a.download = fileName + '.json';
             a.click();
             URL.revokeObjectURL(url);
-            alert('已导出SillyTavern格式');
+            alert('已导出世界书');
         } catch (error) {
             alert('转换失败：' + error.message);
         }
@@ -8256,6 +8346,7 @@ ${pairsContent}
                 stylePrompt: settings.customStylePrompt,
                 mergePrompt: settings.customMergePrompt,
                 rerollPrompt: settings.customRerollPrompt,
+                batchRerollPrompt: settings.customBatchRerollPrompt,
                 defaultWorldbookEntries: settings.defaultWorldbookEntries
             },
             consolidatePromptPresets: settings.consolidatePromptPresets,
@@ -8343,6 +8434,9 @@ ${pairsContent}
                     }
                     if (data.prompts.rerollPrompt !== undefined) {
                         settings.customRerollPrompt = data.prompts.rerollPrompt;
+                    }
+                    if (data.prompts.batchRerollPrompt !== undefined) {
+                        settings.customBatchRerollPrompt = data.prompts.batchRerollPrompt;
                     }
                     // 旧版兼容：单个整理提示词迁移为预设
                     if (data.prompts.consolidatePrompt && data.prompts.consolidatePrompt.trim()) {
@@ -9984,9 +10078,9 @@ ${pairsContent}
                                  <button id="ttw-consolidate-entries" class="ttw-btn" title="用AI整理条目，去除重复信息">🧹 整理条目</button>
                                 <button id="ttw-clean-tags" class="ttw-btn" title="清除条目中的标签内容（不消耗Token）">🏷️ 清除标签</button>
                                 <button id="ttw-alias-merge" class="ttw-btn" title="识别各分类中同一事物的不同称呼并合并">🔗 别名合并</button>
-                                <button id="ttw-export-json" class="ttw-btn">📥 导出JSON</button>
+                                <button id="ttw-export-json" class="ttw-btn ttw-btn-primary">🃏 导出角色卡</button>
                                 <button id="ttw-export-volumes" class="ttw-btn" style="display:none;">📦 分卷导出</button>
-                                <button id="ttw-export-st" class="ttw-btn ttw-btn-primary">📥 导出SillyTavern格式</button>
+                                <button id="ttw-export-st" class="ttw-btn ttw-btn-primary">📥 导出世界书</button>
                             </div>
                         </div>
                     </div>
@@ -10453,7 +10547,7 @@ ${pairsContent}
         document.getElementById('ttw-consolidate-entries').addEventListener('click', showConsolidateCategorySelector);
         document.getElementById('ttw-clean-tags').addEventListener('click', showCleanTagsModal);
         document.getElementById('ttw-alias-merge').addEventListener('click', showAliasMergeUI);
-        document.getElementById('ttw-export-json').addEventListener('click', exportWorldbook);
+        document.getElementById('ttw-export-json').addEventListener('click', exportCharacterCard);
         document.getElementById('ttw-export-volumes').addEventListener('click', exportVolumes);
         document.getElementById('ttw-export-st').addEventListener('click', exportToSillyTavern);
         document.querySelector('[data-section="settings"]').addEventListener('click', () => { document.querySelector('.ttw-settings-section').classList.toggle('collapsed'); });
