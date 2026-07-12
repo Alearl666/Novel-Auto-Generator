@@ -1,5 +1,5 @@
 /**
- * TXT转世界书独立模块 v3.1.0
+ * TXT转世界书独立模块 v3.2.0
  * v3.0.8 新增:
  *   - 消息链配置：发送给AI的提示词支持多消息格式，每条消息可指定角色（系统/用户/AI助手）
  *   - 酒馆API优先使用generateRaw消息数组格式（ST 1.13.2+），自动回退兼容旧版
@@ -16,6 +16,11 @@
  *   - 支持跨分类勾选2+条目合并，可自定义主名称和目标分类
  *   - 条目筛选、全部展开/收起、合并预览（关键词+Token统计）
  *   - 适用于AI别名识别遗漏的场景，与自动别名合并互补
+ * v3.2.0 新增:
+ *   - 导入更新章节：章节队列新增「📗导入更新章节」按钮，只把新增章节追加到队列末尾
+ *   - 支持两种模式：仅新增模式（只导新章节直接追加）/ 完整文件模式（导整本自动识别新增去重）
+ *   - 追加过程完全不刷新已处理/已整理/已别名合并的世界书条目
+ *   - 生成结果视图新增条目/分类删除按钮，可手动删除部分条目或整个分类
  */
 
 (function () {
@@ -9091,7 +9096,7 @@ ${pairsContent}
         helpModal.innerHTML = `
         <div class="ttw-modal" style="max-width:700px;">
             <div class="ttw-modal-header">
-                <span class="ttw-modal-title">❓ TXT转世界书 v3.10.0 帮助</span>
+                <span class="ttw-modal-title">❓ TXT转世界书 v3.2.0 帮助</span>
                 <button class="ttw-modal-close" type="button">✕</button>
             </div>
             <div class="ttw-modal-body" style="max-height:75vh;overflow-y:auto;">
@@ -9677,7 +9682,7 @@ ${pairsContent}
         modalContainer.innerHTML = `
             <div class="ttw-modal">
                 <div class="ttw-modal-header">
-                    <span class="ttw-modal-title">📚 TXT转世界书 v3.10.0 </span>
+                    <span class="ttw-modal-title">📚 TXT转世界书 v3.2.0 </span>
                     <div class="ttw-header-actions">
                         <span class="ttw-help-btn" title="帮助">❓</span>
                         <button class="ttw-modal-close" type="button">✕</button>
@@ -10009,6 +10014,7 @@ ${pairsContent}
                         <div class="ttw-section-header">
                             <span>📋 章节队列</span>
                             <div style="display:flex;gap:8px;margin-left:auto;">
+                                <button id="ttw-import-update-chapters" class="ttw-btn-small" style="background:rgba(39,174,96,0.4);" title="导入更新的TXT，只把新增章节追加到队列末尾，不影响已处理和已整理的条目">📗 导入更新章节</button>
                                 <button id="ttw-view-processed" class="ttw-btn-small">📊 已处理</button>
                                 <button id="ttw-select-start" class="ttw-btn-small">📍 选择起始</button>
                                 <button id="ttw-multi-delete-btn" class="ttw-btn-small ttw-btn-warning">🗑️ 多选删除</button>
@@ -10486,6 +10492,7 @@ ${pairsContent}
         document.getElementById('ttw-repair-btn').addEventListener('click', startRepairFailedMemories);
         document.getElementById('ttw-select-start').addEventListener('click', showStartFromSelector);
         document.getElementById('ttw-view-processed').addEventListener('click', showProcessedResults);
+        document.getElementById('ttw-import-update-chapters').addEventListener('click', importUpdateChapters);
 
         document.getElementById('ttw-multi-delete-btn').addEventListener('click', toggleMultiSelectMode);
         document.getElementById('ttw-confirm-multi-delete').addEventListener('click', deleteSelectedMemories);
@@ -10894,6 +10901,168 @@ ${pairsContent}
         memoryQueue.forEach((memory, index) => { memory.title = `记忆${index + 1}`; });
     }
 
+    // 新增：纯分块函数，返回内容数组（供"导入更新章节"复用）
+    function splitContentIntoChunks(content) {
+        const backup = memoryQueue;
+        memoryQueue = [];
+        splitContentIntoMemory(content);
+        const chunks = memoryQueue.map(m => m.content);
+        memoryQueue = backup;
+        return chunks;
+    }
+
+    // ========== 新增：导入更新章节（支持两种模式，不影响已处理/已整理/已合并的条目） ==========
+    async function importUpdateChapters() {
+        if (memoryQueue.length === 0) {
+            alert('请先加载原始文件后再导入更新章节');
+            return;
+        }
+
+        // 先让用户选择导入模式
+        const mode = await new Promise((resolve) => {
+            const existing = document.getElementById('ttw-update-mode-modal');
+            if (existing) existing.remove();
+
+            const m = document.createElement('div');
+            m.id = 'ttw-update-mode-modal';
+            m.className = 'ttw-modal-container';
+            m.innerHTML = `
+                <div class="ttw-modal" style="max-width:500px;">
+                    <div class="ttw-modal-header">
+                        <span class="ttw-modal-title">📗 导入更新章节 - 选择模式</span>
+                        <button class="ttw-modal-close" type="button">✕</button>
+                    </div>
+                    <div class="ttw-modal-body">
+                        <div style="margin-bottom:12px;padding:10px;background:rgba(52,152,219,0.15);border-radius:6px;font-size:12px;color:#3498db;">
+                            两种模式都<strong>只把新章节追加到队列末尾</strong>，已处理/已整理/已合并的条目不会被刷新。
+                        </div>
+                        <label class="ttw-merge-option" style="margin-bottom:10px;">
+                            <input type="radio" name="ttw-update-mode" value="append-only" checked>
+                            <div>
+                                <div style="font-weight:bold;color:#27ae60;">➕ 仅新增模式（推荐）</div>
+                                <div style="font-size:11px;color:#888;">导入的文件<strong>只包含新增章节</strong>，全部直接追加到末尾。不做对比，最省事，适合每次只导更新部分。</div>
+                            </div>
+                        </label>
+                        <label class="ttw-merge-option">
+                            <input type="radio" name="ttw-update-mode" value="full-file">
+                            <div>
+                                <div style="font-weight:bold;color:#3498db;">📖 完整文件模式</div>
+                                <div style="font-size:11px;color:#888;">导入<strong>更新后的整本TXT</strong>（含原有全部内容），自动识别新增部分并去重追加。</div>
+                            </div>
+                        </label>
+                    </div>
+                    <div class="ttw-modal-footer">
+                        <button class="ttw-btn" id="ttw-update-mode-cancel">取消</button>
+                        <button class="ttw-btn ttw-btn-primary" id="ttw-update-mode-confirm">下一步 · 选择文件</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(m);
+
+            m.querySelector('.ttw-modal-close').addEventListener('click', () => { m.remove(); resolve(null); });
+            m.querySelector('#ttw-update-mode-cancel').addEventListener('click', () => { m.remove(); resolve(null); });
+            m.addEventListener('click', (e) => { if (e.target === m) { m.remove(); resolve(null); } });
+            m.querySelector('#ttw-update-mode-confirm').addEventListener('click', () => {
+                const val = m.querySelector('input[name="ttw-update-mode"]:checked')?.value || 'append-only';
+                m.remove();
+                resolve(val);
+            });
+        });
+
+        if (!mode) return;
+
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.txt';
+        input.onchange = async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            try {
+                const { content } = await detectBestEncoding(file);
+
+                let newPart = '';
+
+                if (mode === 'append-only') {
+                    newPart = content.replace(/^\s+/, '');
+                    if (!newPart || newPart.trim().length === 0) {
+                        alert('导入的文件内容为空');
+                        return;
+                    }
+                } else {
+                    const oldContent = memoryQueue.map(m => m.content).join('');
+                    const oldLen = oldContent.length;
+
+                    if (content.length <= oldLen) {
+                        if (!confirm('导入的文件长度不大于当前内容，可能没有新增章节。仍要继续吗？')) return;
+                    }
+
+                    const anchorLen = Math.min(2000, oldLen);
+                    if (anchorLen > 0) {
+                        const anchor = oldContent.slice(oldLen - anchorLen);
+                        const anchorPos = content.indexOf(anchor);
+                        if (anchorPos !== -1) {
+                            newPart = content.slice(anchorPos + anchor.length);
+                        } else {
+                            newPart = content.slice(oldLen);
+                        }
+                    } else {
+                        newPart = content.slice(oldLen);
+                    }
+                    newPart = newPart.replace(/^\s+/, '');
+
+                    if (!newPart || newPart.trim().length === 0) {
+                        alert('未检测到新增章节内容。\n\n如果你导入的是"只含新增部分"的文件，请改用「➕ 仅新增模式」。');
+                        return;
+                    }
+                }
+
+                const modeLabel = mode === 'append-only' ? '仅新增模式' : '完整文件模式';
+                if (!confirm(`[${modeLabel}] 检测到约 ${(newPart.length / 1000).toFixed(1)}k 字的新增内容。\n\n将分块后追加到章节队列末尾，已处理/已整理/已合并的条目保持不变。\n\n确定导入吗？`)) {
+                    return;
+                }
+
+                const prevQueueLen = memoryQueue.length;
+
+                const newChunks = splitContentIntoChunks(newPart);
+                if (newChunks.length === 0) {
+                    alert('新增内容分块结果为空');
+                    return;
+                }
+
+                for (const chunk of newChunks) {
+                    memoryQueue.push({
+                        title: '',
+                        content: chunk,
+                        processed: false,
+                        failed: false,
+                        processing: false
+                    });
+                }
+
+                memoryQueue.forEach((m, i) => { m.title = `记忆${i + 1}`; });
+
+                const totalChars = memoryQueue.reduce((sum, m) => sum + m.content.length, 0);
+                const sizeEl = document.getElementById('ttw-file-size');
+                if (sizeEl) sizeEl.textContent = `(${(totalChars / 1024).toFixed(1)} KB, ${memoryQueue.length}章)`;
+
+                startFromIndex = prevQueueLen;
+                userSelectedStartIndex = null;
+
+                updateMemoryQueueUI();
+                updateStartButtonState(false);
+
+                try { await MemoryHistoryDB.saveState(memoryQueue.filter(m => m.processed).length); } catch (err) { }
+
+                alert(`已追加 ${newChunks.length} 个新章节（第${prevQueueLen + 1}~${memoryQueue.length}章）。\n\n点击"开始/继续转换"将只处理新增章节，已整理和别名合并的条目不会被刷新。`);
+
+            } catch (error) {
+                alert('导入更新章节失败: ' + error.message);
+            }
+        };
+        input.click();
+    }
+
     async function clearFile() {
         currentFile = null;
         savedNovelName = '';
@@ -11059,6 +11228,7 @@ ${pairsContent}
         bindLightToggleEvents(container);
         bindConfigButtonEvents(container);
         bindEntryRerollEvents(container);
+        bindEntryDeleteEvents(container);
     }
 
     function formatWorldbookAsCards(worldbook) {
@@ -11090,7 +11260,7 @@ ${pairsContent}
 
             html += `<div style="margin-bottom:12px;border:1px solid #e67e22;border-radius:8px;overflow:hidden;">
                 <div style="background:linear-gradient(135deg,#e67e22,#d35400);padding:10px 14px;cursor:pointer;font-weight:bold;display:flex;justify-content:space-between;align-items:center;" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
-                    <span style="display:flex;align-items:center;">📁 ${category}<button class="ttw-light-toggle ${lightClass}" data-category="${category}" title="${lightTitle}" onclick="event.stopPropagation();">${lightIcon}</button><button class="ttw-config-btn" data-category="${category}" title="配置分类默认位置/深度" onclick="event.stopPropagation();">⚙️</button></span>
+                    <span style="display:flex;align-items:center;">📁 ${category}<button class="ttw-light-toggle ${lightClass}" data-category="${category}" title="${lightTitle}" onclick="event.stopPropagation();">${lightIcon}</button><button class="ttw-config-btn" data-category="${category}" title="配置分类默认位置/深度" onclick="event.stopPropagation();">⚙️</button><button class="ttw-cat-delete-btn" data-category="${category}" title="删除整个分类" onclick="event.stopPropagation();" style="margin-left:4px;background:rgba(231,76,60,0.35);border:none;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:12px;color:#fff;">🗑️</button></span>
                     <span style="font-size:12px;">${entryCount} 条目 | <span style="color:#f1c40f;">~${categoryTokens} tk</span></span>
                 </div>
                 <div style="background:#2d2d2d;display:none;">`;
@@ -11122,7 +11292,7 @@ ${pairsContent}
 
                 html += `<div style="margin:8px;border:1px solid #555;border-radius:6px;overflow:hidden;">
         <div style="background:#3a3a3a;padding:8px 12px;cursor:pointer;display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;${highlightStyle}" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
-            <span style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;">${warningIcon}📄 ${entryName}<button class="ttw-entry-config-btn ttw-config-btn" data-category="${category}" data-entry="${entryName}" title="配置位置/深度/顺序" onclick="event.stopPropagation();">⚙️</button><button class="ttw-entry-reroll-btn" data-category="${category}" data-entry="${entryName}" title="单独重Roll此条目" onclick="event.stopPropagation();" style="background:rgba(155,89,182,0.4);border:none;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:11px;color:#fff;">🎯</button></span>
+            <span style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;">${warningIcon}📄 ${entryName}<button class="ttw-entry-config-btn ttw-config-btn" data-category="${category}" data-entry="${entryName}" title="配置位置/深度/顺序" onclick="event.stopPropagation();">⚙️</button><button class="ttw-entry-reroll-btn" data-category="${category}" data-entry="${entryName}" title="单独重Roll此条目" onclick="event.stopPropagation();" style="background:rgba(155,89,182,0.4);border:none;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:11px;color:#fff;">🎯</button><button class="ttw-entry-delete-btn" data-category="${category}" data-entry="${entryName}" title="删除此条目" onclick="event.stopPropagation();" style="background:rgba(231,76,60,0.35);border:none;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:11px;color:#fff;">🗑️</button></span>
             <span style="font-size:9px;color:#888;display:flex;gap:4px;align-items:center;">
                 <span style="${tokenStyle}">${entryTokens}tk</span>
                 <span>D${config.depth}O${displayOrder}${autoIncrement ? '↗' : ''}</span>
@@ -11235,6 +11405,56 @@ ${pairsContent}
         });
     }
 
+    // ========== 新增：绑定条目/分类删除按钮事件 ==========
+    function bindEntryDeleteEvents(container, refreshCallback) {
+        const doRefresh = () => {
+            updateWorldbookPreview();
+            if (typeof refreshCallback === 'function') refreshCallback();
+        };
+
+        // 删除单个条目
+        container.querySelectorAll('.ttw-entry-delete-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const category = btn.dataset.category;
+                const entryName = btn.dataset.entry;
+                if (!confirm(`确定删除条目「${entryName}」吗？\n\n（仅从世界书中删除，不影响原文章节）`)) return;
+
+                if (generatedWorldbook[category] && generatedWorldbook[category][entryName]) {
+                    delete generatedWorldbook[category][entryName];
+                }
+                const cfgKey = `${category}::${entryName}`;
+                if (entryPositionConfig[cfgKey]) {
+                    delete entryPositionConfig[cfgKey];
+                    settings.entryPositionConfig = entryPositionConfig;
+                    saveCurrentSettings();
+                }
+                doRefresh();
+            });
+        });
+
+        // 删除整个分类
+        container.querySelectorAll('.ttw-cat-delete-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const category = btn.dataset.category;
+                const count = generatedWorldbook[category] ? Object.keys(generatedWorldbook[category]).length : 0;
+                if (!confirm(`确定删除整个分类「${category}」及其 ${count} 个条目吗？\n\n（仅从世界书中删除，不影响原文章节）`)) return;
+
+                if (generatedWorldbook[category]) {
+                    for (const entryName in generatedWorldbook[category]) {
+                        const cfgKey = `${category}::${entryName}`;
+                        if (entryPositionConfig[cfgKey]) delete entryPositionConfig[cfgKey];
+                    }
+                    delete generatedWorldbook[category];
+                    settings.entryPositionConfig = entryPositionConfig;
+                    saveCurrentSettings();
+                }
+                doRefresh();
+            });
+        });
+    }
+
     function showWorldbookView() {
         const existingModal = document.getElementById('ttw-worldbook-view-modal');
         if (existingModal) existingModal.remove();
@@ -11275,6 +11495,7 @@ ${pairsContent}
                 bindLightToggleEvents(bodyContainer);
                 bindConfigButtonEvents(bodyContainer);
                 bindEntryRerollEvents(bodyContainer);
+                bindEntryDeleteEvents(bodyContainer, _refreshWbView);
             });
         });
 
@@ -11288,6 +11509,7 @@ ${pairsContent}
                 bindLightToggleEvents(bodyContainer);
                 bindConfigButtonEvents(bodyContainer);
                 bindEntryRerollEvents(bodyContainer);
+                bindEntryDeleteEvents(bodyContainer, _refreshWbView);
             });
         });
 
@@ -11301,6 +11523,7 @@ ${pairsContent}
             bindLightToggleEvents(bodyContainer);
             bindConfigButtonEvents(bodyContainer);
             bindEntryRerollEvents(bodyContainer);
+            bindEntryDeleteEvents(bodyContainer, _refreshWbView);
         });
 
         // 支持回车键应用
@@ -11310,9 +11533,19 @@ ${pairsContent}
             }
         });
 
-        bindLightToggleEvents(viewModal.querySelector('#ttw-worldbook-view-body'));
-        bindConfigButtonEvents(viewModal.querySelector('#ttw-worldbook-view-body'));
-        bindEntryRerollEvents(viewModal.querySelector('#ttw-worldbook-view-body'));
+        const _wbBody = viewModal.querySelector('#ttw-worldbook-view-body');
+        const _refreshWbView = () => {
+            const wb = useVolumeMode ? getAllVolumesWorldbook() : generatedWorldbook;
+            _wbBody.innerHTML = formatWorldbookAsCards(wb);
+            bindLightToggleEvents(_wbBody);
+            bindConfigButtonEvents(_wbBody);
+            bindEntryRerollEvents(_wbBody);
+            bindEntryDeleteEvents(_wbBody, _refreshWbView);
+        };
+        bindLightToggleEvents(_wbBody);
+        bindConfigButtonEvents(_wbBody);
+        bindEntryRerollEvents(_wbBody);
+        bindEntryDeleteEvents(_wbBody, _refreshWbView);
         viewModal.querySelector('.ttw-modal-close').addEventListener('click', () => viewModal.remove());
         viewModal.querySelector('#ttw-close-worldbook-view').addEventListener('click', () => viewModal.remove());
         viewModal.addEventListener('click', (e) => { if (e.target === viewModal) viewModal.remove(); });
@@ -11479,5 +11712,5 @@ ${pairsContent}
         clearEntryRollHistory: (cat, entry) => MemoryHistoryDB.clearEntryRollResults(cat, entry)
     };
 
-    console.log('📚 TxtToWorldbook v3.1.0 已加载 - 新增: 手动合并条目(跨分类选择+自定义名称)');
+    console.log('📚 TxtToWorldbook v3.2.0 已加载 - 新增: 导入更新章节(两种模式)+条目/分类删除');
 })();
