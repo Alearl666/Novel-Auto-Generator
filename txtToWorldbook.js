@@ -387,6 +387,13 @@
         promptMessageChain: [
             { role: 'user', content: '{PROMPT}', enabled: true }
         ],
+        // ===== 酒馆预设导入相关 =====
+        presetTemperature: 0.3,
+        presetMaxTokens: null,
+        presetTopP: null,
+        presetFreqPenalty: null,
+        presetPresPenalty: null,
+        importedPresetName: '',
         allowRecursion: false,
         filterResponseTags: 'thinking,/think',
         debugMode: false,
@@ -979,6 +986,155 @@
         })).filter(m => m.content.trim().length > 0);
     }
 
+    // ========== 酒馆对话补全预设导入 ==========
+
+    // 酒馆预设里的占位符条目。本插件没有角色卡/聊天记录，需要特殊处理。
+    const ST_MARKER_MAP = {
+        chatHistory: '{PROMPT}',   // 聊天记录槽 -> 我们的正文提示词
+        worldInfoBefore: null,
+        worldInfoAfter: null,
+        charDescription: null,
+        charPersonality: null,
+        scenario: null,
+        personaDescription: null,
+        dialogueExamples: null
+    };
+
+    // 解析酒馆对话补全预设 JSON
+    function parseTavernPreset(json) {
+        if (!json || !Array.isArray(json.prompts)) {
+            throw new Error('不是有效的酒馆对话补全预设（缺少 prompts 数组）');
+        }
+
+        // identifier -> prompt 映射
+        const byId = {};
+        for (const p of json.prompts) {
+            if (p && p.identifier) byId[p.identifier] = p;
+        }
+
+        // 取排布顺序。酒馆用 character_id 100001 作为全局默认档
+        let order = null;
+        if (Array.isArray(json.prompt_order) && json.prompt_order.length) {
+            const global = json.prompt_order.find(o => o.character_id === 100001)
+                || json.prompt_order[json.prompt_order.length - 1];
+            order = Array.isArray(global && global.order) ? global.order : null;
+        }
+        // 没有 prompt_order 的老预设：按 prompts 原序
+        if (!order) {
+            order = json.prompts.map(p => ({ identifier: p.identifier, enabled: p.enabled !== false }));
+        }
+
+        const chain = [];
+        const depthInjections = [];
+        let droppedMarkers = 0, skippedEmpty = 0, hasPromptSlot = false;
+
+        for (const item of order) {
+            const p = byId[item.identifier];
+            if (!p) continue;
+
+            const enabled = item.enabled !== false;
+
+            // 占位符条目
+            if (p.marker === true || Object.prototype.hasOwnProperty.call(ST_MARKER_MAP, p.identifier)) {
+                if (ST_MARKER_MAP[p.identifier] === '{PROMPT}') {
+                    chain.push({ role: 'user', content: '{PROMPT}', enabled: enabled });
+                    hasPromptSlot = true;
+                } else {
+                    droppedMarkers++;
+                }
+                continue;
+            }
+
+            const content = (p.content || '').trim();
+            if (!content) { skippedEmpty++; continue; }
+
+            // 角色：显式 role 优先，否则默认 system
+            let role = p.role || 'system';
+            if (['system', 'user', 'assistant'].indexOf(role) === -1) role = 'system';
+
+            const entry = { role: role, content: content, enabled: enabled };
+
+            // injection_position: 0=按预设顺序, 1=按深度插进聊天记录
+            if (p.injection_position === 1) {
+                entry.__depth = typeof p.injection_depth === 'number' ? p.injection_depth : 4;
+                depthInjections.push(entry);
+            } else {
+                chain.push(entry);
+            }
+        }
+
+        // 深度注入条目：没有真实聊天记录，近似为插在 {PROMPT} 之后，depth 大的靠前
+        if (depthInjections.length) {
+            depthInjections.sort((a, b) => b.__depth - a.__depth);
+            const slotIdx = chain.findIndex(m => m.content === '{PROMPT}');
+            const insertAt = slotIdx >= 0 ? slotIdx + 1 : chain.length;
+            chain.splice.apply(chain, [insertAt, 0].concat(depthInjections));
+        }
+
+        // 预设里没有聊天记录槽时兜底，否则正文发不出去
+        if (!hasPromptSlot) {
+            chain.push({ role: 'user', content: '{PROMPT}', enabled: true });
+        }
+
+        // squash_system_messages：合并相邻的 system 消息
+        let finalChain = chain;
+        if (json.squash_system_messages === true) {
+            finalChain = [];
+            for (const m of chain) {
+                const prev = finalChain[finalChain.length - 1];
+                if (prev && prev.role === 'system' && m.role === 'system'
+                    && prev.enabled === m.enabled && m.content !== '{PROMPT}') {
+                    prev.content += '\n\n' + m.content;
+                } else {
+                    finalChain.push({ role: m.role, content: m.content, enabled: m.enabled });
+                }
+            }
+        }
+
+        // 采样参数
+        const num = v => (typeof v === 'number' && !isNaN(v)) ? v : null;
+        const maxTok = num(json.openai_max_tokens);
+        const params = {
+            temperature: num(json.temperature),
+            maxTokens: maxTok !== null ? maxTok : (num(json.max_tokens) !== null ? num(json.max_tokens) : num(json.genamt)),
+            topP: num(json.top_p),
+            freqPenalty: num(json.frequency_penalty),
+            presPenalty: num(json.presence_penalty)
+        };
+
+        return {
+            chain: finalChain,
+            params: params,
+            stats: {
+                used: finalChain.length,
+                enabled: finalChain.filter(m => m.enabled !== false).length,
+                droppedMarkers: droppedMarkers,
+                skippedEmpty: skippedEmpty,
+                hadPromptSlot: hasPromptSlot
+            }
+        };
+    }
+
+    // 把解析结果写入设置并刷新界面
+    function applyTavernPreset(parsed, presetName) {
+        settings.promptMessageChain = parsed.chain.map(m => ({
+            role: m.role,
+            content: m.content,
+            enabled: m.enabled !== false
+        }));
+
+        const p = parsed.params;
+        if (p.temperature !== null) settings.presetTemperature = p.temperature;
+        if (p.maxTokens !== null) settings.presetMaxTokens = p.maxTokens;
+        if (p.topP !== null) settings.presetTopP = p.topP;
+        if (p.freqPenalty !== null) settings.presetFreqPenalty = p.freqPenalty;
+        if (p.presPenalty !== null) settings.presetPresPenalty = p.presPenalty;
+        settings.importedPresetName = presetName || '';
+
+        saveCurrentSettings();
+        renderMessageChainUI();
+    }
+
     // 将messages转换为Gemini原生格式
     function convertToGeminiContents(messages) {
         const systemMsgs = messages.filter(m => m.role === 'system');
@@ -1282,6 +1438,24 @@
         // 构建OpenAI兼容的messages数组
         const openaiMessages = messages.map(m => ({ role: m.role, content: m.content }));
 
+        // 采样参数（来自导入的酒馆预设，未导入时用原有默认值）
+        const _sp = {
+            temperature: (settings.presetTemperature !== null && settings.presetTemperature !== undefined)
+                ? settings.presetTemperature : 0.3,
+            top_p: settings.presetTopP,
+            frequency_penalty: settings.presetFreqPenalty,
+            presence_penalty: settings.presetPresPenalty
+        };
+        const withSampling = (obj, defaultMaxTokens) => {
+            const out = Object.assign({}, obj);
+            out.temperature = _sp.temperature;
+            out.max_tokens = settings.presetMaxTokens || defaultMaxTokens;
+            if (_sp.top_p !== null && _sp.top_p !== undefined) out.top_p = _sp.top_p;
+            if (_sp.frequency_penalty !== null && _sp.frequency_penalty !== undefined) out.frequency_penalty = _sp.frequency_penalty;
+            if (_sp.presence_penalty !== null && _sp.presence_penalty !== undefined) out.presence_penalty = _sp.presence_penalty;
+            return out;
+        };
+
         switch (provider) {
             case 'deepseek':
                 if (!apiKey) throw new Error('DeepSeek API Key 未设置');
@@ -1292,12 +1466,10 @@
                         'Content-Type': 'application/json',
                         'Authorization': `Bearer ${apiKey}`
                     },
-                    body: JSON.stringify({
+                    body: JSON.stringify(withSampling({
                         model: model || 'deepseek-chat',
-                        messages: openaiMessages,
-                        temperature: 0.3,
-                        max_tokens: 8192
-                    }),
+                        messages: openaiMessages
+                    }, 8192)),
                 };
                 break;
 
@@ -1306,9 +1478,14 @@
                 const geminiModel = model || 'gemini-2.5-flash';
                 requestUrl = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`;
                 const geminiData = convertToGeminiContents(messages);
+                const geminiGenConfig = {
+                    maxOutputTokens: settings.presetMaxTokens || 65536,
+                    temperature: _sp.temperature
+                };
+                if (_sp.top_p !== null && _sp.top_p !== undefined) geminiGenConfig.topP = _sp.top_p;
                 const geminiBody = {
                     ...geminiData,
-                    generationConfig: { maxOutputTokens: 65536, temperature: 0.3 },
+                    generationConfig: geminiGenConfig,
                     safetySettings: [
                         { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'OFF' },
                         { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'OFF' },
@@ -1343,12 +1520,10 @@
                             'Content-Type': 'application/json',
                             'Authorization': `Bearer ${apiKey}`
                         },
-                        body: JSON.stringify({
+                        body: JSON.stringify(withSampling({
                             model: geminiProxyModel,
-                            messages: openaiMessages,
-                            temperature: 0.3,
-                            max_tokens: 65536
-                        }),
+                            messages: openaiMessages
+                        }, 65536)),
                     };
                 } else {
                     const finalProxyUrl = `${proxyBaseUrl}/${geminiProxyModel}:generateContent`;
@@ -1361,7 +1536,10 @@
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             ...geminiProxyData,
-                            generationConfig: { maxOutputTokens: 65536, temperature: 0.3 }
+                            generationConfig: {
+                                maxOutputTokens: settings.presetMaxTokens || 65536,
+                                temperature: _sp.temperature
+                            }
                         }),
                     };
                 }
@@ -1393,13 +1571,11 @@
                 requestOptions = {
                     method: 'POST',
                     headers: headers,
-                    body: JSON.stringify({
+                    body: JSON.stringify(withSampling({
                         model: openaiModel,
                         messages: openaiMessages,
-                        temperature: 0.3,
-                        max_tokens: 64000,
                         stream: true
-                    }),
+                    }, 64000)),
                 };
                 break;
             }
@@ -9954,7 +10130,9 @@ ${pairsContent}
                                             <div id="ttw-message-chain-list" style="margin-bottom:8px;"></div>
                                             <div style="display:flex;gap:8px;flex-wrap:wrap;">
                                                 <button id="ttw-add-chain-msg" class="ttw-btn ttw-btn-small" style="background:rgba(52,152,219,0.5);">➕ 添加消息</button>
+                                                <button id="ttw-import-st-preset" class="ttw-btn ttw-btn-small" style="background:rgba(155,89,182,0.6);">📥 导入酒馆预设</button>
                                                 <button id="ttw-reset-chain" class="ttw-btn ttw-btn-small">🔄 恢复默认</button>
+                                                <input type="file" id="ttw-st-preset-file" accept=".json,application/json" style="display:none;">
                                             </div>
                                         </div>
                                     </div>
@@ -10460,8 +10638,51 @@ ${pairsContent}
         document.getElementById('ttw-reset-chain').addEventListener('click', () => {
             if (confirm('确定恢复默认消息链？')) {
                 settings.promptMessageChain = [{ role: 'user', content: '{PROMPT}', enabled: true }];
+                settings.presetTemperature = 0.3;
+                settings.presetMaxTokens = null;
+                settings.presetTopP = null;
+                settings.presetFreqPenalty = null;
+                settings.presetPresPenalty = null;
+                settings.importedPresetName = '';
                 renderMessageChainUI();
                 saveCurrentSettings();
+            }
+        });
+
+        // ===== 导入酒馆对话补全预设 =====
+        document.getElementById('ttw-import-st-preset').addEventListener('click', () => {
+            document.getElementById('ttw-st-preset-file').click();
+        });
+        document.getElementById('ttw-st-preset-file').addEventListener('change', async (e) => {
+            const file = e.target.files && e.target.files[0];
+            if (!file) return;
+            e.target.value = '';
+            try {
+                const text = await file.text();
+                const json = JSON.parse(text);
+                const parsed = parseTavernPreset(json);
+                const name = file.name.replace(/\.json$/i, '');
+                const s = parsed.stats;
+
+                let msg = '预设「' + name + '」解析结果：\n\n';
+                msg += '· 条目 ' + s.used + ' 条（启用 ' + s.enabled + ' 条）\n';
+                msg += '· 丢弃占位符 ' + s.droppedMarkers + ' 个（角色卡/世界书/示例对话，本插件无对应物）\n';
+                msg += '· 跳过空内容 ' + s.skippedEmpty + ' 条\n';
+                msg += '· 正文槽位：' + (s.hadPromptSlot ? '来自「聊天记录」占位符' : '预设中无聊天记录，已自动追加到末尾') + '\n';
+                if (parsed.params.temperature !== null) msg += '· temperature = ' + parsed.params.temperature + '\n';
+                if (parsed.params.maxTokens !== null) msg += '· max_tokens = ' + parsed.params.maxTokens + '\n';
+                msg += '\n导入会覆盖当前消息链，确认？';
+
+                if (!confirm(msg)) return;
+
+                applyTavernPreset(parsed, name);
+                alert('✅ 预设「' + name + '」已导入');
+
+                if (settings.useTavernApi) {
+                    alert('⚠️ 当前是酒馆API模式，system/assistant 角色会被压平成纯文本，预设排布不会真正生效。\n请在上方切换到自定义API模式。');
+                }
+            } catch (err) {
+                alert('预设导入失败：' + err.message);
             }
         });
 
