@@ -138,7 +138,7 @@ export function createModalEventBinder(deps) {
             showAliasMergeUI,
             updateWorldbookPreview,
         });
-        bindStreamEventsUI({ updateStreamContent });
+        bindStreamEventsUI({ updateStreamContent, AppState });
         bindExportEventsUI({
             AppState,
             showPromptPreview,

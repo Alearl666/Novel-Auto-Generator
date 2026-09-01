@@ -43,6 +43,8 @@
             searchKeyword: '',
             tokenThreshold: 0,
             manualMergeHighlight: null,
+            // 实时输出面板是否跟随滚动。用户往上翻阅时置 false，点「⬇ 有新内容」恢复。
+            streamAutoScroll: true,
         },
         config: {
             entryPosition: {},

@@ -236,7 +236,18 @@ export function bindFileEvents(deps = {}) {
 }
 
 export function bindStreamEvents(deps = {}) {
-    const { updateStreamContent } = deps;
+    const { updateStreamContent, AppState } = deps;
+
+    // 监听用户手动滚动：往上翻就停止跟随，滚回底部自动恢复
+    const streamEl = document.getElementById('ttw-stream-content');
+    if (streamEl && AppState) {
+        streamEl.addEventListener('scroll', () => {
+            const atBottom = streamEl.scrollHeight - streamEl.scrollTop - streamEl.clientHeight <= 40;
+            AppState.ui.streamAutoScroll = atBottom;
+            const hint = document.getElementById('ttw-stream-scroll-hint');
+            if (hint && atBottom) hint.style.display = 'none';
+        });
+    }
 
     document.getElementById('ttw-toggle-stream').addEventListener('click', () => {
         const container = document.getElementById('ttw-stream-container');

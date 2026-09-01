@@ -57,6 +57,28 @@
 
     const chapterTimings = [];
 
+    /**
+     * 处理过程中刷新「生成结果」面板。
+     *
+     * 第一次有内容时顺带把结果区展开，否则用户看不到面板本身。
+     * 渲染失败不应中断处理流程，因此整体包一层 try。
+     */
+    function refreshResultPreview() {
+        try {
+            const hasContent = Object.keys(AppState.worldbook.generated || {}).some(
+                (cat) => Object.keys(AppState.worldbook.generated[cat] || {}).length > 0,
+            );
+            if (hasContent && typeof showResultSection === 'function') {
+                showResultSection(true);
+            }
+            if (typeof updateWorldbookPreview === 'function') {
+                updateWorldbookPreview();
+            }
+        } catch (e) {
+            debugLog(`刷新结果预览失败: ${e.message}`);
+        }
+    }
+
     function formatETA(ms) {
         if (!ms || ms < 0) return '';
         const totalSec = Math.ceil(ms / 1000);
@@ -289,6 +311,10 @@ ${'='.repeat(50)}
         }
 
         updateMemoryQueueUI();
+        // 边处理边刷新「生成结果」面板。
+        // 原先只在全部完成后刷一次，导致处理中途结果区始终只显示默认条目，
+        // 而「查看世界书」弹窗每次打开都重新渲染，于是两处看到的内容不一致。
+        refreshResultPreview();
         updateStreamContent(`
 ${'='.repeat(50)}
 📦 并行处理完成，成功: ${results.size}/${tasks.length}
@@ -406,6 +432,7 @@ ${'='.repeat(50)}
             memory.result = memoryUpdate;
             chapterTimings.push(Date.now() - chunkStartTime);
             updateMemoryQueueUI();
+            refreshResultPreview();
         } catch (error) {
             memory.processing = false;
 

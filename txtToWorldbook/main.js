@@ -271,10 +271,72 @@ import { ensureModalStyles } from './ui/modalStyles.js';
             AppState.processing.streamContent += content;
         }
         const streamEl = document.getElementById('ttw-stream-content');
-        if (streamEl) {
-            streamEl.textContent = AppState.processing.streamContent;
-            streamEl.scrollTop = streamEl.scrollHeight;
+        if (!streamEl) return;
+
+        // 只有当用户本来就贴着底部时才自动滚动。
+        // 否则流式输出每来一个字都强制滚到底，用户想往上翻看之前的内容根本停不住。
+        // 阈值给 40px 的容差，避免因为行高、缩放导致判断过严。
+        const STICK_THRESHOLD = 40;
+        const wasAtBottom =
+            streamEl.scrollHeight - streamEl.scrollTop - streamEl.clientHeight <= STICK_THRESHOLD;
+
+        streamEl.textContent = AppState.processing.streamContent;
+
+        if (clear) {
+            // 清空后回到顶部，属于新一轮开始
+            streamEl.scrollTop = 0;
+            AppState.ui.streamAutoScroll = true;
+            updateStreamScrollHint(false);
+            return;
         }
+
+        if (wasAtBottom && AppState.ui.streamAutoScroll !== false) {
+            streamEl.scrollTop = streamEl.scrollHeight;
+            updateStreamScrollHint(false);
+        } else {
+            // 用户正在往上翻，保持不动，并提示有新内容
+            updateStreamScrollHint(true);
+        }
+    }
+
+    /**
+     * 用户往上翻阅时，在实时输出面板右下角显示「⬇ 有新内容」浮标。
+     * 点击回到底部并恢复自动滚动。
+     *
+     * @param {boolean} show 是否显示
+     */
+    function updateStreamScrollHint(show) {
+        const container = document.getElementById('ttw-stream-container');
+        if (!container) return;
+        let hint = document.getElementById('ttw-stream-scroll-hint');
+
+        if (!show) {
+            if (hint) hint.style.display = 'none';
+            return;
+        }
+
+        if (!hint) {
+            hint = document.createElement('button');
+            hint.id = 'ttw-stream-scroll-hint';
+            hint.type = 'button';
+            hint.textContent = '⬇ 有新内容';
+            hint.style.cssText =
+                'position:absolute;right:12px;bottom:12px;z-index:5;padding:5px 12px;' +
+                'font-size:12px;border:none;border-radius:14px;cursor:pointer;' +
+                'background:rgba(52,152,219,0.92);color:#fff;box-shadow:0 2px 8px rgba(0,0,0,0.35);';
+            hint.addEventListener('click', () => {
+                const el = document.getElementById('ttw-stream-content');
+                if (el) el.scrollTop = el.scrollHeight;
+                AppState.ui.streamAutoScroll = true;
+                updateStreamScrollHint(false);
+            });
+            // 容器需要相对定位，浮标才能贴在右下角
+            if (!container.style.position || container.style.position === 'static') {
+                container.style.position = 'relative';
+            }
+            container.appendChild(hint);
+        }
+        hint.style.display = 'block';
     }
 
     // 调试模式日志 - 带时间戳输出到实时输出面板

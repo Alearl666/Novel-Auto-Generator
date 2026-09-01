@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 /**
  * 启动冒烟测试
  *
@@ -325,6 +326,28 @@ if (api && typeof api.open === 'function') {
         check('超时上限已放宽到 3600 秒', () => html.includes('id="ttw-api-timeout" value="120" min="30" max="3600"'));
         check('超时标签改为「无响应超时」', () => html.includes('无响应超时(秒)'));
     }
+}
+
+// ============================================================
+// 实时输出滚动行为
+// ============================================================
+if (api) {
+    const streamEl = document.getElementById('ttw-stream-content');
+    check('实时输出面板已绑定 scroll 监听', () => {
+        return !!(streamEl && streamEl._listeners.scroll && streamEl._listeners.scroll.length > 0);
+    });
+
+    // 源码层校验：确认无条件滚动已被移除、贴底判断已就位。
+    // 不为测试往生产代码里塞钩子，改为直接检查实现。
+    const mainSrc = readFileSync(new URL('../txtToWorldbook/main.js', import.meta.url), 'utf8');
+    check('已移除无条件滚动到底部', () => {
+        // 旧实现：紧跟 textContent 赋值之后直接 scrollTop = scrollHeight
+        return !/streamEl\.textContent = AppState\.processing\.streamContent;\s*\n\s*streamEl\.scrollTop = streamEl\.scrollHeight;/.test(
+            mainSrc,
+        );
+    });
+    check('加入了贴底判断 wasAtBottom', () => mainSrc.includes('const wasAtBottom ='));
+    check('新内容浮标函数存在', () => mainSrc.includes('function updateStreamScrollHint'));
 }
 
 // ============================================================
