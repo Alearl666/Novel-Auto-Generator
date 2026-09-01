@@ -1733,6 +1733,7 @@ ${textToXhtmlParagraphs(ch.translated)}
 
         return `
 <div id="ntr-modal" class="ntr-modal-container">
+ <div class="ntr-modal-scroll">
   <div class="ntr-modal">
     <div class="ntr-modal-header">
       <span class="ntr-modal-title">📖 小说翻译 v${VERSION}</span>
@@ -1996,20 +1997,22 @@ ${textToXhtmlParagraphs(ch.translated)}
       <button id="ntr-start" class="ntr-btn ntr-btn-primary">🚀 开始翻译</button>
     </div>
   </div>
+ </div>
 </div>`;
     }
 
     function buildStyles() {
         return `
 <style id="ntr-styles">
-.ntr-modal-container{position:fixed;top:0;left:0;width:100vw;height:100vh;height:100dvh;background:rgba(0,0,0,0.75);z-index:10000;display:flex;align-items:center;justify-content:center;padding:12px;padding-top:max(12px,env(safe-area-inset-top));padding-bottom:max(12px,env(safe-area-inset-bottom));box-sizing:border-box;overflow:hidden;}
-.ntr-modal{background:var(--SmartThemeBlurTintColor,#1e1e1e);border:1px solid var(--SmartThemeBorderColor,#444);border-radius:10px;width:100%;max-width:820px;height:92vh;height:92dvh;max-height:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden;color:var(--SmartThemeBodyColor,#eee);}
-.ntr-modal-header{flex:0 0 auto;display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--SmartThemeBorderColor,#444);background:rgba(0,0,0,0.3);}
+.ntr-modal-container{position:fixed;top:0;left:0;right:0;bottom:0;width:100vw;height:100vh;background:rgba(0,0,0,0.75);z-index:99999;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;box-sizing:border-box;}
+.ntr-modal-scroll{display:flex;justify-content:center;align-items:flex-start;min-height:100%;padding:16px;padding-top:max(16px,env(safe-area-inset-top));padding-bottom:max(16px,env(safe-area-inset-bottom));box-sizing:border-box;}
+.ntr-modal{background:var(--SmartThemeBlurTintColor,#1e1e1e);border:1px solid var(--SmartThemeBorderColor,#444);border-radius:10px;width:100%;max-width:820px;display:flex;flex-direction:column;color:var(--SmartThemeBodyColor,#eee);}
+.ntr-modal-header{position:sticky;top:0;z-index:3;display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--SmartThemeBorderColor,#444);background:#1c1c1c;background:linear-gradient(rgba(0,0,0,0.35),rgba(0,0,0,0.35)),var(--SmartThemeBlurTintColor,#1e1e1e);border-radius:10px 10px 0 0;}
 .ntr-modal-title{font-weight:bold;font-size:15px;}
 .ntr-modal-close{background:none;border:none;color:#aaa;font-size:20px;cursor:pointer;padding:0 6px;line-height:1;}
 .ntr-modal-close:hover{color:#fff;}
-.ntr-modal-body{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding:14px;-webkit-overflow-scrolling:touch;}
-.ntr-modal-footer{flex:0 0 auto;display:flex;gap:8px;align-items:center;padding:12px 16px;padding-bottom:max(12px,env(safe-area-inset-bottom));border-top:1px solid var(--SmartThemeBorderColor,#444);background:rgba(0,0,0,0.4);flex-wrap:wrap;}
+.ntr-modal-body{padding:14px;overflow:visible;}
+.ntr-modal-footer{position:sticky;bottom:0;z-index:3;display:flex;gap:8px;align-items:center;padding:12px 16px;padding-bottom:max(12px,env(safe-area-inset-bottom));border-top:1px solid var(--SmartThemeBorderColor,#444);background:#1c1c1c;background:linear-gradient(rgba(0,0,0,0.55),rgba(0,0,0,0.55)),var(--SmartThemeBlurTintColor,#1e1e1e);border-radius:0 0 10px 10px;flex-wrap:wrap;}
 .ntr-section{background:rgba(0,0,0,0.2);border-radius:8px;margin-bottom:12px;overflow:hidden;}
 .ntr-section-header,.ntr-section-header-static{display:flex;justify-content:space-between;align-items:center;padding:11px 14px;background:rgba(0,0,0,0.3);font-weight:500;font-size:13px;gap:8px;flex-wrap:wrap;}
 .ntr-section-header{cursor:pointer;}
@@ -2052,19 +2055,16 @@ ${textToXhtmlParagraphs(ch.translated)}
 .ntr-glossary-item{display:flex;gap:6px;align-items:center;padding:5px 0;flex-wrap:wrap;}
 .ntr-glossary-item input{flex:1 1 100px;min-width:90px;padding:6px 8px;font-size:12px;background:rgba(0,0,0,0.3);border:1px solid #555;border-radius:5px;color:#fff;box-sizing:border-box;}
 @media (max-width:600px){
-  .ntr-modal-container{align-items:stretch;padding:8px;padding-top:max(8px,env(safe-area-inset-top));padding-bottom:max(8px,env(safe-area-inset-bottom));}
-  .ntr-modal{height:auto;max-height:100%;max-width:100%;}
+  .ntr-modal-scroll{padding:8px;padding-top:max(8px,env(safe-area-inset-top));padding-bottom:max(8px,env(safe-area-inset-bottom));}
+  .ntr-modal{max-width:100%;}
   .ntr-modal-header{padding:10px 12px;}
   .ntr-modal-body{padding:10px;}
-  .ntr-field{flex:1 1 100%;}
   .ntr-modal-footer{padding:10px 12px;padding-bottom:max(10px,env(safe-area-inset-bottom));}
+  .ntr-field{flex:1 1 100%;}
   .ntr-modal-footer .ntr-btn{flex:1 1 auto;}
-}
-@media (max-height:640px){
-  .ntr-modal-container{align-items:stretch;padding:8px;padding-top:max(8px,env(safe-area-inset-top));padding-bottom:max(8px,env(safe-area-inset-bottom));}
-  .ntr-modal{height:auto;max-height:100%;}
-  .ntr-modal-header{padding-top:10px;padding-bottom:10px;}
-  .ntr-modal-body{padding-top:10px;padding-bottom:10px;}
+  .ntr-chapter-list{max-height:240px;}
+  .ntr-stream-content{max-height:200px;}
+  .ntr-glossary-list{max-height:200px;}
 }
 </style>`;
     }
@@ -2607,7 +2607,8 @@ ${textToXhtmlParagraphs(ch.translated)}
     // ============================================
     function showHelp() {
         const html = `
-<div id="ntr-help-modal" class="ntr-modal-container" style="z-index:10001;">
+<div id="ntr-help-modal" class="ntr-modal-container" style="z-index:100000;">
+ <div class="ntr-modal-scroll">
   <div class="ntr-modal" style="max-width:620px;">
     <div class="ntr-modal-header">
       <span class="ntr-modal-title">❓ 小说翻译 使用说明</span>
@@ -2674,6 +2675,7 @@ ${textToXhtmlParagraphs(ch.translated)}
       <button class="ntr-btn ntr-btn-primary" id="ntr-help-ok" style="margin-left:auto;">我知道了</button>
     </div>
   </div>
+ </div>
 </div>`;
         const wrap = document.createElement('div');
         wrap.innerHTML = html;
@@ -2897,7 +2899,9 @@ ${textToXhtmlParagraphs(ch.translated)}
 
     async function openModal() {
         if ($('ntr-modal')) {
-            $('ntr-modal').style.display = 'flex';
+            $('ntr-modal').style.display = 'block';
+            $('ntr-modal').scrollTop = 0;
+            document.body.style.overflow = 'hidden';
             return;
         }
 
@@ -2912,6 +2916,7 @@ ${textToXhtmlParagraphs(ch.translated)}
         const wrap = document.createElement('div');
         wrap.innerHTML = buildModalHtml();
         document.body.appendChild(wrap.firstElementChild);
+        document.body.style.overflow = 'hidden';
 
         bindEvents();
         restoreSettingsToUI();
@@ -2931,6 +2936,7 @@ ${textToXhtmlParagraphs(ch.translated)}
         }
         const el = $('ntr-modal');
         if (el) el.style.display = 'none';
+        document.body.style.overflow = '';
     }
 
     // ============================================
