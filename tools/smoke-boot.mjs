@@ -311,6 +311,20 @@ if (api && typeof api.open === 'function') {
         const panel = registry.get('ttw-api-provider');
         return panel !== null;
     });
+
+    // 手机布局校验：直接检查生成的 HTML
+    const panelMod = await import('../txtToWorldbook/ui/settingsPanel.js');
+    const html = typeof panelMod.buildModalHtml === 'function' ? panelMod.buildModalHtml() : '';
+    if (html) {
+        const chunkPos = html.indexOf('ttw-chunk-size');
+        const tempPos = html.indexOf('ttw-temperature');
+        const between = html.slice(chunkPos, tempPos);
+        check('温度已换到新的一行（中间存在行容器分隔）', () => between.includes('</div>\n    <div'));
+        check('两行容器都启用了自动折行', () => (html.match(/flex-wrap:wrap/g) || []).length >= 2);
+        check('输入框设了最小宽度，手机上不会挤成两位数', () => html.includes('min-width:110px'));
+        check('超时上限已放宽到 3600 秒', () => html.includes('id="ttw-api-timeout" value="120" min="30" max="3600"'));
+        check('超时标签改为「无响应超时」', () => html.includes('无响应超时(秒)'));
+    }
 }
 
 // ============================================================

@@ -75,26 +75,33 @@ function buildChapterRegexHtml() {
 }
 
 function buildBasicSettingsHtml() {
+    // 分两行排布。手机屏幕窄，四个数字输入挤在一行时每个只剩两位数可见，
+    // flex-wrap 让容纳不下时自动折行，min-width 保证每个输入框至少能显示完整数值。
     return `
-    <div style="display:flex;gap:12px;margin-bottom:12px;align-items:flex-end;">
-        <div style="flex:1;">
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;align-items:flex-end;">
+        <div style="flex:1 1 120px;min-width:110px;">
             <label class="ttw-label">每块字数</label>
             <input type="number" id="ttw-chunk-size" value="15000" min="1000" max="500000" class="ttw-input">
         </div>
-        <div style="flex:1;">
-            <label class="ttw-label">API超时(秒)</label>
-            <input type="number" id="ttw-api-timeout" value="120" min="30" max="600" class="ttw-input">
+        <div style="flex:1 1 120px;min-width:110px;">
+            <label class="ttw-label" title="指「多久没收到新数据」才算超时，不是总耗时上限。生成再久，只要还在传数据就不会中断。">无响应超时(秒)</label>
+            <input type="number" id="ttw-api-timeout" value="120" min="30" max="3600" class="ttw-input">
         </div>
-        <div style="flex:1;">
-            <label class="ttw-label" title="0~2，越低越稳定。导入酒馆预设会覆盖此值">温度</label>
+        <div style="flex:0 0 auto;">
+            <button id="ttw-rechunk-btn" class="ttw-btn ttw-btn-small" style="background:rgba(230,126,34,0.5);" title="修改字数后点击重新分块">🔄 重新分块</button>
+        </div>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px;align-items:flex-end;">
+        <div style="flex:1 1 120px;min-width:110px;">
+            <label class="ttw-label" title="0~2。越低越稳定、越守格式；越高越发散。提取世界书建议 0.3 以下。导入酒馆预设会覆盖此值。">温度</label>
             <input type="number" id="ttw-temperature" value="0.3" min="0" max="2" step="0.05" class="ttw-input">
         </div>
-        <div style="flex:1;">
-            <label class="ttw-label" title="留空则用各接口默认值。中转有限制时在此调小">最大输出</label>
+        <div style="flex:1 1 120px;min-width:110px;">
+            <label class="ttw-label" title="单次回复的最大长度。留空用接口默认值（OpenAI兼容 64000 / Gemini 65536 / Anthropic 8192）。中转报错说超限时在这里调小。">最大输出</label>
             <input type="number" id="ttw-max-tokens" placeholder="默认" min="256" step="256" class="ttw-input">
         </div>
-        <div>
-            <button id="ttw-rechunk-btn" class="ttw-btn ttw-btn-small" style="background:rgba(230,126,34,0.5);" title="修改字数后点击重新分块">🔄 重新分块</button>
+        <div style="flex:1 1 100%;font-size:11px;opacity:0.55;line-height:1.5;">
+            温度与最大输出在导入酒馆预设时会被预设值覆盖；留空表示用接口默认值。
         </div>
     </div>`;
 }
