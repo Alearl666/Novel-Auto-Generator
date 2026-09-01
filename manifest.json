@@ -6,6 +6,6 @@
     "js": "index.js",
     "css": "style.css",
     "author": "AutoNovel",
-    "version": "3.0.8",
-    "description": "自动挂机生成长篇小说，支持断点续传"
+    "version": "4.0.1",
+    "description": "EPUB转TXT、TXT转世界书、世界书导出三合一工具"
 }

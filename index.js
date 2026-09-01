@@ -1,6 +1,11 @@
 import { saveSettingsDebounced } from "../../../../script.js";
 import { extension_settings } from "../../../extensions.js";
-import './txtToWorldbook.js';
+import { initTxtToWorldbookBridge } from './txtToWorldbook/main.js';
+
+// TXT转世界书模块现在是模块化目录（txtToWorldbook/），需要显式初始化
+initTxtToWorldbookBridge().catch((error) => {
+    console.error('[NovelGen] TxtToWorldbook 初始化失败:', error);
+});
 
 const extensionName = "novel-auto-generator";
 
