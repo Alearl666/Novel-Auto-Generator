@@ -36,14 +36,21 @@
 （这里是翻译好的正文）
 </译文>`;
 
-    const DEFAULT_CHAPTER_REGEX = '第([0-9一二三四五六七八九十百千零\\d]+)话[ \\t：:]*(.*)';
+    // 章节单位字：小说里「第X话」「第X章」「第X节」「第X回」都常见，
+    // 默认正则必须全都认，否则换本小说就匹配不到。
+    const CHAPTER_UNITS = '话話章節节回幕卷篇';
+    const CN_NUM = '0-9０-９一二三四五六七八九十百千零两壹贰叁肆伍陆柒捌玖拾佰仟';
+
+    const DEFAULT_CHAPTER_REGEX = `第([${CN_NUM}]+)[${CHAPTER_UNITS}][ \\t：:、.．-]*(.*)`;
 
     const CHAPTER_REGEX_PRESETS = [
-        { label: '第X话：标题', value: '第([0-9一二三四五六七八九十百千零\\d]+)话[ \\t：:]*(.*)' },
-        { label: '第X话（可无标题）', value: '第([0-9一二三四五六七八九十百千零\\d]+)话[ \\t：:]*(.*)$' },
-        { label: '第X章：标题', value: '第([0-9一二三四五六七八九十百千零\\d]+)章[ \\t：:]*(.*)' },
-        { label: '第X節/节', value: '第([0-9一二三四五六七八九十百千零\\d]+)[节節][ \\t：:]*(.*)' },
-        { label: 'Chapter X', value: 'Chapter\\s+([0-9]+)[\\s.:：]*(.*)' },
+        { label: '通用：第X话/章/节/回（推荐）', value: DEFAULT_CHAPTER_REGEX },
+        { label: '只认 第X话', value: `第([${CN_NUM}]+)[话話][ \\t：:、.．-]*(.*)` },
+        { label: '只认 第X章', value: `第([${CN_NUM}]+)章[ \\t：:、.．-]*(.*)` },
+        { label: '只认 第X节', value: `第([${CN_NUM}]+)[节節][ \\t：:、.．-]*(.*)` },
+        { label: '只认 第X回', value: `第([${CN_NUM}]+)回[ \\t：:、.．-]*(.*)` },
+        { label: '标题独占一行（更严格）', value: `^\\s*第([${CN_NUM}]+)[${CHAPTER_UNITS}][ \\t：:、.．-]*(.*)$` },
+        { label: 'Chapter X', value: 'Chapter\\s+([0-9]+)[\\s.:：-]*(.*)' },
         { label: '纯数字标题行', value: '^\\s*([0-9]+)\\s*$()' },
     ];
 
@@ -327,6 +334,10 @@
                 }
                 // 旧版本的 forceChunkMode 已废弃：现在恒为按长度切块。
                 // 旧值 true（无视原文章节）对应新的「块即章节」，语义上最接近。
+                const LEGACY_REGEX = '第([0-9一二三四五六七八九十百千零\\d]+)话[ \\t：:]*(.*)';
+                if (State.settings.chapterRegex === LEGACY_REGEX) {
+                    State.settings.chapterRegex = DEFAULT_CHAPTER_REGEX;
+                }
                 if (Object.prototype.hasOwnProperty.call(saved, 'forceChunkMode')) {
                     if (typeof saved.blockAsChapter !== 'boolean') {
                         State.settings.blockAsChapter = !!saved.forceChunkMode;
@@ -393,10 +404,14 @@
             }
 
             const numRaw = m[1] !== undefined ? m[1] : String(marks.length + 1);
+            // 从匹配串里认出单位字（话/章/节/回…）。
+            // 不新增捕获组，否则用户已有的「组1=数字 组2=标题」正则全得改。
+            const unitHit = matched.match(new RegExp(`[${CN_NUM}]\\s*([${CHAPTER_UNITS}])`));
             marks.push({
                 start: m.index,
                 headerEnd: m.index + matched.length,
                 numRaw,
+                unit: unitHit ? unitHit[1] : '',
                 titleRaw: titleRaw.trim(),
                 fullMatch: matched.trim(),
             });
@@ -412,6 +427,7 @@
                 chapters.push({
                     index: 0,
                     num: '',
+                    unit: '',
                     rawTitle: '前言',
                     title: '前言',
                     source: pre,
@@ -430,6 +446,7 @@
             chapters.push({
                 index: chapters.length,
                 num: mark.numRaw,
+                unit: mark.unit,
                 rawTitle: displayTitle,
                 title: displayTitle,
                 source: body,
@@ -1632,7 +1649,7 @@
             }
             if (parts && parts.length > 0) {
                 return {
-                    units: parts.map((p) => ({ num: p.num, title: p.title, text: p.source })),
+                    units: parts.map((p) => ({ num: p.num, unit: p.unit, title: p.title, text: p.source })),
                     mode: 'regex',
                     blockCount: blocks.length,
                 };
@@ -1662,8 +1679,10 @@
 
         const title = chapter.title || '';
         // 标题里若已包含「第X话」样式，直接用标题，避免出现「第1话 第1话 相遇」
-        if (/^第.{1,8}[话話章节節]/.test(title)) return title;
-        return `第${numText}话 ${title}`.trim();
+        if (new RegExp(`^第.{1,10}[${CHAPTER_UNITS}]`).test(title)) return title;
+        // 原文写「章」就还它「章」，写「话」就还「话」，不要一律硬编码成「话」
+        const unit = chapter.unit || '话';
+        return `第${numText}${unit} ${title}`.trim();
     }
 
     /** 正文转 XHTML 段落。译文是自然语言，这里只做分段和转义。 */
@@ -1871,13 +1890,101 @@ ${textToXhtmlParagraphs(ch.text)}
         downloadBlob(blob, `${name}_翻译任务.json`);
     }
 
+    /** 配置里可以带走的字段。任务数据（章节、文件名）不在此列。 */
+    const CONFIG_KEYS = [
+        'apiProvider', 'apiEndpoint', 'apiModel', 'apiTimeout', 'temperature', 'maxTokens',
+        'blockAsChapter', 'chunkTokens', 'chapterRegex', 'exportSplitByRegex',
+        'concurrency', 'warmupChapters', 'contextPrevChars', 'contextNextChars',
+        'customPrompt', 'promptMessageChain', 'importedPresetName',
+        'glossaryEnabled', 'glossary',
+        'bookTitle', 'bookAuthor', 'txtTitleFormat',
+    ];
+
+    function exportConfig() {
+        collectSettingsFromUI();
+        const s = State.settings;
+
+        const withKey = confirm(
+            '配置里要包含 API Key 吗？\n\n' +
+                '「确定」= 包含（换设备直接能用，但文件别外发）\n' +
+                '「取消」= 不含 Key（适合分享给别人）',
+        );
+
+        const data = { type: 'novelTranslateConfig', version: VERSION, exportedAt: new Date().toISOString() };
+        CONFIG_KEYS.forEach((k) => {
+            data[k] = s[k];
+        });
+        if (withKey) data.apiKey = s.apiKey;
+
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        downloadBlob(blob, `小说翻译配置${withKey ? '(含Key)' : ''}.json`, 'application/json');
+        appendStream(`\n⚙️ 已导出配置${withKey ? '（含 API Key）' : '（不含 API Key）'}\n`);
+    }
+
+    async function importConfig(file) {
+        try {
+            const data = JSON.parse(await file.text());
+            if (data.type && data.type !== 'novelTranslateConfig') {
+                if (data.type === 'novelTranslateTask') {
+                    alert('这是「翻译任务」文件，请改用「📥 导入任务」。');
+                    return;
+                }
+                if (!confirm(`文件类型标记是「${data.type}」，不是配置文件。仍要尝试导入吗？`)) return;
+            }
+
+            const incoming = CONFIG_KEYS.filter((k) => data[k] !== undefined);
+            if (incoming.length === 0) {
+                alert('这个 JSON 里没有任何可识别的配置项');
+                return;
+            }
+            const hasKey = typeof data.apiKey === 'string' && data.apiKey.length > 0;
+
+            if (
+                !confirm(
+                    `将导入 ${incoming.length} 项配置${hasKey ? '（含 API Key）' : '（不含 API Key，需自己填）'}。\n\n` +
+                        `术语表 ${Array.isArray(data.glossary) ? data.glossary.length : 0} 条\n` +
+                        `当前配置会被覆盖，已导入的小说和翻译进度不受影响。\n\n确定吗？`,
+                )
+            ) {
+                return;
+            }
+
+            CONFIG_KEYS.forEach((k) => {
+                if (data[k] !== undefined) State.settings[k] = data[k];
+            });
+            if (hasKey) State.settings.apiKey = data.apiKey;
+
+            // 防止旧文件或手改的 JSON 把数组字段弄成非数组，后面渲染会直接炸
+            if (!Array.isArray(State.settings.glossary)) State.settings.glossary = [];
+            if (!Array.isArray(State.settings.promptMessageChain) || !State.settings.promptMessageChain.length) {
+                State.settings.promptMessageChain = [{ role: 'user', content: '{PROMPT}', enabled: true }];
+            }
+
+            saveSettings();
+            restoreSettingsToUI();
+            refreshGlossaryCount();
+            appendStream(`\n⚙️ 已导入配置：${incoming.length} 项${hasKey ? '（含 API Key）' : ''}\n`);
+            alert('配置已导入' + (hasKey ? '' : '\n\n注意：文件里不含 API Key，请自己填一下。'));
+        } catch (e) {
+            alert('导入配置失败: ' + e.message);
+        }
+    }
+
     async function importTask(file) {
         try {
             const text = await file.text();
             const data = JSON.parse(text);
-            if (data.type !== 'novelTranslateTask' || !Array.isArray(data.chapters)) {
-                alert('不是有效的翻译任务文件');
+            if (!Array.isArray(data.chapters)) {
+                alert(
+                    '这个 JSON 里没有 chapters 数组，不是翻译任务文件。\n\n' +
+                        (data.type === 'novelTranslateConfig'
+                            ? '看起来你选的是「配置文件」，请改用「⚙️ 导入配置」。'
+                            : '请确认选的是「📤 导出任务」生成的文件。'),
+                );
                 return;
+            }
+            if (data.type && data.type !== 'novelTranslateTask') {
+                if (!confirm(`文件类型标记是「${data.type}」，不是标准的翻译任务。仍要尝试导入吗？`)) return;
             }
             const doneCount = data.chapters.filter((c) => c.status === STATUS.DONE).length;
             if (
@@ -1916,9 +2023,20 @@ ${textToXhtmlParagraphs(ch.text)}
             renderChapterList();
             updateProgress();
             refreshGlossaryCount();
+            const info = $('ntr-file-info');
+            if (info) info.style.display = 'flex';
+            const nameEl = $('ntr-file-name');
+            if (nameEl) nameEl.textContent = State.file.name || '（任务文件）';
+            const sizeEl = $('ntr-file-size');
+            if (sizeEl) {
+                const total = State.chapters.reduce((sum, c) => sum + c.source.length, 0);
+                sizeEl.textContent = `(${(total / 10000).toFixed(1)}万字, ${State.chapters.length}块, 已导入)`;
+            }
+
             showQueueSection(true);
+            showProgressSection(true);
             if (State.chapters.some((c) => c.status === STATUS.DONE)) showExportSection(true);
-            appendStream(`\n📥 已导入任务：${State.chapters.length} 章，已完成 ${doneCount} 章\n`);
+            appendStream(`\n📥 已导入任务：${State.chapters.length} 块，已完成 ${doneCount} 块\n`);
         } catch (e) {
             alert('导入任务失败: ' + e.message);
         }
@@ -1999,6 +2117,8 @@ ${textToXhtmlParagraphs(ch.text)}
           <div class="ntr-model-actions">
             <button id="ntr-fetch-models" class="ntr-btn-small">🔄 拉取模型</button>
             <button id="ntr-quick-test" class="ntr-btn-small">⚡ 快速测试</button>
+            <button id="ntr-export-config" class="ntr-btn-small" title="导出 API、提示词、术语表等全部设置">⚙️ 导出配置</button>
+            <button id="ntr-import-config" class="ntr-btn-small" title="从 JSON 恢复设置">📂 导入配置</button>
             <div id="ntr-model-status" class="ntr-model-status"></div>
           </div>
           <div class="ntr-hint-block">
@@ -2080,6 +2200,7 @@ ${textToXhtmlParagraphs(ch.text)}
             <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">
               <button id="ntr-test-regex" class="ntr-btn-small">🧪 测原文</button>
               <button id="ntr-test-regex-translated" class="ntr-btn-small" style="background:rgba(46,204,113,0.35);">🧪 测译文（导出预览）</button>
+              <button id="ntr-reset-regex" class="ntr-btn-small">🔄 恢复默认</button>
             </div>
             <div id="ntr-regex-result" class="ntr-hint-block"></div>
           </div>
@@ -2159,10 +2280,13 @@ ${textToXhtmlParagraphs(ch.text)}
           <div class="ntr-upload" id="ntr-upload">
             <div style="font-size:40px;margin-bottom:8px;">📁</div>
             <div style="font-size:13px;opacity:0.8;">点击或拖拽 TXT 文件到此处</div>
-            <input type="file" id="ntr-file-input" accept=".txt" style="display:none;">
-            <input type="file" id="ntr-task-input" accept=".json" style="display:none;">
-            <input type="file" id="ntr-update-input" accept=".txt" style="display:none;">
           </div>
+          <!-- 这几个必须放在拖拽区外面：放里面的话 .click() 会冒泡到拖拽区，
+               反过来又弹出 TXT 选择器，导致任务/更新文件根本选不进来 -->
+          <input type="file" id="ntr-file-input" accept=".txt" style="display:none;">
+          <input type="file" id="ntr-task-input" accept=".json,application/json" style="display:none;">
+          <input type="file" id="ntr-update-input" accept=".txt" style="display:none;">
+          <input type="file" id="ntr-config-input" accept=".json,application/json" style="display:none;">
           <div id="ntr-file-info" class="ntr-file-info" style="display:none;">
             <span id="ntr-file-name"></span>
             <span id="ntr-file-size"></span>
@@ -3439,8 +3563,10 @@ ${textToXhtmlParagraphs(ch.text)}
         <div style="margin-top:6px;">正则区有两个测试按钮：<strong>测原文</strong>看原文能匹配多少章，
         <strong>测译文</strong>看译文能匹配多少章。<strong>导出前点一下「测译文」或「预览导出目录」</strong>，
         就能提前看到目录会长什么样，不用导完再发现错了。</div>
+        <div style="margin-top:6px;">默认正则<strong>同时认「第X话」「第X章」「第X节」「第X回」</strong>，
+        阿拉伯数字和中文数字都行。导出时会沿用原文的单位字——原文写「章」目录就是「章」，不会硬改成「话」。</div>
         <div style="margin-top:6px;">注意原文和译文的章节写法可能不一样（原文 Chapter 12、译文第12话），
-        必要时分别调整正则。</div>
+        必要时分别调整。改坏了点「🔄 恢复默认」还原。</div>
       </div></div>
 
       <div class="ntr-section"><div class="ntr-section-content">
@@ -3470,10 +3596,14 @@ ${textToXhtmlParagraphs(ch.text)}
       </div></div>
 
       <div class="ntr-section"><div class="ntr-section-content">
-        <strong>💾 断点续传与任务</strong>
+        <strong>💾 任务 与 配置（两种 json，别搞混）</strong>
         <div>翻译时每 60 秒自动存盘，关页面前也会存。下次打开会问你是否恢复。</div>
-        <div style="margin-top:6px;"><strong>导出任务</strong>会把原文、译文、术语表一起打包成 json。
-        再次导入就能接着翻，也可以只重译其中几章。</div>
+        <div style="margin-top:6px;"><strong>📤 导出任务</strong>：原文 + 译文 + 术语表，是「这本书翻到哪了」。
+        再次导入接着翻。</div>
+        <div style="margin-top:6px;"><strong>⚙️ 导出配置</strong>：API、提示词、消息链、正则、术语表等设置，
+        是「你怎么翻」，不含任何小说内容。换设备或重装时用它。导出时会问要不要带 API Key——
+        分享给别人就选不带。</div>
+        <div style="margin-top:6px;">两个按钮各自认各自的文件，选错了会直接提示你该用哪个。</div>
       </div></div>
 
       <div class="ntr-section"><div class="ntr-section-content">
@@ -3643,6 +3773,12 @@ ${textToXhtmlParagraphs(ch.text)}
             }
             e.target.value = '';
         });
+        $('ntr-reset-regex').addEventListener('click', () => {
+            $('ntr-chapter-regex').value = DEFAULT_CHAPTER_REGEX;
+            State.settings.chapterRegex = DEFAULT_CHAPTER_REGEX;
+            saveSettings();
+            testRegex('source');
+        });
         $('ntr-test-regex').addEventListener('click', () => testRegex('source'));
         $('ntr-test-regex-translated').addEventListener('click', () => testRegex('translated'));
         $('ntr-preview-export').addEventListener('click', previewExport);
@@ -3719,7 +3855,11 @@ ${textToXhtmlParagraphs(ch.text)}
         // --- 文件 ---
         const upload = $('ntr-upload');
         const fileInput = $('ntr-file-input');
-        upload.addEventListener('click', () => fileInput.click());
+        upload.addEventListener('click', (e) => {
+            // 双保险：任何来自 input 的点击都不再转发，避免又弹一次 TXT 选择器
+            if (e.target && e.target.tagName === 'INPUT') return;
+            fileInput.click();
+        });
         upload.addEventListener('dragover', (e) => {
             e.preventDefault();
             upload.style.borderColor = '#3498db';
@@ -3743,6 +3883,14 @@ ${textToXhtmlParagraphs(ch.text)}
         $('ntr-import-task').addEventListener('click', () => $('ntr-task-input').click());
         $('ntr-task-input').addEventListener('change', (e) => {
             if (e.target.files.length) importTask(e.target.files[0]);
+            e.target.value = '';
+        });
+
+        // --- 配置导入导出 ---
+        $('ntr-export-config').addEventListener('click', exportConfig);
+        $('ntr-import-config').addEventListener('click', () => $('ntr-config-input').click());
+        $('ntr-config-input').addEventListener('change', (e) => {
+            if (e.target.files.length) importConfig(e.target.files[0]);
             e.target.value = '';
         });
 
@@ -3886,6 +4034,10 @@ ${textToXhtmlParagraphs(ch.text)}
         _importUpdateChapters: importUpdateChapters,
         _joinAllSource: joinAllSource,
         _downloadBlob: downloadBlob,
+        _importTask: importTask,
+        _importConfig: importConfig,
+        _CONFIG_KEYS: CONFIG_KEYS,
+        _DEFAULT_CHAPTER_REGEX: DEFAULT_CHAPTER_REGEX,
     };
 
     console.log(`[NovelTranslate] 📖 小说翻译模块已加载 v${VERSION}`);

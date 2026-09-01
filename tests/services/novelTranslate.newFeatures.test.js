@@ -380,3 +380,167 @@ describe('debug3 · EPUB 不能是 zip', () => {
         expect(src).toContain("zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' })");
     });
 });
+
+describe('debug4 · 任务导入（隐藏 input 冒泡 bug）', () => {
+    it('隐藏的 file input 不再是拖拽区的子元素', () => {
+        const src = readFileSync(new URL('../../novelTranslate.js', import.meta.url), 'utf8');
+        const start = src.indexOf('<div class="ntr-upload" id="ntr-upload">');
+        const end = src.indexOf('</div>', start);
+        const dropzone = src.slice(start, end);
+        // 放在拖拽区里的话，.click() 会冒泡回去又弹一次 TXT 选择器
+        expect(dropzone).not.toContain('<input');
+    });
+
+    it('拖拽区的 click 处理器会忽略来自 input 的事件', () => {
+        const src = readFileSync(new URL('../../novelTranslate.js', import.meta.url), 'utf8');
+        const h = src.slice(src.indexOf("upload.addEventListener('click'"), src.indexOf("upload.addEventListener('dragover'"));
+        expect(h).toContain("tagName === 'INPUT'");
+    });
+
+    it('导出的任务能被 importTask 认出来', async () => {
+        const origConfirm = globalThis.confirm;
+        const origAlert = globalThis.alert;
+        let alerted = '';
+        globalThis.confirm = () => true;
+        globalThis.alert = (m) => (alerted = m);
+
+        const task = {
+            type: 'novelTranslateTask',
+            version: '1.0.0',
+            fileName: 'a.txt',
+            chapters: [
+                { index: 0, num: '1', rawTitle: '第1部分', title: '第1部分', source: '原文', translated: '译文', status: 'done', error: '' },
+            ],
+            glossary: [{ source: 'A', target: '甲' }],
+        };
+        NT._state.chapters = [];
+        await NT._importTask({ text: async () => JSON.stringify(task) });
+
+        globalThis.confirm = origConfirm;
+        globalThis.alert = origAlert;
+        expect(alerted).toBe('');
+        expect(NT._state.chapters).toHaveLength(1);
+        expect(NT._state.chapters[0].translated).toBe('译文');
+    });
+
+    it('把配置文件误选进「导入任务」时给出明确提示', async () => {
+        const origAlert = globalThis.alert;
+        let alerted = '';
+        globalThis.alert = (m) => (alerted = m);
+        await NT._importTask({ text: async () => JSON.stringify({ type: 'novelTranslateConfig', apiModel: 'x' }) });
+        globalThis.alert = origAlert;
+        expect(alerted).toContain('导入配置');
+    });
+});
+
+describe('debug5 · 正则要兼容 第X章', () => {
+    const RE = NT._DEFAULT_CHAPTER_REGEX;
+
+    it('默认正则同时认 话/章/节/回', () => {
+        for (const [unit, text] of [
+            ['话', '第1话：起\n甲'],
+            ['章', '第1章：起\n甲'],
+            ['节', '第1节：起\n甲'],
+            ['回', '第1回：起\n甲'],
+        ]) {
+            const ch = NT._splitByChapterRegex(text, RE);
+            expect(ch, unit).toHaveLength(1);
+            expect(ch[0].rawTitle).toBe('起');
+            expect(ch[0].unit).toBe(unit);
+        }
+    });
+
+    it('中文数字 + 章 也能识别', () => {
+        const ch = NT._splitByChapterRegex('第十二章：测试\n正文', RE);
+        expect(ch[0].num).toBe('十二');
+        expect(ch[0].unit).toBe('章');
+    });
+
+    it('同一本书里混用话和章都能切开', () => {
+        const ch = NT._splitByChapterRegex('第1章：起\n甲\n\n第2话：承\n乙', RE);
+        expect(ch).toHaveLength(2);
+        expect(ch[0].unit).toBe('章');
+        expect(ch[1].unit).toBe('话');
+    });
+
+    it('导出标题沿用原文单位字，不再一律写成「话」', () => {
+        S.txtTitleFormat = 'arabic';
+        expect(NT._buildDisplayTitle({ num: '3', unit: '章', title: '离别' }, 0)).toBe('第3章 离别');
+        expect(NT._buildDisplayTitle({ num: '3', unit: '回', title: '离别' }, 0)).toBe('第3回 离别');
+        // 没记到单位字时退回「话」
+        expect(NT._buildDisplayTitle({ num: '3', title: '离别' }, 0)).toBe('第3话 离别');
+        S.txtTitleFormat = 'original';
+    });
+
+    it('标题本身已含「第X章」时不重复加前缀', () => {
+        expect(NT._buildDisplayTitle({ num: '3', unit: '章', title: '第三章 离别' }, 0)).toBe('第三章 离别');
+    });
+
+    it('导出单元带上 unit，目录用词正确', () => {
+        S.chapterRegex = RE;
+        S.exportSplitByRegex = true;
+        NT._state.chapters = [mkChapter(0, 'x', '第1章：起\n甲\n\n第2章：承\n乙')];
+        const { units } = NT._buildExportUnits();
+        expect(units).toHaveLength(2);
+        expect(units[0].unit).toBe('章');
+        expect(NT._buildDisplayTitle(units[0], 0)).toContain('章');
+    });
+});
+
+describe('debug6 · 配置导入导出', () => {
+    it('配置字段不含章节数据，只带设置', () => {
+        expect(NT._CONFIG_KEYS).toContain('customPrompt');
+        expect(NT._CONFIG_KEYS).toContain('chapterRegex');
+        expect(NT._CONFIG_KEYS).toContain('glossary');
+        // 任务数据不能混进配置
+        expect(NT._CONFIG_KEYS).not.toContain('chapters');
+        expect(NT._CONFIG_KEYS).not.toContain('apiKey');
+    });
+
+    it('导入配置会覆盖设置但不动章节', async () => {
+        const origConfirm = globalThis.confirm;
+        const origAlert = globalThis.alert;
+        globalThis.confirm = () => true;
+        globalThis.alert = () => {};
+
+        NT._state.chapters = [mkChapter(0, '原文', '译文')];
+        S.concurrency = 3;
+        await NT._importConfig({
+            text: async () =>
+                JSON.stringify({ type: 'novelTranslateConfig', concurrency: 9, customPrompt: '新提示词', apiKey: 'kk' }),
+        });
+
+        globalThis.confirm = origConfirm;
+        globalThis.alert = origAlert;
+        expect(S.concurrency).toBe(9);
+        expect(S.customPrompt).toBe('新提示词');
+        expect(S.apiKey).toBe('kk');
+        // 章节不受影响
+        expect(NT._state.chapters).toHaveLength(1);
+        expect(NT._state.chapters[0].translated).toBe('译文');
+    });
+
+    it('把任务文件误选进「导入配置」时给出明确提示', async () => {
+        const origAlert = globalThis.alert;
+        let alerted = '';
+        globalThis.alert = (m) => (alerted = m);
+        await NT._importConfig({ text: async () => JSON.stringify({ type: 'novelTranslateTask', chapters: [] }) });
+        globalThis.alert = origAlert;
+        expect(alerted).toContain('导入任务');
+    });
+
+    it('数组字段被写坏时自动修回，不会渲染时崩掉', async () => {
+        const origConfirm = globalThis.confirm;
+        const origAlert = globalThis.alert;
+        globalThis.confirm = () => true;
+        globalThis.alert = () => {};
+        await NT._importConfig({
+            text: async () =>
+                JSON.stringify({ type: 'novelTranslateConfig', glossary: 'not-an-array', promptMessageChain: [] }),
+        });
+        globalThis.confirm = origConfirm;
+        globalThis.alert = origAlert;
+        expect(Array.isArray(S.glossary)).toBe(true);
+        expect(S.promptMessageChain.length).toBeGreaterThan(0);
+    });
+});
