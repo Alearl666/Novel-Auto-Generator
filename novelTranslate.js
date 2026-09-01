@@ -57,10 +57,11 @@
         temperature: 0.3,
         maxTokens: null,
 
-        // 分块
-        forceChunkMode: false, // false=按原文章节切；true=无视原文章节按大小切
+        // 分块（始终按长度切，不再按正则切）
+        blockAsChapter: false, // true=强制「一个记忆块 = 一章」；false=块内保留原文自身的话数/章数
         chunkTokens: 30000,
         chapterRegex: DEFAULT_CHAPTER_REGEX,
+        exportSplitByRegex: true, // 导出时用正则在译文里重新划分章节，做出正确目录
 
         // 并发与衔接
         concurrency: 3,
@@ -324,6 +325,14 @@
                 if (!Array.isArray(State.settings.promptMessageChain)) {
                     State.settings.promptMessageChain = [{ role: 'user', content: '{PROMPT}', enabled: true }];
                 }
+                // 旧版本的 forceChunkMode 已废弃：现在恒为按长度切块。
+                // 旧值 true（无视原文章节）对应新的「块即章节」，语义上最接近。
+                if (Object.prototype.hasOwnProperty.call(saved, 'forceChunkMode')) {
+                    if (typeof saved.blockAsChapter !== 'boolean') {
+                        State.settings.blockAsChapter = !!saved.forceChunkMode;
+                    }
+                    delete State.settings.forceChunkMode;
+                }
             }
         } catch (e) {
             log(`读取设置失败，使用默认值: ${e.message}`, 'warn');
@@ -568,20 +577,25 @@
         const s = State.settings;
         const parts = [s.customPrompt.trim()];
 
-        // 章节纪律：取决于是否强制分块
-        if (s.forceChunkMode) {
+        // 章节纪律：取决于「强制记忆块为章节」开关
+        if (s.blockAsChapter) {
             parts.push(
-                `\n## 分段说明\n这是按长度切分的第 ${chapter.index + 1} 段，不对应原文的章节划分。\n` +
-                    `请直接翻译给出的正文，不要自行添加章节标题或编号。`,
+                `\n## 章节纪律（重要）\n` +
+                    `下面给出的这一整块正文，请**当作完整的第 ${chapter.index + 1} 章**来处理。\n` +
+                    `- 整块合起来就是一章，**不要在块内部再划分章节**\n` +
+                    `- 即使原文中间出现「第X话」「第X章」之类的字样，也不要据此另起新章\n` +
+                    `- 不要自行添加额外的章节标题、编号或分隔线\n` +
+                    `- 只翻译下面给出的这一块内容`,
             );
         } else {
             parts.push(
                 `\n## 章节纪律（重要）\n` +
-                    `这是原文的「${chapter.rawTitle}」。\n` +
-                    `- 必须**严格按照原文的话数/章数**翻译，一话就是一话，一章就是一章\n` +
+                    `下面给出的正文是按长度切出来的一块，**不代表章节边界**，` +
+                    `块内可能包含原文的多话/多章，也可能只是某一话的一部分。\n` +
+                    `- 必须**严格沿用原文自身的话数/章数**，原文是第几话就翻成第几话\n` +
                     `- **不得合并**多话为一话，**不得拆分**一话为多话\n` +
-                    `- **不得自行增删**章节，也不要改变原文的章节编号\n` +
-                    `- 只翻译下面给出的这一话/章的内容`,
+                    `- **不要**把这一块当成一章，也**不要**自行添加原文没有的章节编号\n` +
+                    `- 原文里的章节标题行照常翻译并**单独成行**保留`,
             );
         }
 
@@ -614,7 +628,7 @@
             );
         }
 
-        const titleLine = s.forceChunkMode ? '' : `章节标题：${chapter.rawTitle}\n`;
+        const titleLine = s.blockAsChapter ? `本块编号：第 ${chapter.index + 1} 块（即第 ${chapter.index + 1} 章）\n` : '';
         parts.push(`\n## 待翻译正文\n${titleLine}<原文>\n${pieceText}\n</原文>`);
 
         return parts.join('\n');
@@ -810,8 +824,13 @@
         return { system: systemParts.join('\n\n'), messages: merged };
     }
 
-    function buildRequest(messages) {
+    /**
+     * @param {Array} messages
+     * @param {object} opts { stream=true, maxTokens } —— 快速测试走非流式，输出上限也另给
+     */
+    function buildRequest(messages, opts = {}) {
         const s = State.settings;
+        const wantStream = opts.stream !== false;
         const provider = ['openai-compatible', 'gemini', 'anthropic'].includes(s.apiProvider)
             ? s.apiProvider
             : 'openai-compatible';
@@ -827,8 +846,8 @@
                 model: s.apiModel || 'claude-sonnet-4-20250514',
                 messages: am,
                 temperature: s.temperature,
-                max_tokens: s.maxTokens || 8192,
-                stream: true,
+                max_tokens: opts.maxTokens || s.maxTokens || 8192,
+                stream: wantStream,
             };
             if (system) body.system = system;
             return {
@@ -856,11 +875,14 @@
                 if (!/^https?:\/\//i.test(base)) base = 'https://' + base;
                 base = base.replace(/\/+$/, '');
                 const sep = base.includes('?') ? '&' : '?';
-                url = `${base}/${model}:streamGenerateContent${sep}alt=sse&key=${s.apiKey}`;
+                url = wantStream
+                    ? `${base}/${model}:streamGenerateContent${sep}alt=sse&key=${s.apiKey}`
+                    : `${base}/${model}:generateContent${sep}key=${s.apiKey}`;
             } else {
-                url =
-                    `https://generativelanguage.googleapis.com/v1beta/models/` +
-                    `${model}:streamGenerateContent?alt=sse&key=${s.apiKey}`;
+                const g = 'https://generativelanguage.googleapis.com/v1beta/models/';
+                url = wantStream
+                    ? `${g}${model}:streamGenerateContent?alt=sse&key=${s.apiKey}`
+                    : `${g}${model}:generateContent?key=${s.apiKey}`;
             }
             return {
                 url,
@@ -870,7 +892,7 @@
                     body: JSON.stringify({
                         ...toGeminiContents(messages),
                         generationConfig: {
-                            maxOutputTokens: s.maxTokens || 65536,
+                            maxOutputTokens: opts.maxTokens || s.maxTokens || 65536,
                             temperature: s.temperature,
                         },
                         safetySettings: [
@@ -890,10 +912,134 @@
             model: s.apiModel || 'local-model',
             messages: openaiMessages,
             temperature: s.temperature,
-            stream: true,
+            stream: wantStream,
         };
-        if (s.maxTokens) body.max_tokens = s.maxTokens;
+        if (opts.maxTokens || s.maxTokens) body.max_tokens = opts.maxTokens || s.maxTokens;
         return { url: buildChatUrl(s.apiEndpoint), options: { method: 'POST', headers, body: JSON.stringify(body) } };
+    }
+
+    /**
+     * 构造 OpenAI 兼容接口的 /models 地址。
+     * 规则与世界书模块一致：以 /chat/completions 结尾则替换，已是 /models 则不动，否则追加。
+     */
+    function buildModelsUrl(endpoint) {
+        let url = (endpoint || 'https://api.openai.com/v1').trim().replace(/\/+$/, '');
+        if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+        if (/\/chat\/completions$/i.test(url)) url = url.replace(/\/chat\/completions$/i, '/models');
+        else if (!/\/models$/i.test(url)) url += '/models';
+        return url;
+    }
+
+    /** 带超时的 GET/POST JSON，模型拉取和快速测试共用 */
+    async function fetchJSON(url, options = {}, timeout = 30000) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeout);
+        let resp;
+        try {
+            resp = await fetch(url, { ...options, signal: controller.signal });
+        } catch (e) {
+            clearTimeout(timer);
+            if (e.name === 'AbortError') throw new Error(`请求超时 (${timeout / 1000}秒)`);
+            throw new Error(`网络错误: ${e.message}`);
+        }
+        clearTimeout(timer);
+        const text = await resp.text();
+        let data = null;
+        try {
+            data = text ? JSON.parse(text) : null;
+        } catch (e) {
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${text.slice(0, 200)}`);
+            throw new Error('返回的不是合法 JSON: ' + text.slice(0, 200));
+        }
+        if (!resp.ok) {
+            const msg = data?.error?.message || data?.message || text.slice(0, 200) || resp.statusText;
+            const err = new Error(`HTTP ${resp.status}: ${msg}`);
+            err.status = resp.status;
+            throw err;
+        }
+        return data;
+    }
+
+    /**
+     * 拉取当前提供商的可用模型列表。
+     * 三家的接口和返回结构都不一样，这里各走各的。
+     */
+    async function fetchModelList() {
+        const s = State.settings;
+        const provider = s.apiProvider;
+
+        if (provider === 'anthropic') {
+            let base = (s.apiEndpoint || 'https://api.anthropic.com').trim().replace(/\/+$/, '');
+            if (!/^https?:\/\//i.test(base)) base = 'https://' + base;
+            base = base.replace(/\/v1\/messages$/i, '');
+            if (!s.apiKey) throw new Error('请先填写 API Key');
+            const data = await fetchJSON(base + '/v1/models', {
+                method: 'GET',
+                headers: {
+                    'x-api-key': s.apiKey,
+                    'anthropic-version': '2023-06-01',
+                    'anthropic-dangerous-direct-browser-access': 'true',
+                },
+            });
+            return (data?.data || []).map((m) => m.id || m.name).filter(Boolean);
+        }
+
+        if (provider === 'gemini') {
+            if (!s.apiKey) throw new Error('请先填写 API Key');
+            let base = (s.apiEndpoint || 'https://generativelanguage.googleapis.com/v1beta').trim().replace(/\/+$/, '');
+            if (!/^https?:\/\//i.test(base)) base = 'https://' + base;
+            base = base.replace(/\/models$/i, '');
+            const data = await fetchJSON(`${base}/models?key=${encodeURIComponent(s.apiKey)}&pageSize=200`, {
+                method: 'GET',
+            });
+            return (data?.models || [])
+                .filter((m) => !m.supportedGenerationMethods || m.supportedGenerationMethods.includes('generateContent'))
+                .map((m) => String(m.name || '').replace(/^models\//, ''))
+                .filter(Boolean);
+        }
+
+        const url = buildModelsUrl(s.apiEndpoint);
+        const headers = { 'Content-Type': 'application/json' };
+        if (s.apiKey) headers.Authorization = `Bearer ${s.apiKey}`;
+        const data = await fetchJSON(url, { method: 'GET', headers });
+        if (Array.isArray(data?.data)) return data.data.map((m) => m.id || m.name || m).filter(Boolean);
+        if (Array.isArray(data)) return data.map((m) => (typeof m === 'string' ? m : m.id || m.name)).filter(Boolean);
+        if (Array.isArray(data?.models)) {
+            return data.models.map((m) => (typeof m === 'string' ? m : m.id || m.name)).filter(Boolean);
+        }
+        return [];
+    }
+
+    /**
+     * 发一条最短的请求验证「地址 + Key + 模型」这条链路通不通。
+     * 走非流式，省得为了测试再解析一遍 SSE。
+     */
+    async function quickTestModel() {
+        const s = State.settings;
+        if (!s.apiModel) throw new Error('请先填写或选择模型');
+
+        const messages = [{ role: 'user', content: '回复「OK」两个字即可。' }];
+        const { url, options } = buildRequest(messages, { stream: false, maxTokens: 64 });
+
+        const started = Date.now();
+        const data = await fetchJSON(url, options, 60000);
+        const elapsed = Date.now() - started;
+
+        let reply = '';
+        if (Array.isArray(data?.choices) && data.choices.length) {
+            reply = data.choices[0]?.message?.content || data.choices[0]?.text || '';
+        } else if (Array.isArray(data?.content)) {
+            reply = data.content.map((c) => (typeof c?.text === 'string' ? c.text : '')).join('');
+        } else if (Array.isArray(data?.candidates)) {
+            const parts = data.candidates[0]?.content?.parts;
+            if (Array.isArray(parts)) reply = parts.map((p) => p?.text || '').join('');
+        }
+
+        if (!reply) {
+            const blocked = data?.promptFeedback?.blockReason || data?.candidates?.[0]?.finishReason;
+            if (blocked && blocked !== 'STOP') throw new Error(`接口通了但没返回内容 (${blocked})`);
+        }
+        return { elapsed, reply: String(reply || '').trim() };
     }
 
     /** 从一条 SSE 负载里抽取增量文本，兼容三家格式 */
@@ -1307,7 +1453,7 @@
                 `📖 ${State.file.name}\n` +
                 `📊 待翻译 ${pending.length} 章（共 ${State.chapters.length} 章）\n` +
                 `🔧 ${s.apiProvider} / ${s.apiModel || '默认模型'}\n` +
-                `⚙️ 分块模式: ${s.forceChunkMode ? '按长度切分（无视原文章节）' : '严格按原文话数/章数'}\n` +
+                `⚙️ 章节纪律: ${s.blockAsChapter ? '一块 = 一章（强制）' : '沿用原文话数/章数'}\n` +
                 `🔀 并发 ${s.concurrency}，前 ${s.warmupChapters} 章串行建立术语表\n` +
                 `📖 术语表: ${s.glossaryEnabled ? `启用（当前 ${s.glossary.length} 条）` : '关闭'}\n` +
                 `${'='.repeat(50)}\n`,
@@ -1464,14 +1610,50 @@
     }
 
     /**
+     * 把已完成的「块」整理成导出用的章节单元。
+     *
+     * 正文是按长度切的，块边界和章节边界没有关系，所以目录不能直接按块来做。
+     * 这里把译文拼回整篇，再用章节正则重新划分，划出来的才是真正的章节。
+     * 正则一个都匹配不到时退回「一块一章」，至少不会导出失败。
+     *
+     * @returns {{units: Array, mode: string, blockCount: number}}
+     */
+    function buildExportUnits() {
+        const blocks = getExportChapters();
+        if (blocks.length === 0) return { units: [], mode: 'empty', blockCount: 0 };
+
+        if (State.settings.exportSplitByRegex) {
+            const full = blocks.map((b) => String(b.translated).trim()).join('\n\n');
+            let parts = null;
+            try {
+                parts = splitByChapterRegex(full, State.settings.chapterRegex);
+            } catch (e) {
+                log(`导出时章节正则无效，退回按块导出: ${e.message}`, 'warn');
+            }
+            if (parts && parts.length > 0) {
+                return {
+                    units: parts.map((p) => ({ num: p.num, title: p.title, text: p.source })),
+                    mode: 'regex',
+                    blockCount: blocks.length,
+                };
+            }
+        }
+
+        return {
+            units: blocks.map((b, i) => ({ num: '', title: b.title || `第${i + 1}部分`, text: b.translated })),
+            mode: 'block',
+            blockCount: blocks.length,
+        };
+    }
+
+    /**
      * 生成章节显示标题。
      *
      * 编号沿用原文（用户要求）——只翻译了中间几章时编号也不会乱。
      */
-    function buildDisplayTitle(chapter) {
+    function buildDisplayTitle(chapter, fallbackIndex = 0) {
         const s = State.settings;
-        if (State.settings.forceChunkMode) return chapter.title || `第${chapter.index + 1}部分`;
-        if (!chapter.num) return chapter.title || `第${chapter.index + 1}章`;
+        if (!chapter.num) return chapter.title || `第${fallbackIndex + 1}章`;
 
         const n = cnNumToInt(chapter.num);
         let numText = chapter.num;
@@ -1495,9 +1677,9 @@
     }
 
     async function exportEPUB() {
-        const chapters = getExportChapters();
+        const { units: chapters, mode, blockCount } = buildExportUnits();
         if (chapters.length === 0) {
-            alert('没有已完成的章节可以导出');
+            alert('没有已完成的内容可以导出');
             return;
         }
 
@@ -1547,13 +1729,13 @@ h2{text-align:center;margin:1.5em 0 1em;font-size:1.3em;border-bottom:1px solid 
         chapters.forEach((ch, idx) => {
             const chId = `ch${idx + 1}`;
             const filename = `chapter${idx + 1}.xhtml`;
-            const displayTitle = buildDisplayTitle(ch);
+            const displayTitle = buildDisplayTitle(ch, idx);
             const safeChTitle = escXml(displayTitle);
             const xhtml = `<?xml version="1.0" encoding="utf-8"?><!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml"><head><title>${safeChTitle}</title>
 <link rel="stylesheet" type="text/css" href="style.css"/></head>
 <body><h2>${safeChTitle}</h2>
-${textToXhtmlParagraphs(ch.translated)}
+${textToXhtmlParagraphs(ch.text)}
 </body></html>`;
 
             manifest += `<item id="${chId}" href="${filename}" media-type="application/xhtml+xml"/>`;
@@ -1583,7 +1765,12 @@ ${textToXhtmlParagraphs(ch.translated)}
 
         const blob = await zip.generateAsync({ type: 'blob' });
         downloadBlob(blob, `${title}.epub`);
-        appendStream(`\n📚 已导出 EPUB：${chapters.length} 章，含目录书签\n`);
+        appendStream(
+            `\n📚 已导出 EPUB：${blockCount} 块译文，` +
+                (mode === 'regex'
+                    ? `按正则划出 ${chapters.length} 章，含目录书签\n`
+                    : `正则未匹配到章节，按块导出 ${chapters.length} 节\n`),
+        );
     }
 
     /**
@@ -1594,9 +1781,9 @@ ${textToXhtmlParagraphs(ch.translated)}
      * 这样静读天下之类的阅读器用默认正则就能扫出目录。
      */
     function exportTXT() {
-        const chapters = getExportChapters();
+        const { units: chapters, mode, blockCount } = buildExportUnits();
         if (chapters.length === 0) {
-            alert('没有已完成的章节可以导出');
+            alert('没有已完成的内容可以导出');
             return;
         }
         const title = State.settings.bookTitle || State.file.name.replace(/\.txt$/i, '') || '翻译作品';
@@ -1607,17 +1794,20 @@ ${textToXhtmlParagraphs(ch.translated)}
         if (author) parts.push(author);
         parts.push('');
 
-        for (const ch of chapters) {
+        chapters.forEach((ch, i) => {
             parts.push('');
-            parts.push(buildDisplayTitle(ch));
+            parts.push(buildDisplayTitle(ch, i));
             parts.push('');
-            parts.push(String(ch.translated).trim());
+            parts.push(String(ch.text).trim());
             parts.push('');
-        }
+        });
 
         const blob = new Blob([parts.join('\n')], { type: 'text/plain;charset=utf-8' });
         downloadBlob(blob, `${title}.txt`);
-        appendStream(`\n📄 已导出 TXT：${chapters.length} 章\n`);
+        appendStream(
+            `\n📄 已导出 TXT：${blockCount} 块译文，` +
+                (mode === 'regex' ? `按正则划出 ${chapters.length} 章\n` : `按块导出 ${chapters.length} 节\n`),
+        );
     }
 
     function downloadBlob(blob, filename) {
@@ -1649,7 +1839,7 @@ ${textToXhtmlParagraphs(ch.translated)}
             fileHash: State.file.hash,
             bookTitle: State.settings.bookTitle,
             bookAuthor: State.settings.bookAuthor,
-            forceChunkMode: State.settings.forceChunkMode,
+            blockAsChapter: State.settings.blockAsChapter,
             chapterRegex: State.settings.chapterRegex,
             // 术语表跟着任务走，再次导入能直接接上
             glossary: State.settings.glossary,
@@ -1704,7 +1894,8 @@ ${textToXhtmlParagraphs(ch.translated)}
             if (Array.isArray(data.glossary)) State.settings.glossary = data.glossary;
             if (data.bookTitle) State.settings.bookTitle = data.bookTitle;
             if (data.bookAuthor) State.settings.bookAuthor = data.bookAuthor;
-            if (typeof data.forceChunkMode === 'boolean') State.settings.forceChunkMode = data.forceChunkMode;
+            if (typeof data.blockAsChapter === 'boolean') State.settings.blockAsChapter = data.blockAsChapter;
+            else if (typeof data.forceChunkMode === 'boolean') State.settings.blockAsChapter = data.forceChunkMode;
             if (data.chapterRegex) State.settings.chapterRegex = data.chapterRegex;
 
             saveSettings();
@@ -1766,6 +1957,10 @@ ${textToXhtmlParagraphs(ch.translated)}
               <input type="text" id="ntr-model" class="ntr-input" placeholder="模型名称">
             </div>
           </div>
+          <div class="ntr-field" id="ntr-model-select-field" style="display:none;">
+            <label>已拉取的模型 <span class="ntr-hint">（选中即填入上面的模型名）</span></label>
+            <select id="ntr-model-select" class="ntr-input"></select>
+          </div>
           <div class="ntr-field">
             <label>API Key <span class="ntr-hint">(本地模型可留空)</span></label>
             <input type="password" id="ntr-key" class="ntr-input" placeholder="输入 API Key">
@@ -1788,6 +1983,15 @@ ${textToXhtmlParagraphs(ch.translated)}
               <input type="number" id="ntr-maxtokens" class="ntr-input" min="256" step="256" placeholder="默认">
             </div>
           </div>
+
+          <div class="ntr-model-actions">
+            <button id="ntr-fetch-models" class="ntr-btn-small">🔄 拉取模型</button>
+            <button id="ntr-quick-test" class="ntr-btn-small">⚡ 快速测试</button>
+            <div id="ntr-model-status" class="ntr-model-status"></div>
+          </div>
+          <div class="ntr-hint-block">
+            拉取模型会请求接口的模型列表；快速测试会用当前配置发一条最短的请求，验证地址、Key、模型这条链路通不通。
+          </div>
         </div>
       </div>
 
@@ -1798,26 +2002,18 @@ ${textToXhtmlParagraphs(ch.translated)}
           <span class="ntr-collapse-icon">▼</span>
         </div>
         <div id="ntr-split-content" class="ntr-section-content">
+          <div class="ntr-hint-block" style="margin-bottom:10px;">
+            正文<strong>一律按「每块 token 上限」切分</strong>，不再用正则决定怎么切。
+            下面只需要决定 AI 该怎么看待每一块。
+          </div>
+
           <label class="ntr-checkbox">
-            <input type="checkbox" id="ntr-force-chunk">
+            <input type="checkbox" id="ntr-block-as-chapter">
             <span>
-              <strong>强制按长度分块</strong>
-              <div class="ntr-hint-block" id="ntr-force-chunk-hint"></div>
+              <strong>强制记忆块为章节</strong>
+              <div class="ntr-hint-block" id="ntr-block-mode-hint"></div>
             </span>
           </label>
-
-          <div class="ntr-field" id="ntr-regex-field">
-            <label>章节识别正则 <span class="ntr-hint">组1=话数，组2=标题（可为空，会自动兜底）</span></label>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;">
-              <input type="text" id="ntr-chapter-regex" class="ntr-input" style="flex:1 1 220px;min-width:200px;">
-              <select id="ntr-regex-preset" class="ntr-input" style="flex:0 1 160px;">
-                <option value="">— 常用预设 —</option>
-                ${presets}
-              </select>
-              <button id="ntr-test-regex" class="ntr-btn-small">🧪 测试</button>
-            </div>
-            <div id="ntr-regex-result" class="ntr-hint-block"></div>
-          </div>
 
           <div class="ntr-row">
             <div class="ntr-field">
@@ -1842,6 +2038,36 @@ ${textToXhtmlParagraphs(ch.translated)}
               <label title="给AI看的下文，不会被翻译进结果">衔接·下文字数</label>
               <input type="number" id="ntr-ctx-next" class="ntr-input" min="0" max="3000" step="50">
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 章节正则（只用于预览和导出目录） ===== -->
+      <div class="ntr-section">
+        <div class="ntr-section-header" data-target="ntr-regex-content">
+          <span>🔍 章节正则<span class="ntr-hint">（不参与切分，只用于导出目录）</span></span>
+          <span class="ntr-collapse-icon">▼</span>
+        </div>
+        <div id="ntr-regex-content" class="ntr-section-content">
+          <div class="ntr-field">
+            <label>章节识别正则 <span class="ntr-hint">组1=话数，组2=标题（可为空，会自动兜底）</span></label>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <input type="text" id="ntr-chapter-regex" class="ntr-input" style="flex:1 1 220px;min-width:200px;">
+              <select id="ntr-regex-preset" class="ntr-input" style="flex:0 1 160px;">
+                <option value="">— 常用预设 —</option>
+                ${presets}
+              </select>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">
+              <button id="ntr-test-regex" class="ntr-btn-small">🧪 测原文</button>
+              <button id="ntr-test-regex-translated" class="ntr-btn-small" style="background:rgba(46,204,113,0.35);">🧪 测译文（导出预览）</button>
+            </div>
+            <div id="ntr-regex-result" class="ntr-hint-block"></div>
+          </div>
+          <div class="ntr-hint-block">
+            导出时会把译文拼回整篇，再用这个正则重新划分章节生成目录。
+            <strong>导出前点「测译文」看一眼匹配到多少章、标题对不对</strong>，比导完再发现错了省事。
+            原文和译文的章节写法可能不同（例如原文 Chapter 12、译文第12话），必要时分别调整。
           </div>
         </div>
       </div>
@@ -1937,7 +2163,8 @@ ${textToXhtmlParagraphs(ch.translated)}
       <!-- ===== 章节列表 ===== -->
       <div class="ntr-section" id="ntr-queue-section" style="display:none;">
         <div class="ntr-section-header-static">
-          <span>📋 章节列表<span class="ntr-hint" id="ntr-queue-count"></span></span>
+          <span>📋 分块列表<span class="ntr-hint" id="ntr-queue-count"></span></span>
+          <span class="ntr-hint">点任意一块查看内容</span>
         </div>
         <div class="ntr-section-content">
           <div id="ntr-chapter-list" class="ntr-chapter-list"></div>
@@ -1977,6 +2204,20 @@ ${textToXhtmlParagraphs(ch.translated)}
               </select>
             </div>
           </div>
+          <label class="ntr-checkbox">
+            <input type="checkbox" id="ntr-export-split-regex">
+            <span>
+              <strong>导出时用正则重新划分章节</strong>
+              <div class="ntr-hint-block">
+                正文是按长度切的，块边界不等于章节边界。勾选后会把译文拼回整篇，
+                用「章节正则」重新划出真正的章节来做目录。匹配不到时自动退回「一块一节」。
+              </div>
+            </span>
+          </label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+            <button id="ntr-preview-export" class="ntr-btn-small">🔎 预览导出目录</button>
+          </div>
+          <div id="ntr-export-preview" class="ntr-hint-block"></div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
             <button id="ntr-export-epub" class="ntr-btn ntr-btn-primary">📚 导出 EPUB（带目录）</button>
             <button id="ntr-export-txt" class="ntr-btn">📄 导出 TXT</button>
@@ -2037,7 +2278,15 @@ ${textToXhtmlParagraphs(ch.translated)}
 .ntr-upload:hover{border-color:#3498db;background:rgba(52,152,219,0.06);}
 .ntr-file-info{display:flex;gap:10px;align-items:center;padding:9px 12px;background:rgba(52,152,219,0.12);border-radius:6px;margin-top:10px;font-size:12px;flex-wrap:wrap;}
 .ntr-chapter-list{max-height:300px;overflow-y:auto;-webkit-overflow-scrolling:touch;}
-.ntr-chapter-item{display:flex;gap:9px;align-items:center;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.06);font-size:12px;}
+.ntr-chapter-item{display:flex;gap:9px;align-items:center;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.06);font-size:12px;cursor:pointer;}
+.ntr-chapter-item:hover{background:rgba(255,255,255,0.07);}
+.ntr-chapter-arrow{flex:0 0 auto;opacity:0.35;font-size:11px;}
+.ntr-model-actions{display:flex;gap:8px;align-items:center;margin-top:12px;padding:10px;background:rgba(52,152,219,0.1);border:1px solid rgba(52,152,219,0.3);border-radius:6px;flex-wrap:wrap;}
+.ntr-model-actions>button{flex:0 0 auto;white-space:nowrap;}
+.ntr-model-status{font-size:12px;flex:1 1 100%;min-width:0;white-space:pre-wrap;word-break:break-word;line-height:1.5;opacity:0.85;}
+.ntr-model-status.success{color:#2ecc71;opacity:1;}
+.ntr-model-status.error{color:#e74c3c;opacity:1;}
+.ntr-model-status.loading{color:#f39c12;opacity:1;}
 .ntr-chapter-item:last-child{border-bottom:none;}
 .ntr-chapter-status{flex:0 0 auto;font-size:14px;width:20px;text-align:center;}
 .ntr-chapter-title{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -2134,17 +2383,259 @@ ${textToXhtmlParagraphs(ch.translated)}
                     : c.translated
                       ? `${c.translated.length}字`
                       : `${estimateTokens(c.source)}tk`;
-                return `<div class="ntr-chapter-item ${cls}">
+                return `<div class="ntr-chapter-item ${cls}" data-index="${c.index}">
                     <span class="ntr-chapter-status">${icons[c.status] || '⚪'}</span>
                     <span class="ntr-chapter-title" title="${esc(c.rawTitle)}">${esc(c.rawTitle)}</span>
                     <span class="ntr-chapter-meta">${meta}</span>
+                    <span class="ntr-chapter-arrow">▶</span>
                 </div>`;
             })
             .join('');
         container.innerHTML = html || '<div class="ntr-hint-block">暂无章节</div>';
 
+        container.querySelectorAll('.ntr-chapter-item[data-index]').forEach((el) => {
+            el.addEventListener('click', () => showBlockModal(parseInt(el.dataset.index, 10)));
+        });
+
         const count = $('ntr-queue-count');
-        if (count) count.textContent = `（${State.chapters.length} 章）`;
+        if (count) count.textContent = `（${State.chapters.length} 块）`;
+    }
+
+    // ============================================
+    // 分块详情：查看 / 复制 / 编辑 / 合并 / 删除
+    // ============================================
+
+    /** 合并、删除之后重排序号与标题，保证界面和导出编号连续 */
+    function renumberChapters() {
+        State.chapters.forEach((c, i) => {
+            c.index = i;
+            if (/^第\d+部分$/.test(c.rawTitle || '')) {
+                c.rawTitle = `第${i + 1}部分`;
+                c.title = c.rawTitle;
+            }
+            c.num = String(i + 1);
+        });
+    }
+
+    /** 内容被改动过的块要退回未翻译状态，否则译文和原文对不上 */
+    function invalidateChapter(ch) {
+        ch.translated = '';
+        ch.status = STATUS.PENDING;
+        ch.error = '';
+    }
+
+    function closeBlockModal() {
+        const el = $('ntr-block-modal');
+        if (el) el.remove();
+    }
+
+    function showBlockModal(index) {
+        const ch = State.chapters[index];
+        if (!ch) return;
+        closeBlockModal();
+
+        const statusText = {
+            [STATUS.PENDING]: '⚪ 等待翻译',
+            [STATUS.RUNNING]: '🔄 翻译中',
+            [STATUS.DONE]: '✅ 已完成',
+            [STATUS.FAILED]: '❌ 失败',
+        }[ch.status] || '⚪ 等待翻译';
+        const statusColor = {
+            [STATUS.DONE]: '#2ecc71',
+            [STATUS.FAILED]: '#e74c3c',
+            [STATUS.RUNNING]: '#3498db',
+        }[ch.status] || '#f39c12';
+
+        const running = State.status === 'running';
+        const dis = running ? 'disabled' : '';
+
+        const html = `
+<div id="ntr-block-modal" class="ntr-modal-container" style="z-index:100000;">
+ <div class="ntr-modal-scroll">
+  <div class="ntr-modal" style="max-width:900px;">
+    <div class="ntr-modal-header">
+      <span class="ntr-modal-title">📄 第 ${index + 1} 块 / 共 ${State.chapters.length} 块</span>
+      <button class="ntr-modal-close" id="ntr-block-close">✕</button>
+    </div>
+    <div class="ntr-modal-body">
+      <div class="ntr-file-info" style="margin-top:0;justify-content:space-between;">
+        <span style="color:${statusColor};font-weight:bold;">${statusText}</span>
+        <span>原文 <span id="ntr-block-srclen">${ch.source.length.toLocaleString()}</span> 字 · 约 ${estimateTokens(ch.source)} tk</span>
+        <span>译文 ${ch.translated ? ch.translated.length.toLocaleString() + ' 字' : '—'}</span>
+      </div>
+      ${ch.error ? `<div class="ntr-hint-block" style="color:#e74c3c;">❌ ${esc(ch.error)}</div>` : ''}
+
+      <div class="ntr-field" style="margin-top:10px;">
+        <label style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;">
+          <span>📝 原文 <span class="ntr-hint">(可直接编辑)</span></span>
+          <span style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button id="ntr-block-copy-src" class="ntr-btn-small">📋 复制原文</button>
+            <button id="ntr-block-merge-prev" class="ntr-btn-small" ${index === 0 ? 'disabled' : dis}>⬆️ 并入上一块</button>
+            <button id="ntr-block-merge-next" class="ntr-btn-small" ${index === State.chapters.length - 1 ? 'disabled' : dis}>⬇️ 并入下一块</button>
+            <button id="ntr-block-split" class="ntr-btn-small" ${dis}>✂️ 按上限重切本块</button>
+          </span>
+        </label>
+        <textarea id="ntr-block-src" class="ntr-textarea" rows="14">${esc(ch.source)}</textarea>
+      </div>
+
+      <div class="ntr-field">
+        <label style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;">
+          <span>📗 译文 <span class="ntr-hint">(可直接编辑，改完保存即生效)</span></span>
+          <span style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button id="ntr-block-copy-dst" class="ntr-btn-small" ${ch.translated ? '' : 'disabled'}>📋 复制译文</button>
+            <button id="ntr-block-retranslate" class="ntr-btn-small" ${dis} style="background:rgba(52,152,219,0.45);">🔁 重翻本块</button>
+          </span>
+        </label>
+        <textarea id="ntr-block-dst" class="ntr-textarea" rows="14" placeholder="${ch.translated ? '' : '尚未翻译'}">${esc(ch.translated)}</textarea>
+      </div>
+    </div>
+    <div class="ntr-modal-footer">
+      <button id="ntr-block-delete" class="ntr-btn" style="margin-right:auto;background:rgba(231,76,60,0.5);" ${dis}>🗑️ 删除本块</button>
+      <button id="ntr-block-cancel" class="ntr-btn">取消</button>
+      <button id="ntr-block-save" class="ntr-btn ntr-btn-primary">💾 保存修改</button>
+    </div>
+  </div>
+ </div>
+</div>`;
+
+        const wrap = document.createElement('div');
+        wrap.innerHTML = html;
+        document.body.appendChild(wrap.firstElementChild);
+
+        const srcEl = $('ntr-block-src');
+        const dstEl = $('ntr-block-dst');
+        const lenEl = $('ntr-block-srclen');
+        srcEl.addEventListener('input', () => {
+            if (lenEl) lenEl.textContent = srcEl.value.length.toLocaleString();
+        });
+
+        const copyTo = async (btn, text) => {
+            try {
+                await navigator.clipboard.writeText(text);
+            } catch (e) {
+                // 非 https 或浏览器不给权限时退回选中复制
+                srcEl.focus();
+                alert('浏览器不允许直接写剪贴板，请手动选中复制');
+                return;
+            }
+            const old = btn.textContent;
+            btn.textContent = '✅ 已复制';
+            setTimeout(() => (btn.textContent = old), 1500);
+        };
+
+        $('ntr-block-copy-src').addEventListener('click', (e) => copyTo(e.target, srcEl.value));
+        const copyDst = $('ntr-block-copy-dst');
+        if (copyDst && !copyDst.disabled) copyDst.addEventListener('click', (e) => copyTo(e.target, dstEl.value));
+
+        $('ntr-block-close').addEventListener('click', closeBlockModal);
+        $('ntr-block-cancel').addEventListener('click', closeBlockModal);
+
+        $('ntr-block-save').addEventListener('click', async () => {
+            const newSrc = srcEl.value;
+            const newDst = dstEl.value;
+            if (newSrc !== ch.source) {
+                ch.source = newSrc;
+                // 原文改了，旧译文已经对不上；但用户手改的译文要留住
+                if (newDst === ch.translated) invalidateChapter(ch);
+            }
+            if (newDst !== ch.translated) {
+                ch.translated = newDst;
+                ch.status = newDst.trim() ? STATUS.DONE : STATUS.PENDING;
+                ch.error = '';
+            }
+            await saveProgress();
+            renderChapterList();
+            updateProgress();
+            if (State.chapters.some((c) => c.status === STATUS.DONE)) showExportSection(true);
+            closeBlockModal();
+        });
+
+        const mergeInto = async (dir) => {
+            const target = State.chapters[index + dir];
+            if (!target) return;
+            const label = dir < 0 ? '上一块' : '下一块';
+            if (!confirm(`把第 ${index + 1} 块并入${label}（第 ${index + 1 + dir} 块）？\n\n合并后本块会被删除，两块的译文都会作废需要重翻。`)) return;
+            target.source = dir < 0 ? target.source + '\n\n' + srcEl.value : srcEl.value + '\n\n' + target.source;
+            invalidateChapter(target);
+            State.chapters.splice(index, 1);
+            renumberChapters();
+            await saveProgress();
+            renderChapterList();
+            updateProgress();
+            closeBlockModal();
+            appendStream(`\n🔗 已合并为第 ${target.index + 1} 块（${target.source.length} 字），需重新翻译\n`);
+        };
+        const mp = $('ntr-block-merge-prev');
+        if (mp && !mp.disabled) mp.addEventListener('click', () => mergeInto(-1));
+        const mn = $('ntr-block-merge-next');
+        if (mn && !mn.disabled) mn.addEventListener('click', () => mergeInto(1));
+
+        const splitBtn = $('ntr-block-split');
+        if (splitBtn && !splitBtn.disabled) {
+            splitBtn.addEventListener('click', async () => {
+                const pieces = splitBySize(srcEl.value, State.settings.chunkTokens);
+                if (pieces.length <= 1) {
+                    alert('这一块没有超过当前的 token 上限，不需要再切。');
+                    return;
+                }
+                if (!confirm(`本块会被切成 ${pieces.length} 块，切开后都需要重新翻译。继续吗？`)) return;
+                const newOnes = pieces.map((p) => ({
+                    index: 0,
+                    num: '',
+                    rawTitle: '第0部分',
+                    title: '第0部分',
+                    source: p.source,
+                    translated: '',
+                    status: STATUS.PENDING,
+                    error: '',
+                }));
+                State.chapters.splice(index, 1, ...newOnes);
+                renumberChapters();
+                await saveProgress();
+                renderChapterList();
+                updateProgress();
+                closeBlockModal();
+                appendStream(`\n✂️ 已把第 ${index + 1} 块切成 ${pieces.length} 块\n`);
+            });
+        }
+
+        const retryBtn = $('ntr-block-retranslate');
+        if (retryBtn && !retryBtn.disabled) {
+            retryBtn.addEventListener('click', async () => {
+                ch.source = srcEl.value;
+                invalidateChapter(ch);
+                await saveProgress();
+                renderChapterList();
+                closeBlockModal();
+                collectSettingsFromUI();
+                setRunningUI(true);
+                State.status = 'running';
+                State.isStopped = false;
+                try {
+                    await runOne(ch, 1, true);
+                } finally {
+                    State.status = 'idle';
+                    setRunningUI(false);
+                    await saveProgress();
+                    renderChapterList();
+                    updateProgress();
+                    if (State.chapters.some((c) => c.status === STATUS.DONE)) showExportSection(true);
+                }
+            });
+        }
+
+        const delBtn = $('ntr-block-delete');
+        if (delBtn && !delBtn.disabled) {
+            delBtn.addEventListener('click', async () => {
+                if (!confirm(`确定删除第 ${index + 1} 块？原文和译文都会丢失。`)) return;
+                State.chapters.splice(index, 1);
+                renumberChapters();
+                await saveProgress();
+                renderChapterList();
+                updateProgress();
+                closeBlockModal();
+            });
+        }
     }
 
     function renderChain() {
@@ -2272,20 +2763,18 @@ ${textToXhtmlParagraphs(ch.translated)}
         if (el) el.textContent = `（${(State.settings.glossary || []).length} 条）`;
     }
 
-    function updateForceChunkHint() {
-        const hint = $('ntr-force-chunk-hint');
-        const regexField = $('ntr-regex-field');
+    function updateBlockModeHint() {
+        const hint = $('ntr-block-mode-hint');
         if (!hint) return;
-        if (State.settings.forceChunkMode) {
+        if (State.settings.blockAsChapter) {
             hint.innerHTML =
-                '当前：<strong>无视原文的第X话/第X章</strong>，纯按长度切块。' +
-                '适合原文没有规范章节标记的情况。导出时章节名为「第N部分」。';
-            if (regexField) regexField.style.display = 'none';
+                '已开启：提示词里会要求 AI 把<strong>每一块整个当成一章</strong>，块内不再分章，' +
+                '也不会自行加编号。适合原文没有规范章节标记、你就想按固定长度分章的情况。';
         } else {
             hint.innerHTML =
-                '当前：<strong>严格按照原文的话数/章数</strong>翻译，一话就是一话。' +
-                '提示词里会明确要求 AI 不得合并或拆分章节。需要下面的正则能正确识别章节标记。';
-            if (regexField) regexField.style.display = '';
+                '未开启：提示词里会说明这一块只是按长度切出来的，' +
+                '要求 AI <strong>沿用原文自身的话数/章数</strong>，不得合并或拆分，也不要把一块当成一章。' +
+                '原文章节标题会照常翻译并单独成行，导出时再靠正则划分。';
         }
     }
 
@@ -2331,7 +2820,8 @@ ${textToXhtmlParagraphs(ch.translated)}
         set('ntr-timeout', Math.round((s.apiTimeout || 300000) / 1000));
         set('ntr-temperature', s.temperature);
         set('ntr-maxtokens', s.maxTokens);
-        check('ntr-force-chunk', s.forceChunkMode);
+        check('ntr-block-as-chapter', s.blockAsChapter);
+        check('ntr-export-split-regex', s.exportSplitByRegex);
         set('ntr-chapter-regex', s.chapterRegex);
         set('ntr-chunk-tokens', s.chunkTokens);
         set('ntr-concurrency', s.concurrency);
@@ -2347,7 +2837,7 @@ ${textToXhtmlParagraphs(ch.translated)}
         const presetName = $('ntr-preset-name');
         if (presetName) presetName.textContent = s.importedPresetName ? `📥 已导入预设：${s.importedPresetName}` : '';
 
-        updateForceChunkHint();
+        updateBlockModeHint();
         renderChain();
         renderGlossary();
     }
@@ -2378,8 +2868,10 @@ ${textToXhtmlParagraphs(ch.translated)}
         if (temp !== null) s.temperature = Math.min(2, Math.max(0, temp));
         s.maxTokens = num('ntr-maxtokens', null);
 
-        const force = $('ntr-force-chunk');
-        if (force) s.forceChunkMode = force.checked;
+        const blockMode = $('ntr-block-as-chapter');
+        if (blockMode) s.blockAsChapter = blockMode.checked;
+        const expRegex = $('ntr-export-split-regex');
+        if (expRegex) s.exportSplitByRegex = expRegex.checked;
         const regex = $('ntr-chapter-regex');
         if (regex && regex.value.trim()) s.chapterRegex = regex.value.trim();
 
@@ -2451,7 +2943,7 @@ ${textToXhtmlParagraphs(ch.translated)}
             if (nameEl) nameEl.textContent = file.name;
             const sizeEl = $('ntr-file-size');
             if (sizeEl) {
-                sizeEl.textContent = `(${(content.length / 10000).toFixed(1)}万字, ${chapters.length}章, ${encoding})`;
+                sizeEl.textContent = `(${(content.length / 10000).toFixed(1)}万字, ${chapters.length}块, ${encoding})`;
             }
 
             showQueueSection(true);
@@ -2460,10 +2952,10 @@ ${textToXhtmlParagraphs(ch.translated)}
             await saveProgress();
 
             appendStream(
-                `✅ 编码 ${encoding}，共 ${content.length} 字，切分出 ${chapters.length} 章\n` +
-                    (State.settings.forceChunkMode
-                        ? '⚙️ 模式：按长度切块（无视原文章节）\n'
-                        : '⚙️ 模式：严格按原文话数/章数\n'),
+                `✅ 编码 ${encoding}，共 ${content.length} 字，按长度切成 ${chapters.length} 块\n` +
+                    (State.settings.blockAsChapter
+                        ? '⚙️ 章节纪律：一块 = 一章（强制）\n'
+                        : '⚙️ 章节纪律：沿用原文自身的话数/章数\n'),
             );
         } catch (e) {
             appendStream(`❌ 读取失败: ${e.message}\n`);
@@ -2471,62 +2963,102 @@ ${textToXhtmlParagraphs(ch.translated)}
         }
     }
 
-    /** 根据当前模式切分章节 */
+    /**
+     * 切分正文。
+     *
+     * 恒按长度切，不再用正则决定边界，也不再弹窗问用户。
+     * 正则只在导出时用来重新划分章节做目录。
+     */
     function buildChapters(content) {
-        const s = State.settings;
-        if (s.forceChunkMode) {
-            return splitBySize(content, s.chunkTokens);
-        }
-        const byRegex = splitByChapterRegex(content, s.chapterRegex);
-        if (byRegex && byRegex.length > 0) return byRegex;
-
-        // 正则一个都没匹配上：告诉用户，并退化为按长度切
-        const go = confirm(
-            '章节正则没有匹配到任何章节。\n\n' +
-                '点「确定」改为按长度切块继续；\n' +
-                '点「取消」返回修改正则。',
-        );
-        if (!go) return null;
-        s.forceChunkMode = true;
-        const force = $('ntr-force-chunk');
-        if (force) force.checked = true;
-        updateForceChunkHint();
-        saveSettings();
-        return splitBySize(content, s.chunkTokens);
+        return splitBySize(content, State.settings.chunkTokens);
     }
 
-    function testRegex() {
+    /**
+     * 用当前正则在指定文本里找章节标记，返回全部匹配。
+     * @param {'source'|'translated'} which
+     */
+    function testRegex(which = 'source') {
         const input = $('ntr-chapter-regex');
         const result = $('ntr-regex-result');
         if (!input || !result) return;
         const pattern = input.value.trim();
 
-        if (State.chapters.length === 0 && !State.__lastRawContent) {
+        if (State.chapters.length === 0) {
             result.innerHTML = '⚠️ 请先导入 TXT 文件再测试';
             return;
         }
-        const sample = State.__lastRawContent || State.chapters.map((c) => c.source).join('\n');
+
+        let sample;
+        let label;
+        if (which === 'translated') {
+            const done = State.chapters.filter((c) => c.status === STATUS.DONE && c.translated);
+            if (done.length === 0) {
+                result.innerHTML = '⚠️ 还没有已翻译的内容，先翻几块再测译文';
+                return;
+            }
+            sample = done.map((c) => String(c.translated).trim()).join('\n\n');
+            label = `译文（${done.length}/${State.chapters.length} 块已完成）`;
+        } else {
+            sample = State.chapters.map((c) => c.source).join('\n\n');
+            label = '原文';
+        }
 
         try {
             const re = new RegExp(pattern, 'gm');
             const found = [];
+            let total = 0;
             let m;
             let guard = 0;
-            while ((m = re.exec(sample)) !== null && guard++ < 5000) {
+            while ((m = re.exec(sample)) !== null && guard++ < 100000) {
                 if (m.index === re.lastIndex) re.lastIndex++;
-                found.push({ num: m[1] || '?', title: (m[2] || '').trim() || '(无标题，将用整句兜底)' });
-                if (found.length >= 5) break;
+                total++;
+                if (found.length < 10) {
+                    let title = (m[2] || '').trim();
+                    const nl = title.indexOf('\n');
+                    if (nl !== -1) title = title.slice(0, nl).trim();
+                    found.push({ num: m[1] || '?', title: title || '(无标题，导出时用整句兜底)' });
+                }
             }
-            if (found.length === 0) {
-                result.innerHTML = '❌ 没有匹配到任何章节，请检查正则';
+            if (total === 0) {
+                result.innerHTML =
+                    `❌ 在${label}里<strong>一个章节都没匹配到</strong>。` +
+                    (which === 'translated'
+                        ? '<br>译文的章节写法可能和原文不同（例如原文 Chapter 12、译文第12话），照译文改正则。' +
+                          '<br>导出时会自动退回「一块一节」，目录就是第1部分、第2部分这样。'
+                        : '<br>请换个预设或检查正则。');
                 return;
             }
             result.innerHTML =
-                `✅ 匹配到章节，前 ${found.length} 条：<br>` +
-                found.map((f) => `　第 ${esc(f.num)} 话 · ${esc(f.title)}`).join('<br>');
+                `✅ 在${label}里匹配到 <strong>${total}</strong> 个章节` +
+                (which === 'translated' ? `，导出后目录就是这 ${total} 条` : '') +
+                `，前 ${found.length} 条：<br>` +
+                found.map((f) => `　${esc(f.num)} · ${esc(f.title)}`).join('<br>') +
+                (total > found.length ? '<br>　…' : '');
         } catch (e) {
             result.innerHTML = `❌ 正则语法错误: ${esc(e.message)}`;
         }
+    }
+
+    /** 导出前预览目录：直接用导出时那套逻辑算一遍 */
+    function previewExport() {
+        const el = $('ntr-export-preview');
+        if (!el) return;
+        collectSettingsFromUI();
+        const { units, mode, blockCount } = buildExportUnits();
+        if (units.length === 0) {
+            el.innerHTML = '⚠️ 还没有已完成的内容';
+            return;
+        }
+        const head = units
+            .slice(0, 10)
+            .map((u, i) => `　${esc(buildDisplayTitle(u, i))}`)
+            .join('<br>');
+        el.innerHTML =
+            (mode === 'regex'
+                ? `✅ ${blockCount} 块译文 → 正则划出 <strong>${units.length}</strong> 章`
+                : `⚠️ 正则没匹配到章节，将按块导出 <strong>${units.length}</strong> 节`) +
+            `，目录前 ${Math.min(10, units.length)} 条：<br>${head}` +
+            (units.length > 10 ? '<br>　…' : '');
     }
 
     async function clearFile() {
@@ -2537,7 +3069,6 @@ ${textToXhtmlParagraphs(ch.translated)}
         if (State.chapters.length > 0 && !confirm('确定清除当前文件和所有翻译进度吗？')) return;
         State.file = { name: '', hash: '' };
         State.chapters = [];
-        State.__lastRawContent = '';
         State.timings = [];
         await dbDelete('current');
         const info = $('ntr-file-info');
@@ -2617,15 +3148,20 @@ ${textToXhtmlParagraphs(ch.translated)}
     <div class="ntr-modal-body" style="font-size:13px;line-height:1.75;">
       <div class="ntr-section"><div class="ntr-section-content">
         <strong>📌 基本流程</strong>
-        <div>导入 TXT → 切分章节 → 并发翻译 → 导出 EPUB / TXT。全程可中断，进度自动保存。</div>
+        <div>导入 TXT → 按长度切块 → 并发翻译 → 导出 EPUB / TXT。全程可中断，进度自动保存。</div>
       </div></div>
 
       <div class="ntr-section"><div class="ntr-section-content">
-        <strong>✂️ 两种分章模式</strong>
-        <div><strong>不勾选「强制按长度分块」</strong>（默认）：用正则识别原文的第X话/第X章，一话一个请求。
-        提示词里会明确要求 AI 严格按原文话数翻译，不得合并或拆分章节。</div>
-        <div style="margin-top:6px;"><strong>勾选</strong>：无视原文章节标记，纯按长度切块。适合原文没有规范章节标题的情况。</div>
-        <div style="margin-top:6px;">单章超过 token 上限时会自动拆成几段分别翻译再拼回，界面上仍是一章。</div>
+        <strong>✂️ 分块与「强制记忆块为章节」</strong>
+        <div>正文<strong>一律按「每块 token 上限」切分</strong>，不再用正则决定边界，也不会再弹窗问你。
+        切出来的每一块是一个请求。</div>
+        <div style="margin-top:6px;"><strong>不勾选</strong>（默认）：提示词里会说明这块只是按长度切出来的，
+        要求 AI 沿用<strong>原文自身的话数/章数</strong>，不得合并或拆分，也不要把一块当成一章。
+        原文的章节标题会照常翻译并单独成行。</div>
+        <div style="margin-top:6px;"><strong>勾选</strong>：提示词里会要求 AI 把每一块<strong>整个当成一章</strong>，
+        块内不再分章。适合原文压根没有规范章节标记、你就想按固定长度分章的情况。</div>
+        <div style="margin-top:6px;">分块列表里<strong>点任意一块</strong>可以查看和编辑原文/译文，
+        也能复制、合并到相邻块、按上限重切、单独重翻或删除。</div>
       </div></div>
 
       <div class="ntr-section"><div class="ntr-section-content">
@@ -2648,6 +3184,25 @@ ${textToXhtmlParagraphs(ch.translated)}
         <div>译文用 <code>&lt;译文&gt;&lt;/译文&gt;</code> 标签包裹。输出被 max_tokens 截断时闭合标签一定不在，
         据此判定截断并自动重试。另外还会检查译文长度，明显过短也判为异常。</div>
         <div style="margin-top:6px;">导出时标签会被剥掉，你拿到的是纯正文。</div>
+      </div></div>
+
+      <div class="ntr-section"><div class="ntr-section-content">
+        <strong>🔍 章节正则（导出目录用）</strong>
+        <div>因为切块和章节边界无关，目录不能按块来做。导出时会把译文<strong>拼回整篇</strong>，
+        再用这个正则重新划分章节，划出来的才是目录。匹配不到时退回「一块一节」。</div>
+        <div style="margin-top:6px;">正则区有两个测试按钮：<strong>测原文</strong>看原文能匹配多少章，
+        <strong>测译文</strong>看译文能匹配多少章。<strong>导出前点一下「测译文」或「预览导出目录」</strong>，
+        就能提前看到目录会长什么样，不用导完再发现错了。</div>
+        <div style="margin-top:6px;">注意原文和译文的章节写法可能不一样（原文 Chapter 12、译文第12话），
+        必要时分别调整正则。</div>
+      </div></div>
+
+      <div class="ntr-section"><div class="ntr-section-content">
+        <strong>🔧 拉取模型与快速测试</strong>
+        <div><strong>拉取模型</strong>会向接口要一份可用模型列表，拉到后从下拉里选即可，省得手打模型名。
+        三家接口各走各的地址（OpenAI 兼容 /models、Gemini /models、Anthropic /v1/models）。</div>
+        <div style="margin-top:6px;"><strong>快速测试</strong>用当前配置发一条最短的非流式请求，
+        验证「地址 + Key + 模型」这条链路通不通。开跑前先测一下，比翻到一半才报错省时间。</div>
       </div></div>
 
       <div class="ntr-section"><div class="ntr-section-content">
@@ -2689,6 +3244,79 @@ ${textToXhtmlParagraphs(ch.translated)}
     }
 
     // ============================================
+    // 模型拉取 / 快速测试
+    // ============================================
+    function setModelStatus(text, type) {
+        const el = $('ntr-model-status');
+        if (!el) return;
+        el.textContent = text;
+        el.className = 'ntr-model-status' + (type ? ' ' + type : '');
+    }
+
+    async function handleFetchModels() {
+        const btn = $('ntr-fetch-models');
+        const field = $('ntr-model-select-field');
+        const select = $('ntr-model-select');
+        collectSettingsFromUI();
+
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = '⏳ 拉取中...';
+        }
+        setModelStatus('正在拉取模型列表...', 'loading');
+
+        try {
+            const models = await fetchModelList();
+            if (!models.length) {
+                setModelStatus('❌ 接口没返回任何模型，手动填模型名即可', 'error');
+                if (field) field.style.display = 'none';
+                return;
+            }
+            if (select) {
+                select.innerHTML =
+                    '<option value="">-- 共 ' + models.length + ' 个，选一个 --</option>' +
+                    models.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+                if (models.includes(State.settings.apiModel)) select.value = State.settings.apiModel;
+            }
+            if (field) field.style.display = 'block';
+            setModelStatus(`✅ 拉取到 ${models.length} 个模型`, 'success');
+        } catch (e) {
+            log(`拉取模型失败: ${e.message}`, 'err');
+            setModelStatus(`❌ ${e.message}`, 'error');
+            if (field) field.style.display = 'none';
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = '🔄 拉取模型';
+            }
+        }
+    }
+
+    async function handleQuickTest() {
+        const btn = $('ntr-quick-test');
+        collectSettingsFromUI();
+
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = '⏳ 测试中...';
+        }
+        setModelStatus('正在测试连接...', 'loading');
+
+        try {
+            const { elapsed, reply } = await quickTestModel();
+            setModelStatus(`✅ 连接正常 (${elapsed}ms)${reply ? ' · 回复: ' + reply.slice(0, 40) : ''}`, 'success');
+        } catch (e) {
+            log(`快速测试失败: ${e.message}`, 'err');
+            setModelStatus(`❌ ${e.message}`, 'error');
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = '⚡ 快速测试';
+            }
+        }
+    }
+
+    // ============================================
     // 事件绑定
     // ============================================
     function bindEvents() {
@@ -2723,13 +3351,27 @@ ${textToXhtmlParagraphs(ch.translated)}
         if (promptEl) promptEl.addEventListener('input', collectSettingsFromUI);
 
         $('ntr-glossary-enabled').addEventListener('change', collectSettingsFromUI);
-
-        // --- 强制分块开关 ---
-        $('ntr-force-chunk').addEventListener('change', () => {
+        $('ntr-export-split-regex').addEventListener('change', () => {
             collectSettingsFromUI();
-            updateForceChunkHint();
-            if (State.chapters.length > 0) {
-                appendStream('\n⚠️ 分章模式已改变。如需按新模式重新切分，请重新导入 TXT 文件。\n');
+            previewExport();
+        });
+
+        // --- 模型拉取 / 快速测试 ---
+        $('ntr-fetch-models').addEventListener('click', handleFetchModels);
+        $('ntr-quick-test').addEventListener('click', handleQuickTest);
+        $('ntr-model-select').addEventListener('change', (e) => {
+            if (!e.target.value) return;
+            $('ntr-model').value = e.target.value;
+            collectSettingsFromUI();
+            setModelStatus(`已选择模型：${e.target.value}`, 'success');
+        });
+
+        // --- 块即章节开关 ---
+        $('ntr-block-as-chapter').addEventListener('change', () => {
+            collectSettingsFromUI();
+            updateBlockModeHint();
+            if (State.chapters.some((c) => c.status === STATUS.DONE)) {
+                appendStream('\n⚠️ 章节纪律已改变，只影响之后翻译的块，已完成的块不受影响。\n');
             }
         });
 
@@ -2741,11 +3383,13 @@ ${textToXhtmlParagraphs(ch.translated)}
             if (preset) {
                 $('ntr-chapter-regex').value = preset.value;
                 collectSettingsFromUI();
-                testRegex();
+                testRegex('source');
             }
             e.target.value = '';
         });
-        $('ntr-test-regex').addEventListener('click', testRegex);
+        $('ntr-test-regex').addEventListener('click', () => testRegex('source'));
+        $('ntr-test-regex-translated').addEventListener('click', () => testRegex('translated'));
+        $('ntr-preview-export').addEventListener('click', previewExport);
 
         // --- 提示词 ---
         $('ntr-reset-prompt').addEventListener('click', () => {
@@ -2955,6 +3599,13 @@ ${textToXhtmlParagraphs(ch.translated)}
         _parseTavernPreset: parseTavernPreset,
         _extractReportedTerms: extractReportedTerms,
         _cnNumToInt: cnNumToInt,
+        _buildChapters: buildChapters,
+        _buildPrompt: buildPrompt,
+        _buildExportUnits: buildExportUnits,
+        _buildDisplayTitle: buildDisplayTitle,
+        _buildRequest: buildRequest,
+        _buildModelsUrl: buildModelsUrl,
+        _renumberChapters: renumberChapters,
     };
 
     console.log(`[NovelTranslate] 📖 小说翻译模块已加载 v${VERSION}`);
