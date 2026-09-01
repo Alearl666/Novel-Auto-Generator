@@ -384,27 +384,12 @@ ${pairsContent}
 - 对每一对分别判断
 - 如果是同一${categoryName === '角色' ? '人' : '事物'}，选择更完整/更常用的名称作为mainName
 - 如果不是同一${categoryName === '角色' ? '人' : '事物'}，说明原因
-- 判定为相同时，额外给出精简后的关键词列表 keywords（规则见下）
 - 返回JSON格式
-
-## 关键词精简规则（仅在 isSamePerson 为 true 时需要）
-把两个条目的关键词合起来去芜存菁，**只保留能直接指代${categoryName === '角色' ? '这个人' : '这个事物'}的称呼**：
-${
-    categoryName === '角色'
-        ? '- 保留：本名、姓、名、全名、简称、小名、外号、绰号、代号、称号、别名\n' +
-          '- 删除：外貌描写（银发、红瞳）、身份职业（学生、队长、魔法师）、性格特征（冷酷、温柔）、\n' +
-          '  关系描述（主角的妹妹）、所属组织、能力技能、以及任何不能当作名字直接称呼的词'
-        : '- 保留：正式名称、简称、别称、俗称、代号\n' +
-          '- 删除：属性描写、功能用途、所属关系、状态描述，以及任何不能直接指代该事物的词'
-}
-- 数量控制在 2~6 个，宁缺毋滥
-- 不要新造原文里没有出现过的称呼
-- mainName 本身必须包含在 keywords 里
 
 ## 输出格式
 {
     "results": [
-        {"pair": 1, "nameA": "条目A名", "nameB": "条目B名", "isSamePerson": true, "mainName": "保留的名称", "keywords": ["精简后的称呼1", "精简后的称呼2"], "reason": "判断依据"},
+        {"pair": 1, "nameA": "条目A名", "nameB": "条目B名", "isSamePerson": true, "mainName": "保留的名称", "reason": "判断依据"},
         {"pair": 2, "nameA": "条目A名", "nameB": "条目B名", "isSamePerson": false, "reason": "不是同一${categoryName === '角色' ? '人' : '事物'}的原因"}
     ]
 }`
@@ -531,22 +516,7 @@ ${
                 }
             }
 
-            // 收集 AI 为这一组给出的精简关键词。
-            // 一个组可能由多个配对判定合并而来，取所有相关配对的 keywords 并集。
-            const simplifiedKeywords = [];
-            for (const result of pairResults) {
-                if (!result.isSamePerson || !Array.isArray(result.keywords)) continue;
-                if (!group.includes(result.nameA) && !group.includes(result.nameB)) continue;
-                for (const kw of result.keywords) {
-                    if (typeof kw === 'string' && kw.trim()) simplifiedKeywords.push(kw.trim());
-                }
-            }
-
-            return {
-                names: group,
-                mainName: mainName || group[0],
-                simplifiedKeywords: [...new Set(simplifiedKeywords)],
-            };
+            return { names: group, mainName: mainName || group[0] };
         });
 
         return {
@@ -556,51 +526,13 @@ ${
         };
     }
 
-    /**
-     * 决定合并后条目使用哪份关键词。
-     *
-     * 优先用 AI 给出的精简列表（只保留能直接指代该对象的称呼），
-     * 但做几层保护，避免 AI 返回垃圾时把关键词搞丢：
-     *   - 精简列表为空或过短 -> 退回全量并集
-     *   - 精简列表里凭空捏造了原文没有的词 -> 剔除
-     *   - 主名和各原条目名必须保留，否则世界书可能匹配不到
-     *
-     * @param {string[]} allKeywords 全量并集
-     * @param {string[]|undefined} simplified AI 给的精简列表
-     * @param {string} mainName 合并后的主名
-     * @param {string[]} names 参与合并的原条目名
-     * @returns {string[]}
-     */
-    function pickMergedKeywords(allKeywords, simplified, mainName, names) {
-        const fullSet = [...new Set(allKeywords)];
-        if (!Array.isArray(simplified) || simplified.length === 0) {
-            return fullSet;
-        }
-
-        // 只接受原本就存在的词，防止 AI 自己编新称呼
-        const known = new Set(fullSet.map((k) => String(k).trim()));
-        const filtered = simplified.map((k) => String(k).trim()).filter((k) => k && known.has(k));
-
-        // 主名和原条目名必须在，否则触发不了世界书匹配
-        const mustHave = [mainName, ...names].map((n) => String(n).trim()).filter(Boolean);
-        const result = [...new Set([...mustHave, ...filtered])];
-
-        // 精简后反而比原来还多，或者少到只剩主名，说明 AI 没照做，退回全量
-        if (result.length >= fullSet.length || result.length < 2) {
-            return fullSet;
-        }
-
-        Logger.info('别名合并', `关键词精简: ${fullSet.length} -> ${result.length} (${mainName})`);
-        return result;
-    }
-
     async function mergeConfirmedDuplicates(aiResult, categoryName = '角色') {
         const entries = AppState.worldbook.generated[categoryName];
         let mergedCount = 0;
         const mergedGroups = aiResult.mergedGroups || [];
 
         for (const groupInfo of mergedGroups) {
-            const { names, mainName, simplifiedKeywords } = groupInfo;
+            const { names, mainName } = groupInfo;
             if (!names || names.length < 2 || !mainName) continue;
 
             const mergedKeywords = [];
@@ -616,7 +548,7 @@ ${
             }
 
             entries[mainName] = {
-                关键词: pickMergedKeywords(mergedKeywords, simplifiedKeywords, mainName, names),
+                关键词: [...new Set(mergedKeywords)],
                 内容: mergedContent.replace(/\n\n---\n\n$/, ''),
             };
 

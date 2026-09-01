@@ -25,6 +25,7 @@
         isVolumeMode,
         showManualMergeUI,
         showBatchRerollModal,
+        showKeywordSimplifyModal,
     } = deps;
 
     function formatWorldbookAsCards(worldbook) {
@@ -217,12 +218,13 @@
                 <button class="ttw-btn ttw-btn-small" id="ttw-apply-threshold">应用</button>
                 <span style="font-size:11px;color:#666;">低于此值的条目将红色高亮（0=关闭）</span>
             </div>
-            <div class="ttw-modal-body" id="ttw-worldbook-view-body">${formatWorldbookAsCards(worldbookToShow)}</div>
+            <div class="ttw-worldbook-view-list" id="ttw-worldbook-view-body">${formatWorldbookAsCards(worldbookToShow)}</div>
         `;
 
         const footerHtml = `
             <div style="font-size:11px;color:#888;margin-right:auto;">💡 点击⚙️配置，点击🎯单独重Roll条目，点击灯图标切换蓝/绿灯</div>
             <button class="ttw-btn ttw-btn-secondary" id="ttw-manual-merge-btn" title="手动选择条目进行合并（AI识别不到时使用）" style="white-space:nowrap;flex-shrink:0;">✋ 手动合并</button>
+            <button class="ttw-btn ttw-btn-secondary" id="ttw-simplify-keywords-btn" title="用AI精简关键词，只保留能直接指代条目的称呼" style="white-space:nowrap;flex-shrink:0;">🔤 精简关键词</button>
             <button class="ttw-btn ttw-btn-secondary" id="ttw-batch-reroll-btn" title="批量选择多个条目重Roll" style="white-space:nowrap;flex-shrink:0;">🎲 批量重Roll</button>
         `;
 
@@ -240,6 +242,18 @@
                 renderWorldbookToContainer(bodyContainer, getWorldbookToShow());
             });
         });
+
+        const simplifyBtn = viewModal.querySelector('#ttw-simplify-keywords-btn');
+        if (simplifyBtn && typeof showKeywordSimplifyModal === 'function') {
+            simplifyBtn.addEventListener('click', () => {
+                showKeywordSimplifyModal(() => {
+                    const bodyContainer = viewModal.querySelector('#ttw-worldbook-view-body');
+                    renderWorldbookToContainer(bodyContainer, getWorldbookToShow());
+                });
+            });
+        } else if (simplifyBtn) {
+            simplifyBtn.style.display = 'none';
+        }
 
         viewModal.querySelector('#ttw-batch-reroll-btn').addEventListener('click', () => {
             showBatchRerollModal(() => {

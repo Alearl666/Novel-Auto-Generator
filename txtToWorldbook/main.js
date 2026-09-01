@@ -127,6 +127,8 @@ import { createStartButtonView } from './ui/startButtonView.js';
 import { createStopButtonView } from './ui/stopButtonView.js';
 import { createUiHelpers } from './ui/createUiHelpers.js';
 import { createWorldbookViewRuntime } from './ui/createWorldbookViewRuntime.js';
+import { createKeywordSimplifyService } from './services/keywordSimplifyService.js';
+import { createKeywordSimplifyModal } from './ui/keywordSimplifyModal.js';
 import { ensureModalStyles } from './ui/modalStyles.js';
 
 (function () {
@@ -792,7 +794,34 @@ import { ensureModalStyles } from './ui/modalStyles.js';
         getAllVolumesWorldbook,
         showManualMergeUI: (...args) => showManualMergeUI(...args),
         showBatchRerollModal: (...args) => showBatchRerollModal(...args),
+        showKeywordSimplifyModal: (...args) => showKeywordSimplifyModal(...args),
     });
+
+    // ===== 关键词精简（独立于别名合并，单独调用 AI）=====
+    const keywordSimplifyService = createKeywordSimplifyService({
+        AppState,
+        Logger,
+        callAPI: (...args) => callAPI(...args),
+        parseAIResponse: (...args) => parseAIResponse(...args),
+        updateStreamContent,
+        debugLog,
+        MemoryHistoryDB,
+        getLanguagePrefix: () => (typeof getLanguagePrefix === 'function' ? getLanguagePrefix() : ''),
+    });
+
+    const keywordSimplifyModal = createKeywordSimplifyModal({
+        AppState,
+        ModalFactory,
+        keywordSimplifyService,
+        updateWorldbookPreview: () => worldbookView.updateWorldbookPreview(),
+        refreshWorldbookViewModal: () => worldbookView.refreshWorldbookViewModal(),
+        ErrorHandler,
+        confirmAction,
+    });
+
+    function showKeywordSimplifyModal(...args) {
+        return keywordSimplifyModal.showKeywordSimplifyModal(...args);
+    }
 
     const {
         entryConfigModals: featureEntryConfigModals,

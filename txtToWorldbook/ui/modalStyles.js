@@ -13,6 +13,13 @@ export function ensureModalStyles() {
             .ttw-modal-close{background:rgba(255,255,255,0.1);border:none;color:#fff;font-size:18px;width:36px;height:36px;border-radius:6px;cursor:pointer;transition:all 0.2s;}
             .ttw-modal-close:hover{background:rgba(255,100,100,0.3);color:#ff6b6b;}
             .ttw-modal-body{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding:16px;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;}
+            /* 世界书详细视图的内容区。
+               这里刻意不复用 .ttw-modal-body：那个类带 overflow-y:auto 和
+               overscroll-behavior:contain，嵌套在外层 .ttw-modal-body 里会形成两层
+               滚动容器。内层高度不受约束因而并不可滚，但 overscroll-behavior:contain
+               仍会拦住滚动冒泡，导致手机上手指按在条目上划不动，只有蹭到左右两侧的
+               外层内边距才能滚。 */
+            .ttw-worldbook-view-list{padding:0;}
             .ttw-modal-footer{flex:0 0 auto;padding:16px 20px;padding-bottom:max(16px,env(safe-area-inset-bottom));border-top:1px solid var(--SmartThemeBorderColor,#444);background:rgba(0,0,0,0.88);display:flex;justify-content:flex-end;gap:10px;position:relative;z-index:2;}
             .ttw-section{background:rgba(0,0,0,0.2);border-radius:8px;margin-bottom:12px;overflow:hidden;}
             .ttw-section-header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:rgba(0,0,0,0.3);cursor:pointer;font-weight:bold;font-size:14px;}

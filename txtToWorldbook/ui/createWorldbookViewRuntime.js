@@ -32,5 +32,6 @@ export function createWorldbookViewRuntime(deps = {}) {
         isVolumeMode: () => deps.AppState.processing.volumeMode,
         showManualMergeUI: deps.showManualMergeUI,
         showBatchRerollModal: deps.showBatchRerollModal,
+        showKeywordSimplifyModal: deps.showKeywordSimplifyModal,
     });
 }

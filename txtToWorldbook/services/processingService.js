@@ -88,6 +88,18 @@
         return sec > 0 ? `约${min}分${sec}秒` : `约${min}分钟`;
     }
 
+    /**
+     * 记录一章的处理耗时，用于 ETA 估算。
+     *
+     * @param {number} elapsedMs 该章的墙钟耗时
+     * @param {number} concurrency 当时的并发数；并行时单章墙钟耗时约为等效串行耗时的 concurrency 倍
+     */
+    function recordChapterTiming(elapsedMs, concurrency = 1) {
+        if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return;
+        const divisor = Number.isFinite(concurrency) && concurrency > 0 ? concurrency : 1;
+        chapterTimings.push(elapsedMs / divisor);
+    }
+
     function getETAText(remainingChapters) {
         if (chapterTimings.length === 0 || remainingChapters <= 0) return '';
         const recent = chapterTimings.slice(-10);
@@ -218,8 +230,8 @@ ${'='.repeat(50)}
         );
 
         let completed = 0;
-        const batchStartTime = Date.now();
-        AppState.globalSemaphore = new Semaphore(AppState.config.parallel.concurrency);
+        const concurrency = AppState.config.parallel.concurrency || 1;
+        AppState.globalSemaphore = new Semaphore(concurrency);
 
         const processOne = async (task) => {
             if (AppState.processing.isStopped) return null;
@@ -245,6 +257,7 @@ ${'='.repeat(50)}
                     ((startIndex + completed) / AppState.memory.queue.length) * 100,
                     `🚀 并行处理中 (${completed}/${tasks.length})${etaSuffix}`,
                 );
+                const taskStartTime = Date.now();
                 const result = await processMemoryChunkIndependent({
                     index: task.index,
                     worldbookSummaryContext: batchSummary,
@@ -253,6 +266,10 @@ ${'='.repeat(50)}
                 if (result) {
                     results.set(task.index, result);
                 }
+                // 每个任务完成就记一次耗时，而不是等整批结束。
+                // 独立并行模式下所有章节属于同一批，等批次结束才记录 = ETA 永远出不来。
+                // 并发跑 N 个时，单章墙钟耗时约等于 N 倍的等效串行耗时，故除以并发数。
+                recordChapterTiming(Date.now() - taskStartTime, concurrency);
                 updateMemoryQueueUI();
                 return result;
             } catch (error) {
@@ -288,11 +305,6 @@ ${'='.repeat(50)}
         await Promise.allSettled(tasks.map((task) => processOne(task)));
         AppState.processing.activeTasks.clear();
         AppState.globalSemaphore = null;
-
-        if (results.size > 0) {
-            const avgPerChapter = (Date.now() - batchStartTime) / results.size;
-            chapterTimings.push(avgPerChapter);
-        }
 
         const orderedTasks = tasks.filter((task) => results.has(task.index)).sort((a, b) => a.index - b.index);
         for (const task of orderedTasks) {
@@ -430,7 +442,7 @@ ${'='.repeat(50)}
 
             memory.processed = true;
             memory.result = memoryUpdate;
-            chapterTimings.push(Date.now() - chunkStartTime);
+            recordChapterTiming(Date.now() - chunkStartTime, 1);
             updateMemoryQueueUI();
             refreshResultPreview();
         } catch (error) {
