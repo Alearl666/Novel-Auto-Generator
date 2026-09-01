@@ -544,3 +544,101 @@ describe('debug6 · 配置导入导出', () => {
         expect(S.promptMessageChain.length).toBeGreaterThan(0);
     });
 });
+
+describe('debug7 · token 显示与缓存', () => {
+    it('chapterTokens 与 estimateTokens 口径一致', () => {
+        const c = mkChapter(0, '你好世界');
+        expect(NT._chapterTokens(c)).toBe(NT._estimateTokens('你好世界'));
+    });
+
+    it('原文没变时走缓存，变了会重算', () => {
+        const c = mkChapter(0, '你好世界');
+        expect(NT._chapterTokens(c)).toBe(4);
+        // 篡改缓存值：长度没变就该直接返回缓存，证明确实缓存了
+        c._tk = 999;
+        expect(NT._chapterTokens(c)).toBe(999);
+        // 长度变了必须重算，不能返回过期的 999
+        c.source = '你好世界你好世界';
+        expect(NT._chapterTokens(c)).toBe(8);
+    });
+});
+
+describe('debug8 · 多选与批量操作', () => {
+    const origConfirm = globalThis.confirm;
+    const origAlert = globalThis.alert;
+
+    function setup(n) {
+        NT._state.chapters = Array.from({ length: n }, (_, i) => mkChapter(i, `内容${i}`));
+        NT._state.status = 'idle';
+        NT._state.ui.selected.clear();
+        NT._state.startIndex = 0;
+    }
+
+    it('getSelectedChapters 按块序返回，不受勾选顺序影响', () => {
+        setup(5);
+        [3, 0, 2].forEach((i) => NT._state.ui.selected.add(i));
+        expect(NT._getSelectedChapters().map((c) => c.index)).toEqual([0, 2, 3]);
+    });
+
+    it('批量删除后序号连续，未选中的块保留', async () => {
+        setup(5);
+        [1, 3].forEach((i) => NT._state.ui.selected.add(i));
+        globalThis.confirm = () => true;
+        globalThis.alert = () => {};
+        await NT._batchDelete();
+        globalThis.confirm = origConfirm;
+        globalThis.alert = origAlert;
+
+        const list = NT._state.chapters;
+        expect(list).toHaveLength(3);
+        expect(list.map((c) => c.source)).toEqual(['内容0', '内容2', '内容4']);
+        expect(list.map((c) => c.index)).toEqual([0, 1, 2]);
+        expect(list.map((c) => c.rawTitle)).toEqual(['第1部分', '第2部分', '第3部分']);
+    });
+
+    it('删除后选中集清空，起始块不会指向不存在的块', async () => {
+        setup(3);
+        NT._state.startIndex = 2;
+        [0, 1, 2].forEach((i) => NT._state.ui.selected.add(i));
+        globalThis.confirm = () => true;
+        globalThis.alert = () => {};
+        await NT._batchDelete();
+        globalThis.confirm = origConfirm;
+        globalThis.alert = origAlert;
+
+        expect(NT._state.chapters).toHaveLength(0);
+        expect(NT._state.ui.selected.size).toBe(0);
+        expect(NT._state.startIndex).toBe(0);
+    });
+
+    it('没勾选任何块时批量删除会提示而不是误删', async () => {
+        setup(3);
+        let alerted = '';
+        globalThis.alert = (m) => (alerted = m);
+        await NT._batchDelete();
+        globalThis.alert = origAlert;
+        expect(alerted).toContain('勾选');
+        expect(NT._state.chapters).toHaveLength(3);
+    });
+
+    it('翻译进行中不允许批量删除', async () => {
+        setup(3);
+        NT._state.ui.selected.add(0);
+        NT._state.status = 'running';
+        let alerted = '';
+        globalThis.alert = (m) => (alerted = m);
+        await NT._batchDelete();
+        globalThis.alert = origAlert;
+        NT._state.status = 'idle';
+        expect(alerted).toContain('先停止');
+        expect(NT._state.chapters).toHaveLength(3);
+    });
+
+    it('退出多选会清空已勾选项', () => {
+        setup(4);
+        [0, 2].forEach((i) => NT._state.ui.selected.add(i));
+        NT._setMultiSelect(false);
+        expect(NT._state.ui.multiSelect).toBe(false);
+        expect(NT._state.ui.selected.size).toBe(0);
+    });
+});

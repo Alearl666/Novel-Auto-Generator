@@ -106,6 +106,8 @@
         streamAutoScroll: true,
         streamContent: '',
         db: null,
+        startIndex: 0, // 「开始翻译」从第几块起，由起始块选择器设置
+        ui: { multiSelect: false, selected: new Set() },
     };
 
     const STATUS = {
@@ -1570,40 +1572,11 @@
     async function repairFailed() {
         const failed = State.chapters.filter((c) => c.status === STATUS.FAILED);
         if (failed.length === 0) {
-            alert('没有失败的章节');
+            alert('没有失败的块');
             return;
         }
-        if (!confirm(`将重新翻译 ${failed.length} 个失败章节，确定吗？`)) return;
-
-        State.status = 'running';
-        State.isStopped = false;
-        setRunningUI(true);
-        startAutoSave();
-        appendStream(`\n🔧 开始修复 ${failed.length} 个失败章节...\n`);
-
-        const sem = new Semaphore(State.settings.concurrency);
-        await Promise.allSettled(
-            failed.map(async (chapter) => {
-                await sem.acquire();
-                try {
-                    if (State.isStopped) return;
-                    await runOne(chapter, State.settings.concurrency, true);
-                    updateProgress();
-                    renderChapterList();
-                } finally {
-                    sem.release();
-                }
-            }),
-        );
-
-        State.status = 'idle';
-        setRunningUI(false);
-        stopAutoSave();
-        await saveProgress();
-        renderChapterList();
-        updateProgress();
-        const stillFailed = State.chapters.filter((c) => c.status === STATUS.FAILED).length;
-        appendStream(`\n🔧 修复完成，仍有 ${stillFailed} 章失败\n`);
+        if (!confirm(`将重新翻译 ${failed.length} 个失败的块，确定吗？`)) return;
+        await runBatch(failed, `修复 ${failed.length} 个失败块`);
     }
 
     // ============================================
@@ -2309,9 +2282,30 @@ ${textToXhtmlParagraphs(ch.text)}
       <div class="ntr-section" id="ntr-queue-section" style="display:none;">
         <div class="ntr-section-header-static">
           <span>📋 分块列表<span class="ntr-hint" id="ntr-queue-count"></span></span>
-          <span class="ntr-hint">点任意一块查看内容</span>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button id="ntr-start-from" class="ntr-btn-small" title="选择「开始翻译」从哪一块起跑">📍 起始块</button>
+            <button id="ntr-multi-select" class="ntr-btn-small" title="勾选多块后批量重翻或删除">☑️ 多选</button>
+          </div>
         </div>
         <div class="ntr-section-content">
+          <div class="ntr-hint-block" style="margin-top:0;">点任意一块可<strong>查看 / 编辑 / 复制 / 合并</strong>；多选模式下可<strong>批量重翻或删除</strong>。</div>
+          <div id="ntr-multi-bar" class="ntr-multi-bar" style="display:none;">
+            <div class="ntr-multi-bar-row">
+              <span style="color:#3498db;font-weight:bold;">☑️ 多选模式</span>
+              <span id="ntr-selected-count" class="ntr-hint">已选 0 块</span>
+            </div>
+            <div class="ntr-multi-bar-row">
+              <button id="ntr-select-all" class="ntr-btn-small">全选</button>
+              <button id="ntr-select-invert" class="ntr-btn-small">反选</button>
+              <button id="ntr-select-none" class="ntr-btn-small">清空</button>
+              <button id="ntr-select-failed" class="ntr-btn-small">选中失败块</button>
+            </div>
+            <div class="ntr-multi-bar-row">
+              <button id="ntr-batch-retranslate" class="ntr-btn-small" style="background:rgba(52,152,219,0.55);">🔁 重翻选中</button>
+              <button id="ntr-batch-delete" class="ntr-btn-small" style="background:rgba(231,76,60,0.5);">🗑️ 删除选中</button>
+              <button id="ntr-multi-cancel" class="ntr-btn-small" style="margin-left:auto;">退出多选</button>
+            </div>
+          </div>
           <div id="ntr-chapter-list" class="ntr-chapter-list"></div>
         </div>
       </div>
@@ -2426,6 +2420,13 @@ ${textToXhtmlParagraphs(ch.text)}
 .ntr-chapter-item{display:flex;gap:9px;align-items:center;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.06);font-size:12px;cursor:pointer;}
 .ntr-chapter-item:hover{background:rgba(255,255,255,0.07);}
 .ntr-chapter-arrow{flex:0 0 auto;opacity:0.35;font-size:11px;}
+.ntr-chapter-item.selected{background:rgba(52,152,219,0.22);}
+.ntr-chapter-item.startmark{box-shadow:inset 3px 0 0 #f39c12;}
+.ntr-chapter-check{width:16px;height:16px;flex:0 0 auto;accent-color:#3498db;}
+.ntr-chapter-tk{flex:0 0 auto;font-size:11px;color:#888;white-space:nowrap;}
+.ntr-multi-bar{margin:8px 0;padding:8px;background:rgba(52,152,219,0.12);border:1px solid rgba(52,152,219,0.35);border-radius:6px;}
+.ntr-multi-bar-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px;}
+.ntr-multi-bar-row:last-child{margin-bottom:0;}
 .ntr-model-actions{display:flex;gap:8px;align-items:center;margin-top:12px;padding:10px;background:rgba(52,152,219,0.1);border:1px solid rgba(52,152,219,0.3);border-radius:6px;flex-wrap:wrap;}
 .ntr-model-actions>button{flex:0 0 auto;white-space:nowrap;}
 .ntr-model-status{font-size:12px;flex:1 1 100%;min-width:0;white-space:pre-wrap;word-break:break-word;line-height:1.5;opacity:0.85;}
@@ -2509,6 +2510,21 @@ ${textToXhtmlParagraphs(ch.text)}
         if (info && total) info.textContent = `共 ${total} 章`;
     }
 
+    /**
+     * 取某块的 token 数，带缓存。
+     *
+     * estimateTokens 要扫全文，几百块的话每次重绘都算一遍会明显卡；
+     * 缓存到块上，原文长度变了才重算。
+     */
+    function chapterTokens(c) {
+        const len = (c.source || '').length;
+        if (c._tkLen !== len) {
+            c._tk = estimateTokens(c.source);
+            c._tkLen = len;
+        }
+        return c._tk;
+    }
+
     function renderChapterList() {
         const container = $('ntr-chapter-list');
         if (!container) return;
@@ -2519,31 +2535,281 @@ ${textToXhtmlParagraphs(ch.text)}
             [STATUS.DONE]: '✅',
             [STATUS.FAILED]: '❌',
         };
+        const multi = State.ui.multiSelect;
 
         const html = State.chapters
             .map((c) => {
-                const cls = c.status === STATUS.DONE ? 'done' : c.status === STATUS.FAILED ? 'failed' : c.status === STATUS.RUNNING ? 'running' : '';
-                const meta = c.status === STATUS.FAILED
-                    ? esc(c.error || '失败').slice(0, 40)
-                    : c.translated
-                      ? `${c.translated.length}字`
-                      : `${estimateTokens(c.source)}tk`;
-                return `<div class="ntr-chapter-item ${cls}" data-index="${c.index}">
+                const cls = [
+                    'ntr-chapter-item',
+                    c.status === STATUS.DONE
+                        ? 'done'
+                        : c.status === STATUS.FAILED
+                          ? 'failed'
+                          : c.status === STATUS.RUNNING
+                            ? 'running'
+                            : '',
+                    multi && State.ui.selected.has(c.index) ? 'selected' : '',
+                    !multi && c.index === State.startIndex && State.startIndex > 0 ? 'startmark' : '',
+                ]
+                    .filter(Boolean)
+                    .join(' ');
+
+                const check = multi
+                    ? `<input type="checkbox" class="ntr-chapter-check" data-index="${c.index}" ${State.ui.selected.has(c.index) ? 'checked' : ''}>`
+                    : '';
+
+                // token 数常显，和世界书那边看到的是同一套估算口径
+                const tk = chapterTokens(c);
+                const tkText = `${tk >= 1000 ? (tk / 1000).toFixed(1) + 'k' : tk} tk`;
+                const meta =
+                    c.status === STATUS.FAILED
+                        ? esc(c.error || '失败').slice(0, 30)
+                        : c.translated
+                          ? `→ ${c.translated.length}字`
+                          : `${c.source.length}字`;
+
+                return `<div class="${cls}" data-index="${c.index}">
+                    ${check}
                     <span class="ntr-chapter-status">${icons[c.status] || '⚪'}</span>
                     <span class="ntr-chapter-title" title="${esc(c.rawTitle)}">${esc(c.rawTitle)}</span>
                     <span class="ntr-chapter-meta">${meta}</span>
-                    <span class="ntr-chapter-arrow">▶</span>
+                    <span class="ntr-chapter-tk">${tkText}</span>
+                    ${multi ? '' : '<span class="ntr-chapter-arrow">▶</span>'}
                 </div>`;
             })
             .join('');
-        container.innerHTML = html || '<div class="ntr-hint-block">暂无章节</div>';
+        container.innerHTML = html || '<div class="ntr-hint-block">暂无分块</div>';
 
         container.querySelectorAll('.ntr-chapter-item[data-index]').forEach((el) => {
-            el.addEventListener('click', () => showBlockModal(parseInt(el.dataset.index, 10)));
+            const idx = parseInt(el.dataset.index, 10);
+            el.addEventListener('click', (e) => {
+                if (State.ui.multiSelect) {
+                    // 点整行都算勾选。点在 checkbox 上时它自己已经翻过一次，别再翻回去
+                    if (!(e.target && e.target.classList && e.target.classList.contains('ntr-chapter-check'))) {
+                        if (State.ui.selected.has(idx)) State.ui.selected.delete(idx);
+                        else State.ui.selected.add(idx);
+                    } else if (e.target.checked) {
+                        State.ui.selected.add(idx);
+                    } else {
+                        State.ui.selected.delete(idx);
+                    }
+                    renderChapterList();
+                    updateMultiBar();
+                    return;
+                }
+                showBlockModal(idx);
+            });
         });
 
         const count = $('ntr-queue-count');
-        if (count) count.textContent = `（${State.chapters.length} 块）`;
+        if (count) {
+            const totalTk = State.chapters.reduce((s, c) => s + chapterTokens(c), 0);
+            count.textContent = `（${State.chapters.length} 块，约 ${(totalTk / 1000).toFixed(1)}k tk）`;
+        }
+        updateMultiBar();
+        updateStartButtonLabel();
+    }
+
+    // ============================================
+    // 多选 / 批量操作 / 起始块
+    // ============================================
+
+    function updateMultiBar() {
+        const bar = $('ntr-multi-bar');
+        if (bar) bar.style.display = State.ui.multiSelect ? 'block' : 'none';
+        const cnt = $('ntr-selected-count');
+        if (cnt) cnt.textContent = `已选 ${State.ui.selected.size} 块`;
+        const btn = $('ntr-multi-select');
+        if (btn) btn.textContent = State.ui.multiSelect ? '☑️ 多选中' : '☑️ 多选';
+    }
+
+    function setMultiSelect(on) {
+        State.ui.multiSelect = on;
+        State.ui.selected.clear();
+        renderChapterList();
+    }
+
+    function updateStartButtonLabel() {
+        const start = $('ntr-start');
+        if (!start || State.status === 'running') return;
+        start.textContent = State.startIndex > 0 ? `🚀 从第${State.startIndex + 1}块开始` : '🚀 开始翻译';
+    }
+
+    /** 选中的块，按顺序返回 */
+    function getSelectedChapters() {
+        return [...State.ui.selected]
+            .sort((a, b) => a - b)
+            .map((i) => State.chapters[i])
+            .filter(Boolean);
+    }
+
+    /**
+     * 并发跑一批块。批量重翻和修复失败共用这套流程。
+     * @param {Array} list 要跑的块
+     * @param {string} label 日志里的动作名
+     */
+    async function runBatch(list, label) {
+        if (list.length === 0) return;
+        collectSettingsFromUI();
+
+        State.status = 'running';
+        State.isStopped = false;
+        setRunningUI(true);
+        startAutoSave();
+        appendStream(`\n🔁 ${label}：共 ${list.length} 块，并发 ${State.settings.concurrency}\n`);
+
+        const sem = new Semaphore(State.settings.concurrency);
+        await Promise.allSettled(
+            list.map(async (chapter) => {
+                await sem.acquire();
+                try {
+                    if (State.isStopped) return;
+                    await runOne(chapter, State.settings.concurrency, true);
+                    updateProgress();
+                    renderChapterList();
+                } finally {
+                    sem.release();
+                }
+            }),
+        );
+
+        State.status = 'idle';
+        setRunningUI(false);
+        stopAutoSave();
+        await saveProgress();
+        renderChapterList();
+        updateProgress();
+        if (State.chapters.some((c) => c.status === STATUS.DONE)) showExportSection(true);
+
+        const failed = list.filter((c) => c.status === STATUS.FAILED).length;
+        appendStream(`\n✅ ${label}完成${failed ? `，其中 ${failed} 块仍失败` : ''}\n`);
+    }
+
+    async function batchRetranslate() {
+        if (State.status === 'running') {
+            alert('翻译进行中，请先停止');
+            return;
+        }
+        const list = getSelectedChapters();
+        if (list.length === 0) {
+            alert('还没有勾选任何块');
+            return;
+        }
+        const doneCount = list.filter((c) => c.status === STATUS.DONE).length;
+        if (
+            !confirm(
+                `重新翻译选中的 ${list.length} 块？\n\n` +
+                    (doneCount ? `其中 ${doneCount} 块已有译文，会被覆盖。\n\n` : '') +
+                    `未选中的块不受影响。`,
+            )
+        ) {
+            return;
+        }
+        list.forEach((c) => {
+            c.translated = '';
+            c.status = STATUS.PENDING;
+            c.error = '';
+        });
+        renderChapterList();
+        await runBatch(list, `批量重翻 ${list.length} 块`);
+    }
+
+    async function batchDelete() {
+        if (State.status === 'running') {
+            alert('翻译进行中，请先停止');
+            return;
+        }
+        const list = getSelectedChapters();
+        if (list.length === 0) {
+            alert('还没有勾选任何块');
+            return;
+        }
+        if (list.length === State.chapters.length && !confirm('这会删掉全部分块，确定吗？')) return;
+        if (!confirm(`删除选中的 ${list.length} 块？原文和译文都会丢失，且无法撤销。`)) return;
+
+        const kill = new Set(State.ui.selected);
+        State.chapters = State.chapters.filter((c) => !kill.has(c.index));
+        renumberChapters();
+        State.ui.selected.clear();
+        if (State.startIndex >= State.chapters.length) State.startIndex = 0;
+
+        await saveProgress();
+        renderChapterList();
+        updateProgress();
+        if (State.chapters.length === 0) showExportSection(false);
+        appendStream(`\n🗑️ 已删除 ${list.length} 块，剩余 ${State.chapters.length} 块\n`);
+    }
+
+    /** 起始块选择器：决定「开始翻译」从第几块起跑 */
+    function showStartFromSelector() {
+        if (State.chapters.length === 0) {
+            alert('请先导入文件');
+            return;
+        }
+        const id = 'ntr-startfrom-modal';
+        const old = $(id);
+        if (old) old.remove();
+
+        const icons = {
+            [STATUS.PENDING]: '⚪',
+            [STATUS.RUNNING]: '🔄',
+            [STATUS.DONE]: '✅',
+            [STATUS.FAILED]: '❌',
+        };
+        const options = State.chapters
+            .map(
+                (c) =>
+                    `<option value="${c.index}" ${c.index === State.startIndex ? 'selected' : ''}>` +
+                    `${icons[c.status] || '⚪'} 第${c.index + 1}块 · ${c.source.length}字 · ${chapterTokens(c)}tk</option>`,
+            )
+            .join('');
+
+        const html = `
+<div id="${id}" class="ntr-modal-container" style="z-index:100000;">
+ <div class="ntr-modal-scroll">
+  <div class="ntr-modal" style="max-width:520px;">
+    <div class="ntr-modal-header">
+      <span class="ntr-modal-title">📍 选择起始块</span>
+      <button class="ntr-modal-close" id="ntr-sf-x">✕</button>
+    </div>
+    <div class="ntr-modal-body">
+      <div class="ntr-field">
+        <label>从哪一块开始翻译</label>
+        <select id="ntr-sf-select" class="ntr-input">${options}</select>
+      </div>
+      <div class="ntr-hint-block">
+        点「开始翻译」时会<strong>跳过这一块之前的所有块</strong>，之后的块里只翻还没完成的。
+        已完成的块不会被重翻——要重翻请用多选里的「🔁 重翻选中」。
+      </div>
+    </div>
+    <div class="ntr-modal-footer">
+      <button id="ntr-sf-reset" class="ntr-btn" style="margin-right:auto;">重置为第1块</button>
+      <button id="ntr-sf-cancel" class="ntr-btn">取消</button>
+      <button id="ntr-sf-ok" class="ntr-btn ntr-btn-primary">确定</button>
+    </div>
+  </div>
+ </div>
+</div>`;
+        const wrap = document.createElement('div');
+        wrap.innerHTML = html;
+        document.body.appendChild(wrap.firstElementChild);
+
+        const close = () => {
+            const el = $(id);
+            if (el) el.remove();
+        };
+        const apply = (idx) => {
+            State.startIndex = idx;
+            close();
+            renderChapterList();
+            appendStream(`\n📍 起始块设为第 ${idx + 1} 块\n`);
+        };
+        $('ntr-sf-x').addEventListener('click', close);
+        $('ntr-sf-cancel').addEventListener('click', close);
+        $('ntr-sf-reset').addEventListener('click', () => apply(0));
+        $('ntr-sf-ok').addEventListener('click', () => {
+            apply(parseInt($('ntr-sf-select').value, 10) || 0);
+        });
     }
 
     // ============================================
@@ -2941,7 +3207,8 @@ ${textToXhtmlParagraphs(ch.text)}
         const stop = $('ntr-stop');
         if (start) {
             start.disabled = running;
-            start.textContent = running ? '⏳ 翻译中...' : '🚀 开始翻译';
+            if (running) start.textContent = '⏳ 翻译中...';
+            else start.textContent = State.startIndex > 0 ? `🚀 从第${State.startIndex + 1}块开始` : '🚀 开始翻译';
         }
         if (stop) stop.style.display = running ? 'inline-block' : 'none';
         if (running) showProgressSection(true);
@@ -3249,6 +3516,8 @@ ${textToXhtmlParagraphs(ch.text)}
         }
 
         State.chapters = next;
+        State.startIndex = 0;
+        State.ui.selected.clear();
         State.timings = [];
         await saveProgress();
         showQueueSection(true);
@@ -3437,6 +3706,8 @@ ${textToXhtmlParagraphs(ch.text)}
         if (State.chapters.length > 0 && !confirm('确定清除当前文件和所有翻译进度吗？')) return;
         State.file = { name: '', hash: '' };
         State.chapters = [];
+        State.startIndex = 0;
+        State.ui.selected.clear();
         State.timings = [];
         await dbDelete('current');
         const info = $('ntr-file-info');
@@ -3529,7 +3800,13 @@ ${textToXhtmlParagraphs(ch.text)}
         <div style="margin-top:6px;"><strong>勾选</strong>：提示词里会要求 AI 把每一块<strong>整个当成一章</strong>，
         块内不再分章。适合原文压根没有规范章节标记、你就想按固定长度分章的情况。</div>
         <div style="margin-top:6px;">分块列表里<strong>点任意一块</strong>可以查看和编辑原文/译文，
-        也能复制、合并到相邻块、按上限重切、单独重翻或删除。</div>
+        也能复制、合并到相邻块、按上限重切、单独重翻或删除。
+        每块右侧常显 <strong>token 数</strong>，标题栏显示全书合计，方便估算用量。</div>
+        <div style="margin-top:6px;"><strong>📍 起始块</strong>：设定「开始翻译」从第几块起跑，
+        之前的块直接跳过。已完成的块不会被重翻。</div>
+        <div style="margin-top:6px;"><strong>☑️ 多选</strong>：勾选若干块后批量
+        <strong>重翻</strong>或<strong>删除</strong>。支持全选、反选、清空、一键选中所有失败块。
+        批量重翻会按并发数一起跑，未选中的块完全不受影响。</div>
         <div style="margin-top:6px;">改了「每块 token 上限」<strong>不会自动重切</strong>，
         要点「♻️ 按当前上限重新分块」才生效——重切会作废已有译文，所以不能偷偷做。</div>
       </div></div>
@@ -3894,6 +4171,37 @@ ${textToXhtmlParagraphs(ch.text)}
             e.target.value = '';
         });
 
+        // --- 多选 / 批量 / 起始块 ---
+        $('ntr-multi-select').addEventListener('click', () => setMultiSelect(!State.ui.multiSelect));
+        $('ntr-multi-cancel').addEventListener('click', () => setMultiSelect(false));
+        $('ntr-start-from').addEventListener('click', showStartFromSelector);
+        $('ntr-select-all').addEventListener('click', () => {
+            State.chapters.forEach((c) => State.ui.selected.add(c.index));
+            renderChapterList();
+        });
+        $('ntr-select-invert').addEventListener('click', () => {
+            const next = new Set();
+            State.chapters.forEach((c) => {
+                if (!State.ui.selected.has(c.index)) next.add(c.index);
+            });
+            State.ui.selected = next;
+            renderChapterList();
+        });
+        $('ntr-select-none').addEventListener('click', () => {
+            State.ui.selected.clear();
+            renderChapterList();
+        });
+        $('ntr-select-failed').addEventListener('click', () => {
+            State.ui.selected.clear();
+            State.chapters.forEach((c) => {
+                if (c.status === STATUS.FAILED) State.ui.selected.add(c.index);
+            });
+            renderChapterList();
+            if (State.ui.selected.size === 0) alert('当前没有失败的块');
+        });
+        $('ntr-batch-retranslate').addEventListener('click', batchRetranslate);
+        $('ntr-batch-delete').addEventListener('click', batchDelete);
+
         // --- 重新分块 ---
         $('ntr-rechunk').addEventListener('click', rechunk);
 
@@ -3935,7 +4243,7 @@ ${textToXhtmlParagraphs(ch.text)}
         // --- 主操作 ---
         $('ntr-start').addEventListener('click', () => {
             collectSettingsFromUI();
-            startTranslation(0);
+            startTranslation(State.startIndex || 0);
         });
         $('ntr-stop').addEventListener('click', () => {
             State.isStopped = true;
@@ -4036,6 +4344,10 @@ ${textToXhtmlParagraphs(ch.text)}
         _downloadBlob: downloadBlob,
         _importTask: importTask,
         _importConfig: importConfig,
+        _batchDelete: batchDelete,
+        _getSelectedChapters: getSelectedChapters,
+        _chapterTokens: chapterTokens,
+        _setMultiSelect: setMultiSelect,
         _CONFIG_KEYS: CONFIG_KEYS,
         _DEFAULT_CHAPTER_REGEX: DEFAULT_CHAPTER_REGEX,
     };
