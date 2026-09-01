@@ -275,3 +275,108 @@ describe('需求2 · 分块合并后的重编号', () => {
         expect(NT._state.chapters[1].rawTitle).toBe('第2部分');
     });
 });
+
+describe('debug1 · 重新分块', () => {
+    it('joinAllSource 能把块拼回完整原文', () => {
+        NT._state.chapters = [mkChapter(0, '第一段内容'), mkChapter(1, '第二段内容')];
+        expect(NT._joinAllSource()).toBe('第一段内容\n\n第二段内容');
+    });
+
+    it('改上限后重切，块数随之改变且内容不丢', () => {
+        S.chunkTokens = 100;
+        const text = Array.from({ length: 8 }, (_, i) => `段落${i}` + '文'.repeat(60)).join('\n\n');
+        const first = NT._buildChapters(text);
+        expect(first.length).toBeGreaterThan(1);
+
+        NT._state.chapters = first;
+        // 模拟用户把上限调大后重切
+        S.chunkTokens = 100000;
+        const again = NT._buildChapters(NT._joinAllSource());
+        expect(again).toHaveLength(1);
+        for (let i = 0; i < 8; i++) expect(again[0].source).toContain(`段落${i}`);
+    });
+});
+
+describe('debug2 · 导入更新章节', () => {
+    const origAlert = globalThis.alert;
+    const origConfirm = globalThis.confirm;
+
+    async function runUpdate(mode, newText, existing) {
+        NT._state.chapters = existing;
+        NT._state.status = 'idle';
+        globalThis.alert = () => {};
+        globalThis.confirm = () => true;
+        S.chunkTokens = 100000;
+        await NT._importUpdateChapters(mode, {
+            name: 'u.txt',
+            arrayBuffer: async () => new TextEncoder().encode(newText).buffer,
+        });
+        globalThis.alert = origAlert;
+        globalThis.confirm = origConfirm;
+        return NT._state.chapters;
+    }
+
+    it('仅新增模式：整个文件追加到末尾', async () => {
+        const after = await runUpdate('append-only', '第9话：新章\n新内容', [mkChapter(0, '老内容', '老译文')]);
+        expect(after).toHaveLength(2);
+        expect(after[1].source).toContain('新内容');
+        // 已翻译的块不受影响
+        expect(after[0].translated).toBe('老译文');
+        expect(after[0].status).toBe('done');
+    });
+
+    it('完整文件模式：只追加锚点之后的新增部分', async () => {
+        const old = '第1话：起\n甲内容\n\n第2话：承\n乙内容';
+        const after = await runUpdate('full-file', old + '\n\n第3话：转\n丙内容', [mkChapter(0, old, '译文')]);
+        expect(after).toHaveLength(2);
+        expect(after[1].source).toContain('丙内容');
+        // 关键：旧内容不能被重复导入
+        expect(after[1].source).not.toContain('甲内容');
+        expect(after[0].translated).toBe('译文');
+    });
+
+    it('完整文件模式：正文有重复段落时不会误判（用 lastIndexOf 而非 indexOf）', async () => {
+        // 「甲内容」在前面出现过一次，若用 indexOf 定位锚点会命中靠前那次
+        const old = '开场白\n甲内容\n\n中段\n甲内容';
+        const after = await runUpdate('full-file', old + '\n\n新增章节内容', [mkChapter(0, old)]);
+        expect(after).toHaveLength(2);
+        expect(after[1].source.trim()).toBe('新增章节内容');
+    });
+
+    it('追加后序号连续', async () => {
+        const after = await runUpdate('append-only', '新内容', [mkChapter(0, 'a'), mkChapter(1, 'b')]);
+        expect(after.map((c) => c.index)).toEqual([0, 1, 2]);
+        expect(after[2].rawTitle).toBe('第3部分');
+    });
+});
+
+describe('debug3 · EPUB 不能是 zip', () => {
+    it('downloadBlob 会按传入的 MIME 重新包一层', () => {
+        const captured = [];
+        const origURL = globalThis.URL;
+        const origBlob = globalThis.Blob;
+        globalThis.Blob = class {
+            constructor(parts, opts) {
+                this.parts = parts;
+                this.type = (opts && opts.type) || '';
+                captured.push(this.type);
+            }
+        };
+        globalThis.URL = { createObjectURL: () => 'blob:x', revokeObjectURL: () => {} };
+
+        const zipBlob = { type: 'application/zip' };
+        NT._downloadBlob(zipBlob, 'book.epub', 'application/epub+zip');
+        expect(captured).toContain('application/epub+zip');
+
+        globalThis.Blob = origBlob;
+        globalThis.URL = origURL;
+    });
+
+    it('源码里 generateAsync 指定了 epub 的 mimeType', () => {
+        const src = readFileSync(new URL('../../novelTranslate.js', import.meta.url), 'utf8');
+        const call = src.slice(src.indexOf('zip.generateAsync'));
+        expect(call.slice(0, 200)).toContain("mimeType: 'application/epub+zip'");
+        // mimetype 文件必须不压缩，否则部分阅读器不认
+        expect(src).toContain("zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' })");
+    });
+});

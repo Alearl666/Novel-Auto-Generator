@@ -1763,8 +1763,14 @@ ${textToXhtmlParagraphs(ch.text)}
 <navMap>${navMap}</navMap></ncx>`,
         );
 
-        const blob = await zip.generateAsync({ type: 'blob' });
-        downloadBlob(blob, `${title}.epub`);
+        // JSZip 默认产出的 Blob 类型是 application/zip，浏览器按 MIME 存盘就成了 .zip。
+        // 这里两道保险：生成时指定 mimeType，下载时再显式包一层。
+        const blob = await zip.generateAsync({
+            type: 'blob',
+            mimeType: 'application/epub+zip',
+            compression: 'DEFLATE',
+        });
+        downloadBlob(blob, `${title}.epub`, 'application/epub+zip');
         appendStream(
             `\n📚 已导出 EPUB：${blockCount} 块译文，` +
                 (mode === 'regex'
@@ -1810,8 +1816,14 @@ ${textToXhtmlParagraphs(ch.text)}
         );
     }
 
-    function downloadBlob(blob, filename) {
-        const url = URL.createObjectURL(blob);
+    /**
+     * @param {Blob} blob
+     * @param {string} filename
+     * @param {string} [mime] 显式指定 MIME。EPUB 必须传，否则会被当成 zip 存盘。
+     */
+    function downloadBlob(blob, filename, mime) {
+        const out = mime && blob.type !== mime ? new Blob([blob], { type: mime }) : blob;
+        const url = URL.createObjectURL(out);
         const a = document.createElement('a');
         a.href = url;
         a.download = filename;
@@ -2029,6 +2041,13 @@ ${textToXhtmlParagraphs(ch.text)}
               <input type="number" id="ntr-warmup" class="ntr-input" min="0" max="20">
             </div>
           </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button id="ntr-rechunk" class="ntr-btn-small" style="background:rgba(52,152,219,0.45);">♻️ 按当前上限重新分块</button>
+          </div>
+          <div class="ntr-hint-block">
+            改了「每块 token 上限」之后<strong>不会自动重切</strong>，点上面的按钮才会按新上限重新分块。
+            重新分块会把现有的块拼回整篇再切，<strong>已有译文会作废</strong>，请先导出或备份任务。
+          </div>
           <div class="ntr-row">
             <div class="ntr-field">
               <label title="给AI看的上文，不会被翻译进结果">衔接·上文字数</label>
@@ -2130,7 +2149,8 @@ ${textToXhtmlParagraphs(ch.text)}
       <div class="ntr-section">
         <div class="ntr-section-header-static">
           <span>📄 导入小说</span>
-          <div style="display:flex;gap:6px;">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button id="ntr-update-chapters" class="ntr-btn-small" style="background:rgba(39,174,96,0.4);" title="小说更新后追加新章节，已翻译的块不受影响">📗 导入更新章节</button>
             <button id="ntr-import-task" class="ntr-btn-small">📥 导入任务</button>
             <button id="ntr-export-task" class="ntr-btn-small">📤 导出任务</button>
           </div>
@@ -2141,6 +2161,7 @@ ${textToXhtmlParagraphs(ch.text)}
             <div style="font-size:13px;opacity:0.8;">点击或拖拽 TXT 文件到此处</div>
             <input type="file" id="ntr-file-input" accept=".txt" style="display:none;">
             <input type="file" id="ntr-task-input" accept=".json" style="display:none;">
+            <input type="file" id="ntr-update-input" accept=".txt" style="display:none;">
           </div>
           <div id="ntr-file-info" class="ntr-file-info" style="display:none;">
             <span id="ntr-file-name"></span>
@@ -3061,6 +3082,229 @@ ${textToXhtmlParagraphs(ch.text)}
             (units.length > 10 ? '<br>　…' : '');
     }
 
+    /** 把当前所有块拼回整篇原文。切块本身不丢内容，所以拼回来就是全文。 */
+    function joinAllSource() {
+        return State.chapters.map((c) => String(c.source).trim()).join('\n\n');
+    }
+
+    /**
+     * 按当前的「每块 token 上限」重新分块。
+     *
+     * 改上限不会自动重切——重切必然作废已有译文，不能偷偷做。
+     */
+    async function rechunk() {
+        if (State.status === 'running') {
+            alert('翻译进行中，请先停止再重新分块');
+            return;
+        }
+        if (State.chapters.length === 0) {
+            alert('还没有导入文件');
+            return;
+        }
+        collectSettingsFromUI();
+
+        const full = joinAllSource();
+        const next = splitBySize(full, State.settings.chunkTokens);
+        if (next.length === 0) {
+            alert('重新分块结果为空，请检查内容');
+            return;
+        }
+
+        const doneCount = State.chapters.filter((c) => c.status === STATUS.DONE).length;
+        const warn =
+            doneCount > 0
+                ? `\n\n⚠️ 当前有 ${doneCount} 块已翻译，重新分块后这些译文会全部作废。\n建议先「导出任务」备份。`
+                : '';
+        if (
+            !confirm(
+                `按 ${State.settings.chunkTokens} token 上限重新分块：\n\n` +
+                    `${State.chapters.length} 块 → ${next.length} 块${warn}\n\n确定吗？`,
+            )
+        ) {
+            return;
+        }
+
+        State.chapters = next;
+        State.timings = [];
+        await saveProgress();
+        showQueueSection(true);
+        showExportSection(false);
+        renderChapterList();
+        updateProgress();
+        appendStream(`\n♻️ 已按 ${State.settings.chunkTokens} tk 上限重新分块：共 ${next.length} 块\n`);
+    }
+
+    /** 「导入更新章节」的模式选择弹窗 */
+    function pickUpdateMode() {
+        return new Promise((resolve) => {
+            const id = 'ntr-update-mode-modal';
+            const old = $(id);
+            if (old) old.remove();
+            const html = `
+<div id="${id}" class="ntr-modal-container" style="z-index:100000;">
+ <div class="ntr-modal-scroll">
+  <div class="ntr-modal" style="max-width:520px;">
+    <div class="ntr-modal-header">
+      <span class="ntr-modal-title">📗 导入更新章节 — 选择模式</span>
+      <button class="ntr-modal-close" id="ntr-update-x">✕</button>
+    </div>
+    <div class="ntr-modal-body">
+      <div class="ntr-section"><div class="ntr-section-content">
+        <strong>➕ 仅新增模式</strong>
+        <div class="ntr-hint-block">
+          导入的 TXT <strong>只包含新增的章节</strong>，整个文件直接切块追加到末尾，不做任何比对。
+        </div>
+        <button id="ntr-update-append" class="ntr-btn ntr-btn-primary" style="margin-top:8px;width:100%;">用这个模式</button>
+      </div></div>
+      <div class="ntr-section"><div class="ntr-section-content">
+        <strong>📘 完整文件模式</strong>
+        <div class="ntr-hint-block">
+          导入的是<strong>更新后的整本 TXT</strong>。会拿现有内容的末尾一段做锚点定位，
+          只把锚点之后的新增部分切块追加。原文若有大段重复文本也不会误判。
+        </div>
+        <button id="ntr-update-full" class="ntr-btn" style="margin-top:8px;width:100%;">用这个模式</button>
+      </div></div>
+      <div class="ntr-hint-block">
+        两种模式都<strong>只往末尾追加</strong>，已翻译的块不会被动。追加完点「开始翻译」只会跑新增的块。
+      </div>
+    </div>
+    <div class="ntr-modal-footer">
+      <button id="ntr-update-cancel" class="ntr-btn" style="margin-left:auto;">取消</button>
+    </div>
+  </div>
+ </div>
+</div>`;
+            const wrap = document.createElement('div');
+            wrap.innerHTML = html;
+            document.body.appendChild(wrap.firstElementChild);
+
+            const done = (v) => {
+                const el = $(id);
+                if (el) el.remove();
+                resolve(v);
+            };
+            $('ntr-update-append').addEventListener('click', () => done('append-only'));
+            $('ntr-update-full').addEventListener('click', () => done('full-file'));
+            $('ntr-update-cancel').addEventListener('click', () => done(null));
+            $('ntr-update-x').addEventListener('click', () => done(null));
+        });
+    }
+
+    /**
+     * 导入更新章节：把新增内容切块追加到末尾。
+     *
+     * 定位逻辑与世界书模块一致：锚点先看预期位置，再 lastIndexOf，最后才按长度截取。
+     * 不能用 indexOf —— 小说里有重复段落（诗词、口号、章节模板）时会命中靠前那次，
+     * 导致把已有内容当成新增又导入一遍。
+     *
+     * @param {'append-only'|'full-file'} mode
+     * @param {File} file
+     */
+    async function importUpdateChapters(mode, file) {
+        if (State.chapters.length === 0) {
+            alert('请先导入原始 TXT 再用「导入更新章节」');
+            return;
+        }
+        if (State.status === 'running') {
+            alert('翻译进行中，请先停止');
+            return;
+        }
+
+        try {
+            collectSettingsFromUI();
+            const { content } = await detectBestEncoding(file);
+            let newPart = '';
+
+            if (mode === 'append-only') {
+                newPart = content.replace(/^\s+/, '');
+                if (!newPart.trim()) {
+                    alert('导入的文件内容为空');
+                    return;
+                }
+            } else {
+                const oldContent = joinAllSource();
+                const oldLen = oldContent.length;
+
+                if (content.length <= oldLen) {
+                    if (!confirm('导入的文件长度不大于当前内容，可能没有新增章节。仍要继续吗？')) return;
+                }
+
+                const anchorLen = Math.min(2000, oldLen);
+                if (anchorLen > 0) {
+                    const anchor = oldContent.slice(oldLen - anchorLen);
+                    const expectedPos = oldLen - anchorLen;
+                    let anchorPos = -1;
+                    if (content.startsWith(anchor, expectedPos)) anchorPos = expectedPos;
+                    else anchorPos = content.lastIndexOf(anchor);
+                    newPart = anchorPos !== -1 ? content.slice(anchorPos + anchor.length) : content.slice(oldLen);
+                } else {
+                    newPart = content.slice(oldLen);
+                }
+                newPart = newPart.replace(/^\s+/, '');
+
+                if (!newPart.trim()) {
+                    alert(
+                        '未检测到新增内容。\n\n' +
+                            '如果你导入的是「只含新增部分」的文件，请改用「➕ 仅新增模式」。\n' +
+                            '注意：如果之前编辑或合并过分块，整篇内容和原始 TXT 会对不上，锚点可能失效。',
+                    );
+                    return;
+                }
+            }
+
+            const pieces = splitBySize(newPart, State.settings.chunkTokens);
+            if (pieces.length === 0) {
+                alert('新增内容切块结果为空');
+                return;
+            }
+
+            const modeLabel = mode === 'append-only' ? '仅新增模式' : '完整文件模式';
+            if (
+                !confirm(
+                    `[${modeLabel}] 检测到约 ${(newPart.length / 1000).toFixed(1)}k 字新增内容。\n\n` +
+                        `将切成 ${pieces.length} 块追加到末尾（第 ${State.chapters.length + 1}~${State.chapters.length + pieces.length} 块）。\n` +
+                        `已翻译的块不受影响。\n\n确定导入吗？`,
+                )
+            ) {
+                return;
+            }
+
+            const prevLen = State.chapters.length;
+            pieces.forEach((p) => {
+                State.chapters.push({
+                    index: 0,
+                    num: '',
+                    rawTitle: '第0部分',
+                    title: '第0部分',
+                    source: p.source,
+                    translated: '',
+                    status: STATUS.PENDING,
+                    error: '',
+                });
+            });
+            renumberChapters();
+
+            await saveProgress();
+            showQueueSection(true);
+            renderChapterList();
+            updateProgress();
+
+            const sizeEl = $('ntr-file-size');
+            if (sizeEl) {
+                const total = State.chapters.reduce((sum, c) => sum + c.source.length, 0);
+                sizeEl.textContent = `(${(total / 10000).toFixed(1)}万字, ${State.chapters.length}块, 含更新)`;
+            }
+
+            appendStream(
+                `\n📗 已追加 ${pieces.length} 块（第 ${prevLen + 1}~${State.chapters.length} 块）。\n` +
+                    `点「开始翻译」只会跑未翻译的块。\n`,
+            );
+        } catch (e) {
+            log(`导入更新章节失败: ${e.message}`, 'err');
+            alert('导入更新章节失败: ' + e.message);
+        }
+    }
+
     async function clearFile() {
         if (State.status === 'running') {
             alert('翻译进行中，请先停止');
@@ -3162,6 +3406,8 @@ ${textToXhtmlParagraphs(ch.text)}
         块内不再分章。适合原文压根没有规范章节标记、你就想按固定长度分章的情况。</div>
         <div style="margin-top:6px;">分块列表里<strong>点任意一块</strong>可以查看和编辑原文/译文，
         也能复制、合并到相邻块、按上限重切、单独重翻或删除。</div>
+        <div style="margin-top:6px;">改了「每块 token 上限」<strong>不会自动重切</strong>，
+        要点「♻️ 按当前上限重新分块」才生效——重切会作废已有译文，所以不能偷偷做。</div>
       </div></div>
 
       <div class="ntr-section"><div class="ntr-section-content">
@@ -3211,6 +3457,16 @@ ${textToXhtmlParagraphs(ch.text)}
         <div style="margin-top:6px;"><strong>TXT</strong>：格式本身<strong>不支持目录</strong>，无法内嵌书签。
         导出时只能把标题排成独占一行、前后空行的规范样子，让阅读器用正则自己扫。能不能扫出来取决于阅读器。
         <strong>要目录就用 EPUB。</strong></div>
+      </div></div>
+
+      <div class="ntr-section"><div class="ntr-section-content">
+        <strong>📗 导入更新章节</strong>
+        <div>小说更新后追加新章节用这个，<strong>已翻译的块完全不受影响</strong>，追加完点开始只跑新块。</div>
+        <div style="margin-top:6px;"><strong>仅新增模式</strong>：导入的 TXT 只含新章节，整个文件切块追加。</div>
+        <div style="margin-top:6px;"><strong>完整文件模式</strong>：导入更新后的整本 TXT，
+        用现有内容末尾一段做锚点定位，只追加锚点之后的部分。原文有重复段落也不会误判成新增。</div>
+        <div style="margin-top:6px;">注意：如果你手动编辑或合并过分块，整篇内容和原始 TXT 就对不上了，
+        锚点可能失效，这时改用「仅新增模式」。</div>
       </div></div>
 
       <div class="ntr-section"><div class="ntr-section-content">
@@ -3490,6 +3746,27 @@ ${textToXhtmlParagraphs(ch.text)}
             e.target.value = '';
         });
 
+        // --- 重新分块 ---
+        $('ntr-rechunk').addEventListener('click', rechunk);
+
+        // --- 导入更新章节 ---
+        $('ntr-update-chapters').addEventListener('click', async () => {
+            if (State.chapters.length === 0) {
+                alert('请先导入原始 TXT 再用「导入更新章节」');
+                return;
+            }
+            const mode = await pickUpdateMode();
+            if (!mode) return;
+            State.__updateMode = mode;
+            $('ntr-update-input').click();
+        });
+        $('ntr-update-input').addEventListener('change', (e) => {
+            const f = e.target.files[0];
+            e.target.value = '';
+            if (f && State.__updateMode) importUpdateChapters(State.__updateMode, f);
+            State.__updateMode = null;
+        });
+
         // --- 实时输出 ---
         $('ntr-toggle-stream').addEventListener('click', () => {
             const c = $('ntr-stream-container');
@@ -3606,6 +3883,9 @@ ${textToXhtmlParagraphs(ch.text)}
         _buildRequest: buildRequest,
         _buildModelsUrl: buildModelsUrl,
         _renumberChapters: renumberChapters,
+        _importUpdateChapters: importUpdateChapters,
+        _joinAllSource: joinAllSource,
+        _downloadBlob: downloadBlob,
     };
 
     console.log(`[NovelTranslate] 📖 小说翻译模块已加载 v${VERSION}`);
