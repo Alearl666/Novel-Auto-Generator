@@ -86,6 +86,15 @@ function createUI() {
                     <div style="margin-top: 10px; font-size: 12px; opacity: 0.7; text-align: center;">
                         一键导出有激活条目的世界书
                     </div>
+
+                    <div class="nag-btn-row" style="margin-top: 15px;">
+                        <button id="nag-btn-novel-translate" class="menu_button" style="background: linear-gradient(135deg, #3498db, #2980b9); width: 100%;">
+                            📖 小说翻译
+                        </button>
+                    </div>
+                    <div style="margin-top: 10px; font-size: 12px; opacity: 0.7; text-align: center;">
+                        TXT小说并发翻译成中文，导出带目录的EPUB
+                    </div>
                 </div>
             </div>
         </div>
@@ -124,6 +133,26 @@ function bindEvents() {
         }
     });
     
+    $('#nag-btn-novel-translate').on('click', async () => {
+        if (typeof window.NovelTranslate === 'undefined') {
+            try {
+                toastr.info('正在加载小说翻译模块...');
+                await loadScript('novelTranslate.js');
+            } catch (e) {
+                toastr.error('小说翻译模块加载失败');
+                console.error('[NovelGen] 加载novelTranslate.js失败:', e);
+                console.error('[NovelGen] 尝试加载路径:', `${extensionFolderPath}/novelTranslate.js`);
+                return;
+            }
+        }
+
+        if (typeof window.NovelTranslate !== 'undefined') {
+            window.NovelTranslate.open();
+        } else {
+            toastr.error('小说翻译模块未加载');
+        }
+    });
+
     $('#nag-btn-worldbook-export').on('click', async () => {
         if (typeof window.WorldbookExport === 'undefined') {
             try {
