@@ -6,6 +6,7 @@ export function createShellRuntimeConfig(deps = {}) {
         ErrorHandler,
         confirmAction,
         alertAction,
+        showKeywordSimplifyModal,
         defaultSettings,
         worldbookView,
         updateSettingsUI,
@@ -199,6 +200,7 @@ export function createShellRuntimeConfig(deps = {}) {
             saveCurrentSettings,
         },
         categoryLightStorageKey: 'txtToWorldbookSettings',
+        showKeywordSimplifyModal,
         onEntryConfigChanged,
         onHashFallback,
     };

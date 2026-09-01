@@ -17,6 +17,7 @@
         showCleanTagsModal,
         showManualMergeUI,
         showAliasMergeUI,
+        showKeywordSimplifyModal,
         updateWorldbookPreview,
     } = deps;
 
@@ -46,6 +47,15 @@
         });
     });
     document.getElementById('ttw-alias-merge').addEventListener('click', showAliasMergeUI);
+
+    const simplifyBtn = document.getElementById('ttw-simplify-keywords');
+    if (simplifyBtn && typeof showKeywordSimplifyModal === 'function') {
+        simplifyBtn.addEventListener('click', () => {
+            showKeywordSimplifyModal(() => {
+                if (typeof updateWorldbookPreview === 'function') updateWorldbookPreview();
+            });
+        });
+    }
 }
 
 export function bindExportEvents(deps = {}) {

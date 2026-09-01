@@ -275,6 +275,7 @@ if (api && typeof api.open === 'function') {
         ['ttw-st-preset-file', '预设文件选择器（新增）'],
         ['ttw-import-update-chapters', '导入更新章节按钮（移植）'],
         ['ttw-preset-name-hint', '预设名提示（新增）'],
+        ['ttw-simplify-keywords', '精简关键词按钮（主界面，与查看世界书同一排）'],
         ['ttw-stream-content', '实时输出面板'],
         ['ttw-use-tavern-api', '酒馆API开关（保留）'],
     ];
@@ -287,6 +288,7 @@ if (api && typeof api.open === 'function') {
         ['ttw-import-update-chapters', '导入更新章节'],
         ['ttw-add-chain-msg', '添加消息'],
         ['ttw-reset-chain', '恢复默认消息链'],
+        ['ttw-simplify-keywords', '精简关键词'],
     ];
     for (const [id, label] of clickable) {
         check(`已绑定点击事件: ${label}`, () => {
@@ -348,6 +350,18 @@ if (api) {
     });
     check('加入了贴底判断 wasAtBottom', () => mainSrc.includes('const wasAtBottom ='));
     check('新内容浮标函数存在', () => mainSrc.includes('function updateStreamScrollHint'));
+
+    // 世界书弹窗底部按钮不应被塞太多：作者原本就 2 个，加多了手机上会换行撑大
+    const wbSrc = readFileSync(new URL('../txtToWorldbook/ui/worldbookView.js', import.meta.url), 'utf8');
+    const footerMatch = wbSrc.match(/const footerHtml = `([\s\S]*?)`;/);
+    check('世界书弹窗 footer 仍是 2 个按钮', () => {
+        if (!footerMatch) return false;
+        return (footerMatch[1].match(/<button/g) || []).length === 2;
+    });
+    check('精简关键词不在弹窗 footer 里', () => footerMatch && !footerMatch[1].includes('ttw-simplify-keywords'));
+
+    // 世界书视图内容区不能再套一层 .ttw-modal-body（会挡住手机滚动）
+    check('世界书内容区没有嵌套 .ttw-modal-body', () => !wbSrc.includes('class="ttw-modal-body" id="ttw-worldbook-view-body"'));
 }
 
 // ============================================================

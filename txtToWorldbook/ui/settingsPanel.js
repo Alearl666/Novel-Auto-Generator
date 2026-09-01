@@ -460,6 +460,7 @@ function buildResultSectionHtml() {
                 <button id="ttw-clean-tags" class="ttw-btn" title="清除条目中的标签内容（不消耗Token）">🏷️ 清除标签</button>
                 <button id="ttw-manual-merge" class="ttw-btn" title="手动选择条目合并，作为自动别名识别漏检时的兜底（执行前自动保存快照）">✋ 手动合并</button>
                 <button id="ttw-alias-merge" class="ttw-btn" title="自动识别各分类中同一事物的不同称呼并合并（执行前自动保存快照）">🔗 自动别名合并</button>
+                <button id="ttw-simplify-keywords" class="ttw-btn" title="用AI精简关键词，只保留能直接指代条目的称呼，删除外貌身份性格等描述性词（执行前自动保存快照）">🔤 精简关键词</button>
                 <button id="ttw-export-json" class="ttw-btn ttw-btn-primary">🃏 导出角色卡</button>
                 <button id="ttw-export-volumes" class="ttw-btn" style="display:none;">📦 分卷导出</button>
                 <button id="ttw-export-st" class="ttw-btn ttw-btn-primary">📥 导出世界书</button>

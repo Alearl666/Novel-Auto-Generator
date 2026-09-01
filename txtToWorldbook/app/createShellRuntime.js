@@ -25,6 +25,7 @@ export function createShellRuntime(deps = {}) {
         fileImportDeps,
         worldbookViewDeps,
         categoryLightStorageKey = 'txtToWorldbookSettings',
+        showKeywordSimplifyModal,
         onEntryConfigChanged,
         onHashFallback,
     } = deps;
@@ -85,6 +86,7 @@ export function createShellRuntime(deps = {}) {
         ...createModalEventBinderDeps(modalController, () => modalContainer),
         presetImportService,
         importUpdateChapters: (...args) => fileImportService.importUpdateChapters(...args),
+        showKeywordSimplifyModal,
     });
 
     // eslint-disable-next-line prefer-const

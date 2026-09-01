@@ -794,7 +794,6 @@ import { ensureModalStyles } from './ui/modalStyles.js';
         getAllVolumesWorldbook,
         showManualMergeUI: (...args) => showManualMergeUI(...args),
         showBatchRerollModal: (...args) => showBatchRerollModal(...args),
-        showKeywordSimplifyModal: (...args) => showKeywordSimplifyModal(...args),
     });
 
     // ===== 关键词精简（独立于别名合并，单独调用 AI）=====
@@ -942,6 +941,7 @@ import { ensureModalStyles } from './ui/modalStyles.js';
             ErrorHandler,
             confirmAction,
             alertAction,
+            showKeywordSimplifyModal: (...args) => showKeywordSimplifyModal(...args),
             defaultSettings,
             worldbookView,
             updateSettingsUI,

@@ -26,6 +26,7 @@ export function createModalEventBinder(deps) {
         alertAction,
         presetImportService,
         importUpdateChapters,
+        showKeywordSimplifyModal,
         restoreSettingsToUI,
         resetToDefaultCategories,
         renderCategoriesList,
@@ -136,6 +137,7 @@ export function createModalEventBinder(deps) {
             showCleanTagsModal,
             showManualMergeUI,
             showAliasMergeUI,
+            showKeywordSimplifyModal,
             updateWorldbookPreview,
         });
         bindStreamEventsUI({ updateStreamContent, AppState });
