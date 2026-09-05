@@ -126,6 +126,20 @@
         return d.innerHTML;
     }
 
+    /**
+     * 属性值转义。
+     * esc() 走 textContent→innerHTML，不会转义双引号，塞进 value="..." 会把属性提前截断，
+     * 后面整段 HTML 跟着崩。术语里出现引号（AI 回报时很常见）就是这么丢行的。
+     */
+    function escAttr(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
     function escXml(s) {
         return String(s == null ? '' : s)
             .replace(/&/g, '&amp;')
@@ -704,6 +718,7 @@
         let dropped = 0;
         let skippedEmpty = 0;
         let hasSlot = false;
+        let slotForced = false;
 
         for (const item of order) {
             const p = byId[item.identifier];
@@ -712,8 +727,12 @@
 
             if (p.marker === true || Object.prototype.hasOwnProperty.call(ST_MARKER_MAP, p.identifier)) {
                 if (ST_MARKER_MAP[p.identifier] === '{PROMPT}') {
-                    chain.push({ role: 'user', content: '{PROMPT}', enabled });
+                    // 正文槽位必须恒定启用。
+                    // 预设里「聊天记录」被关掉时，这里如果跟着 enabled=false，
+                    // applyMessageChain 会把唯一的 {PROMPT} 过滤掉 —— 原文根本发不出去。
+                    chain.push({ role: 'user', content: '{PROMPT}', enabled: true });
                     hasSlot = true;
+                    if (!enabled) slotForced = true;
                 } else dropped++;
                 continue;
             }
@@ -745,7 +764,11 @@
             final = [];
             for (const m of chain) {
                 const prev = final[final.length - 1];
-                if (prev && prev.role === 'system' && m.role === 'system' && m.content !== '{PROMPT}') {
+                // 只合并「启用状态相同」的相邻 system。
+                // 否则被关掉的条目会被拼进前一条启用的消息里，enabled 标记消失，内容照发；
+                // 反向则是启用的内容被并进禁用消息里，直接丢失。
+                const sameState = prev ? (prev.enabled !== false) === (m.enabled !== false) : false;
+                if (prev && prev.role === 'system' && m.role === 'system' && sameState && m.content !== '{PROMPT}') {
                     prev.content += '\n\n' + m.content;
                 } else final.push({ role: m.role, content: m.content, enabled: m.enabled });
             }
@@ -760,7 +783,15 @@
                 temperature: num(json.temperature),
                 maxTokens: num(json.openai_max_tokens) !== null ? num(json.openai_max_tokens) : num(json.max_tokens),
             },
-            stats: { used: final.length, dropped, skippedEmpty, hasSlot },
+            stats: {
+                used: final.length,
+                enabledCount: final.filter((m) => m.enabled !== false).length,
+                disabledCount: final.filter((m) => m.enabled === false).length,
+                dropped,
+                skippedEmpty,
+                hasSlot,
+                slotForced,
+            },
         };
     }
 
@@ -1473,12 +1504,18 @@
                 `📊 待翻译 ${pending.length} 章（共 ${State.chapters.length} 章）\n` +
                 `🔧 ${s.apiProvider} / ${s.apiModel || '默认模型'}\n` +
                 `⚙️ 章节纪律: ${s.blockAsChapter ? '一块 = 一章（强制）' : '沿用原文话数/章数'}\n` +
-                `🔀 并发 ${s.concurrency}，前 ${s.warmupChapters} 章串行建立术语表\n` +
+                `🔀 并发 ${s.concurrency}，${
+                    State.chapters.some((c) => c.status === STATUS.DONE)
+                        ? '续跑，跳过预热直接并发'
+                        : `前 ${s.warmupChapters} 章串行建立术语表`
+                }\n` +
                 `📖 术语表: ${s.glossaryEnabled ? `启用（当前 ${s.glossary.length} 条）` : '关闭'}\n` +
                 `${'='.repeat(50)}\n`,
         );
 
-        const warmupCount = Math.max(0, Math.min(s.warmupChapters, pending.length));
+        // 续跑时不再重复预热：已经有译好的块，说明术语表早就建起来了。
+        const alreadyWarmed = State.chapters.some((c) => c.status === STATUS.DONE);
+        const warmupCount = alreadyWarmed ? 0 : Math.max(0, Math.min(s.warmupChapters, pending.length));
 
         try {
             // ---- 阶段一：串行预热，建立术语表 ----
@@ -1489,6 +1526,7 @@
                 updateProgress();
                 renderChapterList();
                 refreshGlossaryCount();
+                markGlossaryDirty();
                 await saveProgress();
             }
 
@@ -1507,6 +1545,10 @@
                             await runOne(chapter, s.concurrency, true);
                             updateProgress();
                             renderChapterList();
+                            // 并发阶段原本完全不刷新术语表计数，导致界面一直冻在预热结束时的数字，
+                            // 停止后才「突然」跳到真实值。这里只刷新计数（便宜），列表标脏延后重绘。
+                            refreshGlossaryCount();
+                            markGlossaryDirty();
                         } finally {
                             sem.release();
                         }
@@ -1523,7 +1565,9 @@
         await saveProgress();
         updateProgress();
         renderChapterList();
-        refreshGlossaryCount();
+        // 收尾时只刷新计数是不够的：列表 DOM 还停在上次渲染的旧内容，
+        // 于是出现「标题写 117 条、下面只列出十几行」。这里整表重绘。
+        renderGlossary();
 
         const done = State.chapters.filter((c) => c.status === STATUS.DONE).length;
         const failed = State.chapters.filter((c) => c.status === STATUS.FAILED).length;
@@ -2231,9 +2275,12 @@ ${textToXhtmlParagraphs(ch.text)}
               </div>
             </span>
           </label>
+          <input type="text" id="ntr-glossary-search" class="ntr-input" placeholder="🔍 搜索原文 / 译名 / 说明" style="margin-bottom:6px;">
           <div id="ntr-glossary-list" class="ntr-glossary-list"></div>
+          <div id="ntr-glossary-pager" class="ntr-glossary-pager"></div>
           <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
             <button id="ntr-add-term" class="ntr-btn-small">➕ 添加术语</button>
+            <button id="ntr-audit-glossary" class="ntr-btn-small">🩺 体检</button>
             <button id="ntr-clear-glossary" class="ntr-btn-small" style="background:rgba(231,76,60,0.4);">🗑️ 清空</button>
           </div>
         </div>
@@ -2331,8 +2378,11 @@ ${textToXhtmlParagraphs(ch.text)}
 
       <!-- ===== 导出 ===== -->
       <div class="ntr-section" id="ntr-export-section" style="display:none;">
-        <div class="ntr-section-header-static"><span>📦 导出成品</span></div>
-        <div class="ntr-section-content">
+        <div class="ntr-section-header" data-target="ntr-export-content">
+          <span>📦 导出成品</span>
+          <span class="ntr-collapse-icon">▼</span>
+        </div>
+        <div id="ntr-export-content" class="ntr-section-content">
           <div class="ntr-row">
             <div class="ntr-field">
               <label title="影响导出时章节标题的编号写法">章节编号格式</label>
@@ -2449,6 +2499,9 @@ ${textToXhtmlParagraphs(ch.text)}
 .ntr-glossary-list{max-height:260px;overflow-y:auto;-webkit-overflow-scrolling:touch;}
 .ntr-glossary-item{display:flex;gap:6px;align-items:center;padding:5px 0;flex-wrap:wrap;}
 .ntr-glossary-item input{flex:1 1 100px;min-width:90px;padding:6px 8px;font-size:12px;background:rgba(0,0,0,0.3);border:1px solid #555;border-radius:5px;color:#fff;box-sizing:border-box;}
+.ntr-g-idx{flex:0 0 auto;font-size:10px;opacity:0.45;min-width:26px;text-align:right;}
+.ntr-glossary-pager{display:flex;gap:8px;align-items:center;justify-content:center;margin-top:6px;flex-wrap:wrap;font-size:11px;}
+.ntr-glossary-pager button[disabled]{opacity:0.35;cursor:not-allowed;}
 @media (max-width:600px){
   .ntr-modal-scroll{padding:8px;padding-top:max(8px,env(safe-area-inset-top));padding-bottom:max(8px,env(safe-area-inset-bottom));}
   .ntr-modal{max-width:100%;}
@@ -2571,7 +2624,7 @@ ${textToXhtmlParagraphs(ch.text)}
                 return `<div class="${cls}" data-index="${c.index}">
                     ${check}
                     <span class="ntr-chapter-status">${icons[c.status] || '⚪'}</span>
-                    <span class="ntr-chapter-title" title="${esc(c.rawTitle)}">${esc(c.rawTitle)}</span>
+                    <span class="ntr-chapter-title" title="${escAttr(c.rawTitle)}">${esc(c.rawTitle)}</span>
                     <span class="ntr-chapter-meta">${meta}</span>
                     <span class="ntr-chapter-tk">${tkText}</span>
                     ${multi ? '' : '<span class="ntr-chapter-arrow">▶</span>'}
@@ -3128,31 +3181,78 @@ ${textToXhtmlParagraphs(ch.text)}
         );
     }
 
+    // 术语表分页状态。表能长到几百上千条，一次性 innerHTML 全量渲染会明显卡。
+    const GLOSSARY_PAGE_SIZE = 50;
+    let glossaryPage = 0;
+    let glossaryFilter = '';
+    let glossaryDirty = false;
+
+    /** 翻译过程中术语有变动时标脏，等面板可见时再重绘，避免高频全量渲染 */
+    function markGlossaryDirty() {
+        glossaryDirty = true;
+        const content = $('ntr-glossary-content');
+        // 面板收起时不渲染；展开着就顺手刷新
+        if (content && content.style.display !== 'none') renderGlossary();
+    }
+
+    /** 返回 [{ item, i }]，i 是在原数组里的真实下标（过滤后不能用渲染下标） */
+    function filteredGlossary() {
+        const g = State.settings.glossary || [];
+        const q = glossaryFilter.trim().toLowerCase();
+        const all = g.map((item, i) => ({ item, i }));
+        if (!q) return all;
+        return all.filter(({ item }) =>
+            [item.source, item.target, item.note].some((v) => String(v || '').toLowerCase().includes(q)),
+        );
+    }
+
     function renderGlossary() {
         const container = $('ntr-glossary-list');
         if (!container) return;
+        glossaryDirty = false;
+
         const g = State.settings.glossary || [];
+        const pager = $('ntr-glossary-pager');
+
         if (g.length === 0) {
             container.innerHTML = '<div class="ntr-hint-block">暂无术语。翻译过程中会自动积累，也可以手动添加。</div>';
+            if (pager) pager.innerHTML = '';
             refreshGlossaryCount();
             return;
         }
-        container.innerHTML = g
-            .map(
-                (it, i) => `<div class="ntr-glossary-item">
-            <input type="text" class="ntr-g-src" data-i="${i}" value="${esc(it.source)}" placeholder="原文">
+
+        const rows = filteredGlossary();
+        const totalPages = Math.max(1, Math.ceil(rows.length / GLOSSARY_PAGE_SIZE));
+        if (glossaryPage > totalPages - 1) glossaryPage = totalPages - 1;
+        if (glossaryPage < 0) glossaryPage = 0;
+        const start = glossaryPage * GLOSSARY_PAGE_SIZE;
+        const slice = rows.slice(start, start + GLOSSARY_PAGE_SIZE);
+
+        if (slice.length === 0) {
+            container.innerHTML = '<div class="ntr-hint-block">没有匹配的术语。</div>';
+        } else {
+            // value 必须用 escAttr：术语里带引号时 esc() 不转义双引号，属性会被提前截断，
+            // 之后所有行的 HTML 全部错位 —— 这就是「计数 117、只显示几行」的另一个成因。
+            container.innerHTML = slice
+                .map(
+                    ({ item, i }) => `<div class="ntr-glossary-item">
+            <span class="ntr-g-idx">${i + 1}</span>
+            <input type="text" class="ntr-g-src" data-i="${i}" value="${escAttr(item.source)}" placeholder="原文">
             <span style="opacity:0.5;">→</span>
-            <input type="text" class="ntr-g-tgt" data-i="${i}" value="${esc(it.target)}" placeholder="中文">
-            <input type="text" class="ntr-g-note" data-i="${i}" value="${esc(it.note || '')}" placeholder="说明(可选)">
+            <input type="text" class="ntr-g-tgt" data-i="${i}" value="${escAttr(item.target)}" placeholder="中文">
+            <input type="text" class="ntr-g-note" data-i="${i}" value="${escAttr(item.note || '')}" placeholder="说明(可选)">
             <button class="ntr-btn-small ntr-g-del" data-i="${i}">🗑️</button>
         </div>`,
-            )
-            .join('');
+                )
+                .join('');
+        }
 
         const bind = (cls, field) =>
             container.querySelectorAll(cls).forEach((el) =>
                 el.addEventListener('change', (e) => {
-                    State.settings.glossary[+e.target.dataset.i][field] = e.target.value;
+                    const idx = +e.target.dataset.i;
+                    if (!State.settings.glossary[idx]) return;
+                    State.settings.glossary[idx][field] = e.target.value;
                     saveSettings();
                 }),
             );
@@ -3166,12 +3266,78 @@ ${textToXhtmlParagraphs(ch.text)}
                 saveSettings();
             }),
         );
+
+        if (pager) {
+            if (totalPages <= 1) {
+                pager.innerHTML = `<span class="ntr-hint">共 ${rows.length} 条</span>`;
+            } else {
+                pager.innerHTML =
+                    `<button class="ntr-btn-small" id="ntr-g-prev" ${glossaryPage === 0 ? 'disabled' : ''}>◀ 上一页</button>` +
+                    `<span class="ntr-hint">第 ${glossaryPage + 1}/${totalPages} 页 · 共 ${rows.length} 条</span>` +
+                    `<button class="ntr-btn-small" id="ntr-g-next" ${
+                        glossaryPage >= totalPages - 1 ? 'disabled' : ''
+                    }>下一页 ▶</button>`;
+                const prev = $('ntr-g-prev');
+                const next = $('ntr-g-next');
+                if (prev)
+                    prev.addEventListener('click', () => {
+                        glossaryPage--;
+                        renderGlossary();
+                    });
+                if (next)
+                    next.addEventListener('click', () => {
+                        glossaryPage++;
+                        renderGlossary();
+                    });
+            }
+        }
+
         refreshGlossaryCount();
     }
 
     function refreshGlossaryCount() {
         const el = $('ntr-glossary-count');
         if (el) el.textContent = `（${(State.settings.glossary || []).length} 条）`;
+    }
+
+    /**
+     * 术语表体检：找出同一原文多条、以及不同原文撞同一译名的情况。
+     * 前者是解析出的脏数据，后者是译名打架的直接来源。
+     */
+    function auditGlossary() {
+        const g = State.settings.glossary || [];
+        const bySource = new Map();
+        const byTarget = new Map();
+        for (const it of g) {
+            const s = String(it.source || '').trim();
+            const t = String(it.target || '').trim();
+            if (s) bySource.set(s, (bySource.get(s) || 0) + 1);
+            if (t) {
+                if (!byTarget.has(t)) byTarget.set(t, []);
+                byTarget.get(t).push(s);
+            }
+        }
+        const dupSource = [...bySource.entries()].filter(([, n]) => n > 1);
+        const clashTarget = [...byTarget.entries()].filter(([, arr]) => new Set(arr).size > 1);
+        const empty = g.filter((it) => !String(it.source || '').trim() || !String(it.target || '').trim()).length;
+
+        let msg = `📖 术语表体检（共 ${g.length} 条）\n\n`;
+        msg += `· 空条目（原文或译名为空，不会发给 AI）：${empty} 条\n`;
+        msg += `· 同一原文重复：${dupSource.length} 组\n`;
+        msg += `· 同一译名对应多个原文：${clashTarget.length} 组\n`;
+        if (dupSource.length) {
+            msg += `\n重复原文：\n` + dupSource.slice(0, 15).map(([s, n]) => `  ${s} ×${n}`).join('\n') + '\n';
+        }
+        if (clashTarget.length) {
+            msg +=
+                `\n译名撞车（同一个中文名对应多个原文，注意是不是同一个角色的不同写法）：\n` +
+                clashTarget
+                    .slice(0, 15)
+                    .map(([t, arr]) => `  ${[...new Set(arr)].join(' / ')} → ${t}`)
+                    .join('\n') +
+                '\n';
+        }
+        alert(msg);
     }
 
     function updateBlockModeHint() {
@@ -3938,7 +4104,7 @@ ${textToXhtmlParagraphs(ch.text)}
             if (select) {
                 select.innerHTML =
                     '<option value="">-- 共 ' + models.length + ' 个，选一个 --</option>' +
-                    models.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+                    models.map((m) => `<option value="${escAttr(m)}">${esc(m)}</option>`).join('');
                 if (models.includes(State.settings.apiModel)) select.value = State.settings.apiModel;
             }
             if (field) field.style.display = 'block';
@@ -3992,6 +4158,8 @@ ${textToXhtmlParagraphs(ch.text)}
                 const hidden = content.style.display === 'none';
                 content.style.display = hidden ? 'block' : 'none';
                 if (icon) icon.textContent = hidden ? '▼' : '▶';
+                // 术语表面板展开时，如果翻译过程中有过变动就补一次重绘
+                if (hidden && header.dataset.target === 'ntr-glossary-content' && glossaryDirty) renderGlossary();
             });
         });
 
@@ -4096,10 +4264,12 @@ ${textToXhtmlParagraphs(ch.text)}
                 const st = parsed.stats;
                 const msg =
                     `预设「${name}」解析结果：\n\n` +
-                    `· 条目 ${st.used} 条\n` +
+                    `· 条目 ${st.used} 条（启用 ${st.enabledCount}，禁用 ${st.disabledCount}）\n` +
                     `· 丢弃占位符 ${st.dropped} 个（角色卡/世界书等，本模块无对应物）\n` +
                     `· 跳过空内容 ${st.skippedEmpty} 条\n` +
                     `· 正文槽位：${st.hasSlot ? '来自「聊天记录」占位符' : '已自动追加到末尾'}\n` +
+                    (st.slotForced ? `· ⚠️ 预设里「聊天记录」是关闭的，已强制启用，否则原文发不出去\n` : '') +
+                    `\n禁用的条目不会发送，可在「提示词消息链」里逐条核对。\n` +
                     (parsed.params.temperature !== null ? `· temperature = ${parsed.params.temperature}\n` : '') +
                     `\n导入会覆盖当前消息链，确认？`;
                 if (!confirm(msg)) return;
@@ -4119,9 +4289,28 @@ ${textToXhtmlParagraphs(ch.text)}
         // --- 术语表 ---
         $('ntr-add-term').addEventListener('click', () => {
             State.settings.glossary.push({ source: '', target: '', note: '' });
+            glossaryFilter = '';
+            const search = $('ntr-glossary-search');
+            if (search) search.value = '';
+            glossaryPage = Math.floor((State.settings.glossary.length - 1) / GLOSSARY_PAGE_SIZE);
             renderGlossary();
             saveSettings();
         });
+        $('ntr-audit-glossary').addEventListener('click', auditGlossary);
+        {
+            let searchTimer = null;
+            const search = $('ntr-glossary-search');
+            if (search)
+                search.addEventListener('input', (e) => {
+                    clearTimeout(searchTimer);
+                    const v = e.target.value;
+                    searchTimer = setTimeout(() => {
+                        glossaryFilter = v;
+                        glossaryPage = 0;
+                        renderGlossary();
+                    }, 200);
+                });
+        }
         $('ntr-clear-glossary').addEventListener('click', () => {
             if (!confirm(`确定清空术语表（${State.settings.glossary.length} 条）？`)) return;
             State.settings.glossary = [];
