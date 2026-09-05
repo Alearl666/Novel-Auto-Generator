@@ -705,13 +705,36 @@
         for (const p of json.prompts) if (p && p.identifier) byId[p.identifier] = p;
 
         let order = null;
+        let orderSource = '';
         if (Array.isArray(json.prompt_order) && json.prompt_order.length) {
-            const global =
-                json.prompt_order.find((o) => o.character_id === 100001) ||
-                json.prompt_order[json.prompt_order.length - 1];
+            // 全局顺序的 dummy character_id 是 100001。找不到就退而求其次，
+            // 取条目最多的那份（比无脑取最后一个更接近「完整的那份」）。
+            let global = json.prompt_order.find((o) => o.character_id === 100001);
+            if (global) orderSource = 'global';
+            else {
+                global = json.prompt_order
+                    .slice()
+                    .sort((a, b) => (b && b.order ? b.order.length : 0) - (a && a.order ? a.order.length : 0))[0];
+                orderSource = 'fallback';
+            }
             order = Array.isArray(global && global.order) ? global.order : null;
         }
-        if (!order) order = json.prompts.map((p) => ({ identifier: p.identifier, enabled: p.enabled !== false }));
+        if (!order) {
+            order = json.prompts.map((p) => ({ identifier: p.identifier, enabled: p.enabled !== false }));
+            orderSource = 'prompts';
+        }
+
+        /**
+         * 判断一个条目是否启用。
+         *
+         * 关键：酒馆有**两处**都能存开关状态 ——
+         *   1. prompt_order[].enabled  （提示词管理器里的勾选框）
+         *   2. prompts[].enabled       （很多导出/分享出来的预设把状态写在这里）
+         * 之前只读第 1 处。预设如果是在第 2 处标的禁用，而 order 里那条没有 enabled 字段
+         * （缺省视为启用），被关掉的条目就会被当成启用的原样发出去。
+         * 现在两处任意一处说禁用，就按禁用算。
+         */
+        const isEnabled = (item, p) => item.enabled !== false && !(p && p.enabled === false);
 
         const chain = [];
         const depthInjections = [];
@@ -723,7 +746,7 @@
         for (const item of order) {
             const p = byId[item.identifier];
             if (!p) continue;
-            const enabled = item.enabled !== false;
+            const enabled = isEnabled(item, p);
 
             if (p.marker === true || Object.prototype.hasOwnProperty.call(ST_MARKER_MAP, p.identifier)) {
                 if (ST_MARKER_MAP[p.identifier] === '{PROMPT}') {
@@ -791,6 +814,8 @@
                 skippedEmpty,
                 hasSlot,
                 slotForced,
+                orderSource,
+                disabledNames: final.filter((m) => m.enabled === false).map((m) => m.content.slice(0, 24)),
             },
         };
     }
@@ -2250,6 +2275,7 @@ ${textToXhtmlParagraphs(ch.text)}
             <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
               <button id="ntr-add-chain" class="ntr-btn-small">➕ 添加消息</button>
               <button id="ntr-import-preset" class="ntr-btn-small" style="background:rgba(155,89,182,0.6);">📥 导入酒馆预设</button>
+              <button id="ntr-preview-payload" class="ntr-btn-small" style="background:rgba(52,152,219,0.5);">🔎 预览实际发送</button>
               <button id="ntr-reset-chain" class="ntr-btn-small">🔄 恢复默认</button>
               <input type="file" id="ntr-preset-file" accept=".json,application/json" style="display:none;">
             </div>
@@ -3100,6 +3126,94 @@ ${textToXhtmlParagraphs(ch.text)}
                 closeBlockModal();
             });
         }
+    }
+
+    /**
+     * 预览「实际发送出去的」提示词。
+     *
+     * 走的是翻译时一模一样的链路：buildPrompt → applyMessageChain → buildRequest，
+     * 只把正文换成占位符。禁用条目到底有没有漏出去，看这里就能一眼确认。
+     */
+    function previewPayload() {
+        collectSettingsFromUI();
+        const s = State.settings;
+        const chain = s.promptMessageChain || [];
+        const off = chain.filter((m) => m && m.enabled === false);
+
+        const fakeChapter = State.chapters[0] || { index: 0, rawTitle: '示例块', source: '' };
+        const marker = '⟦此处是本块原文，预览中省略⟧';
+        const prompt = buildPrompt(fakeChapter, marker, {
+            prevTail: s.contextPrevChars > 0 ? '⟦上文结尾，预览中省略⟧' : '',
+            nextHead: s.contextNextChars > 0 ? '⟦下文开头，预览中省略⟧' : '',
+        });
+        const messages = applyMessageChain(prompt);
+
+        const joined = messages.map((m) => m.content).join('\n');
+        const leaked = off.filter((m) => {
+            const probe = String(m.content || '').replace(/\{PROMPT\}/g, '').trim().slice(0, 60);
+            return probe.length >= 8 && joined.includes(probe);
+        });
+
+        const roleLabel = { system: '🔷 system', user: '🟢 user', assistant: '🟡 assistant' };
+        const body = messages
+            .map(
+                (m, i) => `<div style="margin-bottom:10px;">
+        <div style="font-size:11px;opacity:0.7;margin-bottom:3px;">#${i + 1} ${roleLabel[m.role] || m.role} · 约 ${estimateTokens(
+                    m.content,
+                )} tk</div>
+        <pre style="margin:0;padding:8px;background:rgba(0,0,0,0.3);border-radius:5px;font-size:11px;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;">${esc(
+            m.content,
+        )}</pre>
+      </div>`,
+            )
+            .join('');
+
+        const banner = leaked.length
+            ? `<div class="ntr-hint-block" style="color:#e74c3c;"><strong>⚠️ 检测到 ${leaked.length} 条被禁用的内容仍出现在发送体里</strong>，请把这段发给作者。</div>`
+            : off.length
+              ? `<div class="ntr-hint-block" style="color:#2ecc71;">✅ 消息链里有 ${off.length} 条禁用条目，均未出现在发送体中。</div>`
+              : `<div class="ntr-hint-block">消息链里没有禁用条目。</div>`;
+
+        const html = `
+<div id="ntr-payload-modal" class="ntr-modal-container" style="z-index:100000;">
+ <div class="ntr-modal-scroll">
+  <div class="ntr-modal" style="max-width:720px;">
+    <div class="ntr-modal-header">
+      <span class="ntr-modal-title">🔎 实际发送的提示词</span>
+      <button class="ntr-modal-close" id="ntr-payload-close">✕</button>
+    </div>
+    <div class="ntr-modal-body">
+      <div class="ntr-hint-block">
+        共 ${messages.length} 条消息，合计约 <strong>${estimateTokens(joined)}</strong> tk（不含原文本身）。
+        术语表当前 ${(s.glossary || []).length} 条。<br>
+        注意这只是本地粗估，中日韩实际 token 通常是这个数字的 1.5~3 倍。
+      </div>
+      ${banner}
+      ${body}
+    </div>
+    <div class="ntr-modal-footer">
+      <button class="ntr-btn" id="ntr-payload-copy">📋 复制全文</button>
+      <button class="ntr-btn ntr-btn-primary" id="ntr-payload-ok">关闭</button>
+    </div>
+  </div>
+ </div>
+</div>`;
+        const wrap = document.createElement('div');
+        wrap.innerHTML = html;
+        document.body.appendChild(wrap.firstElementChild);
+        const close = () => {
+            const el = $('ntr-payload-modal');
+            if (el) el.remove();
+        };
+        $('ntr-payload-close').addEventListener('click', close);
+        $('ntr-payload-ok').addEventListener('click', close);
+        $('ntr-payload-copy').addEventListener('click', () => {
+            const text = messages.map((m, i) => `--- #${i + 1} ${m.role} ---\n${m.content}`).join('\n\n');
+            navigator.clipboard
+                .writeText(text)
+                .then(() => alert('已复制'))
+                .catch(() => alert('复制失败，请手动选中'));
+        });
     }
 
     function renderChain() {
@@ -4254,6 +4368,7 @@ ${textToXhtmlParagraphs(ch.text)}
 
         // --- 导入酒馆预设 ---
         $('ntr-import-preset').addEventListener('click', () => $('ntr-preset-file').click());
+        $('ntr-preview-payload').addEventListener('click', previewPayload);
         $('ntr-preset-file').addEventListener('change', async (e) => {
             const file = e.target.files && e.target.files[0];
             if (!file) return;
@@ -4265,6 +4380,11 @@ ${textToXhtmlParagraphs(ch.text)}
                 const msg =
                     `预设「${name}」解析结果：\n\n` +
                     `· 条目 ${st.used} 条（启用 ${st.enabledCount}，禁用 ${st.disabledCount}）\n` +
+                    `· 开关来源：${
+                        { global: 'prompt_order 全局顺序', fallback: 'prompt_order（未找到全局，取最完整的一份）', prompts: 'prompts 数组' }[
+                            st.orderSource
+                        ] || st.orderSource
+                    }\n` +
                     `· 丢弃占位符 ${st.dropped} 个（角色卡/世界书等，本模块无对应物）\n` +
                     `· 跳过空内容 ${st.skippedEmpty} 条\n` +
                     `· 正文槽位：${st.hasSlot ? '来自「聊天记录」占位符' : '已自动追加到末尾'}\n` +
