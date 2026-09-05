@@ -727,14 +727,16 @@
         /**
          * 判断一个条目是否启用。
          *
-         * 关键：酒馆有**两处**都能存开关状态 ——
-         *   1. prompt_order[].enabled  （提示词管理器里的勾选框）
-         *   2. prompts[].enabled       （很多导出/分享出来的预设把状态写在这里）
-         * 之前只读第 1 处。预设如果是在第 2 处标的禁用，而 order 里那条没有 enabled 字段
-         * （缺省视为启用），被关掉的条目就会被当成启用的原样发出去。
-         * 现在两处任意一处说禁用，就按禁用算。
+         * 只认 prompt_order[].enabled —— 那才是酒馆提示词管理器里那个勾选框写的位置。
+         *
+         * 千万不要顺手去看 prompts[].enabled：导出的预设里这个字段几乎恒为 false 或缺失
+         * （实测某预设 56 条里 44 条 false、12 条无此字段，没有一条 true），
+         * 它不是开关状态。拿它参与判断会把绝大多数启用的条目误杀。
+         *
+         * 只有在整个预设压根没有 prompt_order 时，才退化到用 prompts[] 自身的字段兜底，
+         * 那种情况下 order 已经是由它构造出来的，item.enabled 就是它。
          */
-        const isEnabled = (item, p) => item.enabled !== false && !(p && p.enabled === false);
+        const isEnabled = (item) => item.enabled !== false;
 
         const chain = [];
         const depthInjections = [];
@@ -746,7 +748,7 @@
         for (const item of order) {
             const p = byId[item.identifier];
             if (!p) continue;
-            const enabled = isEnabled(item, p);
+            const enabled = isEnabled(item);
 
             if (p.marker === true || Object.prototype.hasOwnProperty.call(ST_MARKER_MAP, p.identifier)) {
                 if (ST_MARKER_MAP[p.identifier] === '{PROMPT}') {
